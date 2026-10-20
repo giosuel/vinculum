@@ -118,7 +118,8 @@ jobs:
           cargo deb --no-build --locked -p vinculum
           # RPM versions can't contain '-': a pre-release uses '~', which also sorts it before the
           # release (cargo-deb does the same for the .deb).
-          cargo generate-rpm -p crates/app --set-metadata "version = \"${VERSION//-/\~}\""
+          cargo generate-rpm -p crates/app --set-metadata "version = \"${VERSION//-/\~}\"" \
+            --set-metadata "requires = $(packaging/linux/rpm-requires.sh target/release/vinculum)"
           cp target/debian/*.deb target/generate-rpm/*.rpm target/dist/
       - name: AppImage
         run: packaging/linux/build-appimage.sh
