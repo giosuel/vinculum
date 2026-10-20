@@ -8,7 +8,7 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/giosuel/vinculum'
 license=('AGPL-3.0-or-later')
 # The libraries for X11, Wayland and OpenGL are loaded at runtime (winit, glutin).
-depends=('fontconfig' 'glibc' 'gcc-libs' 'hicolor-icon-theme' 'libglvnd' 'libx11' 'libxcursor' 'libxi'
+depends=('fontconfig' 'glibc' 'hicolor-icon-theme' 'libgcc' 'libglvnd' 'libx11' 'libxcursor' 'libxi'
          'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'networkmanager' 'wayland')
 provides=("$_pkgname=$pkgver")
 conflicts=("$_pkgname")
