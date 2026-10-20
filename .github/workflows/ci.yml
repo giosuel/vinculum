@@ -6,8 +6,8 @@
 name: CI
 
 on:
+  # Every PR, also those stacked on another PR's branch.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
