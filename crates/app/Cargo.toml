@@ -52,7 +52,5 @@ assets = [
     { source = "../../README.md", dest = "/usr/share/doc/vinculum/README.md", mode = "644", doc = true },
 ]
 
-[package.metadata.generate-rpm.requires]
-NetworkManager = "*"
-"libxkbcommon.so.0()(64bit)" = "*"
-"libEGL.so.1()(64bit)" = "*"
+# The release workflow sets `requires` from the binary (packaging/linux/rpm-requires.sh).
+auto-req = "no"
