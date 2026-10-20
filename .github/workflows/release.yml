@@ -76,6 +76,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: debian:12
     timeout-minutes: 60
+    # In a container, steps run with sh unless told otherwise.
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Build tools and system libraries
         run: |
