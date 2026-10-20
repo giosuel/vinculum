@@ -140,6 +140,7 @@ async fn reads_devices_networks_and_connections() {
 
     assert!(snapshot.networking_enabled && snapshot.wireless_enabled);
     assert_eq!(snapshot.devices.len(), 2);
+    assert_eq!(snapshot.hostname, "hostname"); // the mock's
 
     let wifi = snapshot.device(&wifi_path).expect("the Wi-Fi device");
     assert_eq!(wifi.interface, "wlp2s0");

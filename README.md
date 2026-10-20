@@ -4,7 +4,7 @@ A network manager for Linux desktops that don't come with one, such as Hyprland 
 `nmtui` does, plus the settings depth of KDE's network panel, in a native app written in Rust with
 [Slint](https://slint.dev). It drives NetworkManager over D-Bus.
 
-**Status:** in development. The window opens, but it doesn't manage anything yet.
+**Status:** in development. The window shows your networks and connections live, but can't change them yet.
 
 ## Building
 
@@ -20,6 +20,26 @@ The app ID is `ch.giosuel.Vinculum`, so Hyprland window rules can match it:
 ```
 windowrule = float, class:^(ch\.giosuel\.Vinculum)$
 ```
+
+## Colours
+
+Vinculum takes its colours from the first usable source in `~/.config/vinculum/config.toml`, and
+recolours itself when that file changes, so it follows your wallpaper. Without a config file it
+uses these two, then its built-in theme:
+
+```toml
+[theme]
+builtin = "auto"   # or "dark" / "light": used when no source is usable
+
+[[theme.sources]]
+path = "~/.config/vinculum/colors.json"
+
+[[theme.sources]]
+path = "~/.config/ml4w/colors/colors.json"   # ML4W writes matugen's colours here
+```
+
+A source is a matugen-style `colors.json` (Material colour roles such as `primary` and `surface` as
+hex strings). One with missing roles, or text too faint to read, is skipped.
 
 ## Testing
 

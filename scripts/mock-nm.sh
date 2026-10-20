@@ -8,8 +8,9 @@
 set -euo pipefail
 [ $# -gt 0 ] || { echo "usage: mock-nm.sh COMMAND [ARGS...]" >&2; exit 2; }
 if [ -z "${MOCK_NM_INSIDE:-}" ]; then
-  # A private session bus that dbus-run-session removes again when the command exits.
-  MOCK_NM_INSIDE=1 exec dbus-run-session -- "$0" "$@"
+  # A private bus that dbus-run-session removes again when the command exits. The command keeps
+  # the real session bus (if any), so nothing it asks for (the desktop portal, say) starts there.
+  MOCK_NM_INSIDE=1 MOCK_NM_SESSION="${DBUS_SESSION_BUS_ADDRESS:-}" exec dbus-run-session -- "$0" "$@"
 fi
 python="${VINCULUM_PYTHON:-python3}"
 "$python" -m dbusmock --session --template networkmanager >/dev/null 2>&1 &
@@ -30,4 +31,6 @@ call AddAccessPoint "$wifi" neighbour "Nachbar_5G" 7E:22:41:90:0B:13 2 5745 4000
 connection=$(call AddWiFiConnection "$wifi" home "Lumen Home" wpa-psk)
 call AddActiveConnection "['$wifi']" "$connection" "$home" home 2 >/dev/null
 call AddEthernetDevice eth0 enp3s0 20 >/dev/null
-DBUS_SYSTEM_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" "$@"
+mock_bus="$DBUS_SESSION_BUS_ADDRESS"
+if [ -n "$MOCK_NM_SESSION" ]; then export DBUS_SESSION_BUS_ADDRESS="$MOCK_NM_SESSION"; else unset DBUS_SESSION_BUS_ADDRESS; fi
+DBUS_SYSTEM_BUS_ADDRESS="$mock_bus" "$@"

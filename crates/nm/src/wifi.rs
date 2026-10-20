@@ -229,6 +229,7 @@ mod tests {
             autoconnect: true,
             autoconnect_priority: 0,
             interface: None,
+            metered: None,
         }
     }
 

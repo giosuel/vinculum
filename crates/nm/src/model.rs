@@ -18,6 +18,7 @@ pub struct Snapshot {
     pub active: Vec<ActiveConnection>,
     /// The active connection that carries the default route.
     pub primary_connection: Option<String>,
+    pub hostname: String,
 }
 
 impl Snapshot {
@@ -178,6 +179,8 @@ pub struct SavedConnection {
     pub autoconnect_priority: i32,
     /// Bound to this interface only, if set.
     pub interface: Option<String>,
+    /// Whether the connection counts as metered; `None` when NetworkManager decides by itself.
+    pub metered: Option<bool>,
 }
 
 impl SavedConnection {
