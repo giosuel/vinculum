@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>ch.giosuel.Vinculum</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>Vinculum</name>
+  <summary>Manage Wi-Fi, wired and VPN connections</summary>
+  <description>
+    <p>
+      A network manager for Linux desktops that don't come with one, such as Hyprland and Sway.
+      It drives NetworkManager: connect to Wi-Fi, wired and WireGuard networks, and edit every
+      connection setting, from security to IP addresses, DNS and routes.
+    </p>
+  </description>
+  <launchable type="desktop-id">ch.giosuel.Vinculum.desktop</launchable>
+  <url type="homepage">https://github.com/giosuel/vinculum</url>
+  <url type="bugtracker">https://github.com/giosuel/vinculum/issues</url>
+  <developer id="ch.giosuel">
+    <name>giosuel</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">720</display_length>
+  </requires>
+  <releases>
+  </releases>
+</component>
