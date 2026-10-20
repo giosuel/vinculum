@@ -62,8 +62,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - name: test
-        run: cargo test --workspace --locked
+      - name: Mock NetworkManager (python-dbusmock)
+        run: sudo apt-get install -y --no-install-recommends dbus python3-dbusmock
+      - name: test (including the mock NetworkManager tests)
+        run: scripts/test.sh
       - name: --version
         run: cargo run --locked -p vinculum -- --version
 
