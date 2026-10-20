@@ -107,10 +107,14 @@ jobs:
         run: scripts/package-tarball.sh "$VERSION" "$ARCH"
       # Packaging tools at fixed versions, at least two weeks old like every dependency.
       - name: .deb and .rpm
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.0
           cargo deb --no-build --locked -p vinculum
-          cargo generate-rpm -p crates/app
+          # RPM versions can't contain '-': a pre-release uses '~', which also sorts it before the
+          # release (cargo-deb does the same for the .deb).
+          cargo generate-rpm -p crates/app --set-metadata "version = \"${VERSION//-/\~}\""
           cp target/debian/*.deb target/generate-rpm/*.rpm target/dist/
       - uses: actions/upload-artifact@v7.0.1
         with:
