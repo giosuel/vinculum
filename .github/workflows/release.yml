@@ -1,6 +1,6 @@
 name: Release
 
-# Pushing a tag like v0.1.0 builds the Linux packages (tarball, .deb, .rpm) for x86-64 and ARM64
+# Pushing a tag like v0.1.0 builds the Linux packages (tarball, .deb, .rpm, AppImage) for x86-64 and ARM64
 # and publishes them as a GitHub release. The version is the tag; nothing in the repository is bumped by hand.
 # Running it by hand (Actions › Release › Run workflow) is a dry run: everything is built and
 # uploaded as workflow artifacts, and nothing is published. PRs that change the packaging run the
@@ -80,7 +80,7 @@ jobs:
       - name: Build tools and system libraries
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config \
+          apt-get install -y --no-install-recommends ca-certificates curl file git build-essential pkg-config \
             libfontconfig1-dev libxkbcommon-dev
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Rust (the version in rust-toolchain.toml)
@@ -112,6 +112,8 @@ jobs:
           cargo deb --no-build --locked -p vinculum
           cargo generate-rpm -p crates/app
           cp target/debian/*.deb target/generate-rpm/*.rpm target/dist/
+      - name: AppImage
+        run: packaging/linux/build-appimage.sh
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: linux-${{ matrix.arch }}
