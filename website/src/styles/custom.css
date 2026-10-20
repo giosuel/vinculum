@@ -1,0 +1,118 @@
+/* Vinculum's look: the app's graphite dark theme and teal accent, like the SomeDesk and
+   Realer Xpad sites. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --sl-font: 'Inter', system-ui, sans-serif;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --vc-gradient: linear-gradient(135deg, #a6e6d6, #5cc8b0 55%, #2c8c7a);
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #1f2a27;
+  --sl-color-accent: #5cc8b0;
+  --sl-color-accent-high: #a6e6d6;
+  --sl-color-white: #e8eaed;
+  --sl-color-gray-1: #d4d8dd;
+  --sl-color-gray-2: #c9ced4;
+  --sl-color-gray-3: #a0a7af;
+  --sl-color-gray-4: #6b7178;
+  --sl-color-gray-5: #353a40;
+  --sl-color-gray-6: #1b1e21;
+  --sl-color-black: #111315;
+  --sl-color-bg-nav: #111315;
+  --sl-color-bg-sidebar: #111315;
+  --sl-color-hairline: #262a2f;
+  --sl-color-hairline-light: #2a2e33;
+}
+
+
+.sl-markdown-content code:not(pre code) { border-radius: 6px; }
+.expressive-code .frame { border-radius: 10px; }
+
+/* ------------------------------------------------------------------ landing page */
+
+/* The landing page brings its own hero, so Starlight's page title is hidden there. */
+main:has(.vc-landing) .content-panel:first-of-type { display: none; }
+
+.vc-hero {
+  text-align: center;
+  padding: 2.5rem 0 0.5rem;
+  background: radial-gradient(50% 45% at 50% 20%, rgba(92, 200, 176, 0.1), transparent 70%);
+}
+.vc-hero img.vc-hero__mark { width: 4.5rem; height: 4.5rem; margin: 0 auto 1.2rem; }
+.sl-markdown-content .vc-hero h1 {
+  font-size: clamp(2.3rem, 6vw, 3.8rem);
+  line-height: 1.06;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  margin: 0 0 1rem;
+  color: var(--sl-color-white);
+}
+.vc-gradient {
+  background: var(--vc-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.sl-markdown-content .vc-hero p.vc-lead {
+  font-size: 1.15rem;
+  color: var(--sl-color-gray-3);
+  max-width: 40rem;
+  margin: 0 auto 1.4rem;
+}
+.vc-badges { display: flex; flex-wrap: wrap; gap: 0.4rem; justify-content: center; margin: 0 0 1.6rem; }
+.sl-markdown-content .vc-badges img { height: 20px; margin: 0; }
+.vc-actions { display: flex; flex-wrap: wrap; gap: 0.7rem; justify-content: center; margin: 0 0 2.2rem; }
+.sl-markdown-content a.vc-button {
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  padding: 0.6rem 1.15rem; border-radius: 10px;
+  font-weight: 600; font-size: 0.95rem; text-decoration: none;
+  border: 1px solid var(--sl-color-gray-5);
+  color: var(--sl-color-white); background: var(--sl-color-gray-6);
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.sl-markdown-content a.vc-button:hover { transform: translateY(-1px); border-color: var(--sl-color-accent); }
+.sl-markdown-content a.vc-button--primary { background: var(--vc-gradient); color: #0c1513; border-color: transparent; }
+.vc-figure {
+  margin: 0 auto; max-width: 980px; padding: 1rem;
+  border: 1px solid var(--sl-color-hairline); border-radius: 18px;
+  background: radial-gradient(120% 90% at 50% 0%, rgba(92, 200, 176, 0.07), transparent 60%), var(--sl-color-black);
+}
+.sl-markdown-content .vc-figure img { display: block; width: 100%; height: auto; margin: 0; }
+
+.sl-markdown-content h2.vc-section { text-align: center; margin-top: 3.5rem; font-size: 1.8rem; letter-spacing: -0.02em; }
+.sl-markdown-content p.vc-section-lead { text-align: center; color: var(--sl-color-gray-3); max-width: 38rem; margin: 0.4rem auto 1.6rem; }
+
+.sl-markdown-content .card { border-radius: 14px; border-color: var(--sl-color-hairline-light); background: #17191c; }
+.sl-markdown-content .card .title { font-size: 1.05rem; }
+
+.vc-steps { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); margin-top: 1.5rem; }
+.vc-step { border: 1px solid var(--sl-color-hairline-light); border-radius: 14px; padding: 1.1rem 1.2rem; background: #17191c; }
+.vc-step__n {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.7rem; height: 1.7rem; border-radius: 50%;
+  background: var(--sl-color-accent-low); color: var(--sl-color-accent); font-weight: 700; font-size: 0.85rem;
+}
+.sl-markdown-content .vc-step h3 { margin: 0.7rem 0 0.3rem; font-size: 1.05rem; }
+.sl-markdown-content .vc-step p { margin: 0; color: var(--sl-color-gray-3); font-size: 0.95rem; }
+
+.vc-cta {
+  margin-top: 4rem; padding: 2.4rem 1.5rem; text-align: center;
+  border: 1px solid var(--sl-color-hairline-light); border-radius: 18px;
+  background: radial-gradient(80% 120% at 50% 0%, rgba(92, 200, 176, 0.12), transparent 70%), #17191c;
+}
+.sl-markdown-content .vc-cta h2 { margin: 0 0 0.5rem; font-size: 1.6rem; }
+.sl-markdown-content .vc-cta p { color: var(--sl-color-gray-3); margin: 0 auto 1.4rem; max-width: 34rem; }
+.vc-cta .vc-actions { margin: 0; }
+
+/* Starlight spaces out sibling blocks; inside these grids the gap does that. */
+.sl-markdown-content .vc-steps > *, .sl-markdown-content .vc-hero > *, .sl-markdown-content .vc-actions > *,
+.sl-markdown-content .vc-badges > * { margin-top: 0; }
+.sl-markdown-content .vc-hero > * + * { margin-top: 0; }
+
+/* Every card in the teal accent, like the SomeDesk site, instead of Starlight's rotating colours. */
+.sl-markdown-content .card {
+  --sl-card-border: var(--sl-color-accent);
+  --sl-card-bg: var(--sl-color-accent-low);
+}

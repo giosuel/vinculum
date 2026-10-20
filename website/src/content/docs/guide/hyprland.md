@@ -1,4 +1,7 @@
-# Hyprland
+---
+title: Hyprland
+description: Window rules, a keybind and the polkit agent for Vinculum on Hyprland.
+---
 
 Vinculum's window has the class (Wayland app ID) `ch.giosuel.Vinculum`, so window rules can match
 it. It's a normal window rather than a popup, so you decide where it goes.

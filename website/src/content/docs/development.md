@@ -1,4 +1,7 @@
-# Development
+---
+title: Development
+description: Building, testing, the two-week dependency rule, versions and releasing.
+---
 
 The repository is a Cargo workspace:
 
@@ -70,11 +73,16 @@ Running the workflow by hand (Actions › Release › Run workflow), and every P
 packaging, is a dry run: everything is built and uploaded as workflow artifacts, and nothing is
 published. `packaging/aur/test.sh` builds both AUR packages in a clean Arch container.
 
-## Documentation
+## Website
 
-This site is built with MkDocs Material from `docs/` and deployed to GitHub Pages from `main`:
+This site is built with [Astro](https://astro.build) and [Starlight](https://starlight.astro.build)
+from `website/`, and deployed to GitHub Pages from `main`:
 
 ```sh
-python3 -m venv .venv && .venv/bin/pip install -r docs/requirements.txt
-.venv/bin/mkdocs serve
+cd website
+npm ci          # exact versions from package-lock.json, no install scripts (.npmrc)
+npm run dev     # http://localhost:4321/
+npm run build && npm run check-links
 ```
+
+New npm versions follow the same two-week rule as crates (`npm install --before=<date>`).

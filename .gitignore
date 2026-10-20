@@ -1,3 +1,4 @@
 /target
-/site
-/.venv
+website/node_modules/
+website/dist/
+website/.astro/
