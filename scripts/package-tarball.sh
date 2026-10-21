@@ -15,6 +15,9 @@ strip "target/dist/$name/vinculum"
 cp packaging/linux/ch.giosuel.Vinculum.desktop packaging/linux/ch.giosuel.Vinculum.metainfo.xml \
   "target/dist/$name/packaging/linux/"
 cp packaging/linux/icons/ch.giosuel.Vinculum.svg "target/dist/$name/packaging/linux/icons/"
+# The fonts built into the binary come with their licence (SIL Open Font License).
+mkdir -p "target/dist/$name/crates/app/ui/fonts"
+cp crates/app/ui/fonts/*-LICENSE.txt "target/dist/$name/crates/app/ui/fonts/"
 tar -C target/dist -czf "target/dist/$name.tar.gz" "$name"
 rm -rf "target/dist/$name"
 echo "target/dist/$name.tar.gz"

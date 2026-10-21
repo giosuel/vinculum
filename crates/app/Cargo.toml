@@ -45,6 +45,9 @@ assets = [
     ["../../packaging/linux/ch.giosuel.Vinculum.metainfo.xml", "usr/share/metainfo/", "644"],
     ["../../packaging/linux/icons/ch.giosuel.Vinculum.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["../../README.md", "usr/share/doc/vinculum/", "644"],
+    # The fonts built into the binary (SIL Open Font License).
+    ["ui/fonts/Inter-LICENSE.txt", "usr/share/doc/vinculum/fonts/", "644"],
+    ["ui/fonts/JetBrainsMono-LICENSE.txt", "usr/share/doc/vinculum/fonts/", "644"],
 ]
 
 # `cargo generate-rpm` (Fedora, openSUSE). Library requirements by soname, so the same package
@@ -58,6 +61,8 @@ assets = [
     { source = "../../packaging/linux/ch.giosuel.Vinculum.metainfo.xml", dest = "/usr/share/metainfo/ch.giosuel.Vinculum.metainfo.xml", mode = "644" },
     { source = "../../packaging/linux/icons/ch.giosuel.Vinculum.svg", dest = "/usr/share/icons/hicolor/scalable/apps/ch.giosuel.Vinculum.svg", mode = "644" },
     { source = "../../README.md", dest = "/usr/share/doc/vinculum/README.md", mode = "644", doc = true },
+    { source = "ui/fonts/Inter-LICENSE.txt", dest = "/usr/share/licenses/vinculum/Inter-LICENSE.txt", mode = "644", doc = true },
+    { source = "ui/fonts/JetBrainsMono-LICENSE.txt", dest = "/usr/share/licenses/vinculum/JetBrainsMono-LICENSE.txt", mode = "644", doc = true },
 ]
 
 # The release workflow sets `requires` from the binary (packaging/linux/rpm-requires.sh).
