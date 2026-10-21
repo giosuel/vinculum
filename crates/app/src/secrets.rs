@@ -58,6 +58,37 @@ fn wifi_secret(connection: &AgentConnection) -> Option<(KeyMgmt, &'static str)> 
     }
 }
 
+/// What the password dialog asks for, for a request: the secret's key, how it's checked (any
+/// non-empty text, for sign-in passwords), and who it's for ("ab12cd@uzh.ch").
+fn prompt_secret(request: &SecretRequest) -> Option<(KeyMgmt, &'static str, String)> {
+    let c = &request.connection;
+    match request.setting.as_str() {
+        WIFI_SECURITY => wifi_secret(c).map(|(k, key)| (k, key, String::new())),
+        "802-1x" => {
+            let tls = c
+                .settings
+                .get("802-1x")
+                .and_then(|x| x.get("eap"))
+                .and_then(|v| <Vec<String>>::try_from(v.try_clone().ok()?).ok())
+                .is_some_and(|eap| eap.iter().any(|e| e == "tls"));
+            let key = if tls { "private-key-password" } else { "password" };
+            Some((KeyMgmt::Sae, key, c.string("802-1x", "identity").unwrap_or_default().to_owned()))
+        }
+        // OpenVPN: the password, or the private key's password with certificates only.
+        "vpn" => {
+            let data = c
+                .settings
+                .get("vpn")
+                .and_then(|v| v.get("data"))
+                .and_then(|d| <HashMap<String, String>>::try_from(d.clone()).ok())?;
+            let key =
+                if data.get("connection-type").map(String::as_str) == Some("tls") { "cert-pass" } else { "password" };
+            Some((KeyMgmt::Sae, key, data.get("username").cloned().unwrap_or_default()))
+        }
+        _ => None,
+    }
+}
+
 pub async fn handle(event: AgentEvent, keyrings: &Keyrings, ui: &impl Ui) {
     match event {
         AgentEvent::GetSecrets(request) => get_secrets(request, keyrings, ui).await,
@@ -93,21 +124,21 @@ async fn get_secrets(request: SecretRequest, keyrings: &Keyrings, ui: &impl Ui) 
         request.reply(Ok(found));
         return;
     }
-    let wifi = (request.setting == WIFI_SECURITY).then(|| wifi_secret(&request.connection)).flatten();
-    let (Some((key_mgmt, key)), true) = (wifi, request.interactive()) else {
+    let (Some((key_mgmt, key, user)), true) = (prompt_secret(&request), request.interactive()) else {
         request.reply(Err(Refusal::NoSecrets));
         return;
     };
     let name = String::from_utf8_lossy(&request.connection.ssid).into_owned();
     let name = if name.is_empty() { request.connection.id.clone() } else { name };
     let (reply, answer) = oneshot::channel();
+    let sign_in = request.setting != WIFI_SECURITY;
     ui.ask(Prompt {
         connection_path: request.connection.path.clone(),
-        title: format!("Connect to {name}"),
-        subtitle: if request.request_new() {
-            "The network didn't accept the password.".into()
-        } else {
-            "The network needs its password.".into()
+        title: if sign_in { format!("Sign in to {name}") } else { format!("Connect to {name}") },
+        subtitle: match (request.request_new(), user.is_empty()) {
+            (true, _) => "That password didn't work.".into(),
+            (false, false) => format!("The password for {user}."),
+            (false, true) => "The network needs its password.".into(),
         },
         retry: request.request_new(),
         key_mgmt,
@@ -177,6 +208,32 @@ mod tests {
         assert_eq!(a.len(), 36);
         assert_eq!(&a[14..15], "4");
         assert!("89ab".contains(&a[19..20]));
+    }
+
+    fn request(settings: &[(&str, &str, zbus::zvariant::Value<'static>)], setting: &str) -> SecretRequest {
+        let mut s: vinculum_nm::Settings = HashMap::new();
+        for (group, key, value) in settings {
+            s.entry((*group).into())
+                .or_default()
+                .insert((*key).into(), zbus::zvariant::OwnedValue::try_from(value.clone()).unwrap());
+        }
+        SecretRequest::for_tests(s, setting)
+    }
+
+    #[test]
+    fn what_the_dialog_asks_for() {
+        let eap = request(
+            &[("802-1x", "eap", vec!["peap".to_owned()].into()), ("802-1x", "identity", "ab12cd@uzh.ch".into())],
+            "802-1x",
+        );
+        assert_eq!(prompt_secret(&eap).map(|(_, k, u)| (k, u)), Some(("password", "ab12cd@uzh.ch".to_owned())));
+        let tls = request(&[("802-1x", "eap", vec!["tls".to_owned()].into())], "802-1x");
+        assert_eq!(prompt_secret(&tls).unwrap().1, "private-key-password");
+        let data = HashMap::from([("connection-type", "password"), ("username", "ab12cd")]);
+        let vpn = request(&[("vpn", "data", data.into())], "vpn");
+        assert_eq!(prompt_secret(&vpn).map(|(_, k, u)| (k, u)), Some(("password", "ab12cd".to_owned())));
+        let psk = request(&[(WIFI_SECURITY, "key-mgmt", "wpa-psk".into())], WIFI_SECURITY);
+        assert_eq!(prompt_secret(&psk).unwrap().1, "psk");
     }
 
     #[test]

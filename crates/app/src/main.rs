@@ -9,10 +9,15 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 mod config;
 mod editing;
 mod editor;
+mod hotspot;
 mod instance;
+mod openvpn;
+mod portal;
+mod qr;
 mod secrets;
 mod theme;
 mod view;
+mod wireguard;
 
 slint::include_modules!();
 
@@ -96,6 +101,12 @@ struct App {
     /// The connection editor, when it's open.
     editor: Option<editing::EditorState>,
     add_open: bool,
+    /// The hotspot page's fields go to the window on the next render (after it's opened, or its
+    /// settings were read), and the text its QR code shows.
+    hotspot_fields: Option<(String, String, usize)>,
+    hotspot_qr: String,
+    /// The share dialog: its title, password and the QR code's text.
+    share: Option<(String, String, String)>,
     hostname_open: bool,
     hostname_error: String,
 }
@@ -157,6 +168,9 @@ fn connect_callbacks(window: &MainWindow) {
         if let Some(page) = view::Page::from_id(&id) {
             update(&weak, |app| {
                 app.ui = view::UiState { page, ..view::UiState::default() };
+                if page == view::Page::Hotspot {
+                    open_hotspot(app);
+                }
             });
         }
     });
@@ -201,12 +215,73 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_add_clicked(move || update(&weak, |app| app.add_open = true));
     let weak = window.as_weak();
+    window.on_share_closed(move || update(&weak, |app| app.share = None));
+    let weak = window.as_weak();
+    window.on_hotspot_edited(move || update(&weak, |_| {}));
+    let weak = window.as_weak();
+    window.on_hotspot_new_password(move || {
+        let Some(window) = weak.upgrade() else { return };
+        window.set_hotspot_password(hotspot::new_password().into());
+        update(&weak, |_| {});
+    });
+    let weak = window.as_weak();
+    window.on_hotspot_toggled(move || {
+        let Some(window) = weak.upgrade() else { return };
+        let (ssid, password, band) = (
+            window.get_hotspot_ssid().trim().to_owned(),
+            window.get_hotspot_password().to_string(),
+            window.get_hotspot_band(),
+        );
+        update(&weak, |app| {
+            let Some(h) = app.snapshot.as_ref().map(view::hotspot_view) else { return };
+            if let Some(active) = h.active {
+                return send(app, view::Command::StopHotspot { active });
+            }
+            let Some(device) = h.device else { return };
+            if ssid.is_empty() || ssid.len() > 32 || !(8..=63).contains(&password.chars().count()) {
+                app.message_title.clear();
+                app.message = Some((
+                    "The hotspot needs a name (1 to 32 bytes) and a password of 8 to 63 characters.".into(),
+                    "danger",
+                ));
+                return;
+            }
+            send(
+                app,
+                view::Command::StartHotspot {
+                    connection: h.connection,
+                    device,
+                    ssid,
+                    password,
+                    band: band.max(0) as usize,
+                },
+            );
+        })
+    });
+    let weak = window.as_weak();
+    window.on_empty_action_clicked(move || {
+        update(&weak, |app| match app.ui.page {
+            view::Page::Vpn => send(app, view::Command::ImportFile),
+            _ => {
+                if let Some(command) = app.snapshot.as_ref().map(view::wifi_switch) {
+                    send(app, command);
+                }
+            }
+        })
+    });
+    let weak = window.as_weak();
     window.on_add_cancelled(move || update(&weak, |app| app.add_open = false));
     let weak = window.as_weak();
     window.on_add_chosen(move |kind| {
         update(&weak, |app| {
             app.add_open = false;
-            let kind = if kind == "wifi" { editor::Kind::Wifi } else { editor::Kind::Ethernet };
+            let kind = match kind.as_str() {
+                "wifi" => editor::Kind::Wifi,
+                "wireguard" => editor::Kind::WireGuard,
+                "openvpn" => editor::Kind::OpenVpn,
+                "import" => return send(app, view::Command::ImportFile),
+                _ => editor::Kind::Ethernet,
+            };
             send(app, view::Command::OpenEditor { connection: None, new: Some(kind) });
         })
     });
@@ -279,8 +354,7 @@ fn connect_callbacks(window: &MainWindow) {
             {
                 open_dialog(app, Dialog::Hidden { device });
             } else if app.ui.page != view::Page::Wifi {
-                app.message_title.clear();
-                app.message = Some(("Importing connection files comes in the next version.".into(), "info"));
+                send(app, view::Command::ImportFile);
             }
         })
     });
@@ -335,6 +409,51 @@ fn hostname_problem(name: &str) -> Option<&'static str> {
             && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
     };
     if name.split('.').all(label_ok) { None } else { Some("Letters, digits and hyphens only, such as thinkpad-x1.") }
+}
+
+/// The hotspot page opens with its saved settings, or with the hostname and a new password.
+fn open_hotspot(app: &mut App) {
+    let Some(snap) = &app.snapshot else { return };
+    match snap.connections.iter().find(|c| c.hotspot) {
+        Some(c) => send(app, view::Command::LoadHotspot { connection: c.path.clone() }),
+        None => app.hotspot_fields = Some((snap.hostname.clone(), hotspot::new_password(), 0)),
+    }
+}
+
+fn render_hotspot(window: &MainWindow, app: &mut App, view: Option<&view::HotspotView>) {
+    let Some(h) = view else { return };
+    window.set_hotspot_available(h.device.is_some());
+    window.set_hotspot_on(h.active.is_some());
+    window.set_hotspot_status(h.status.as_str().into());
+    window.set_hotspot_warning(h.warning.as_str().into());
+    if let Some((ssid, password, band)) = app.hotspot_fields.take() {
+        window.set_hotspot_ssid(ssid.into());
+        window.set_hotspot_password(password.into());
+        window.set_hotspot_band(band as i32);
+    }
+    let text = qr::wifi_text(&window.get_hotspot_ssid(), Some(&window.get_hotspot_password()), false, false);
+    if text != app.hotspot_qr
+        && let Some(image) = qr::image(&text, 8)
+    {
+        window.set_hotspot_qr(image);
+        app.hotspot_qr = text;
+    }
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let clients = if h.active.is_some() { hotspot::clients(&h.interface) } else { Vec::new() };
+    window.set_hotspot_clients(model(
+        clients
+            .into_iter()
+            .map(|c| HostRow {
+                name: c.name.into(),
+                address: c.address.into(),
+                // dnsmasq hands out leases for an hour; what's left of it says how long ago.
+                since: match (3600 + now).saturating_sub(c.expires) / 60 {
+                    0 => "just now".into(),
+                    m => format!("{m} min").into(),
+                },
+            })
+            .collect(),
+    ));
 }
 
 fn open_dialog(app: &mut App, dialog: Dialog) {
@@ -473,6 +592,15 @@ fn render(window: &MainWindow) {
         window.set_banner(v.banner.into());
         window.set_placeholder(v.placeholder.into());
         window.set_hostname(v.hostname.into());
+        render_hotspot(window, &mut app, v.hotspot.as_ref());
+        window.set_share_open(app.share.is_some());
+        if let Some((title, password, text)) = &app.share {
+            window.set_share_title(title.into());
+            window.set_share_password(password.into());
+            if let Some(image) = qr::image(text, 8) {
+                window.set_share_qr(image);
+            }
+        }
         let (message, tone) = app.message.clone().unwrap_or_default();
         window.set_message(message.into());
         window.set_message_tone(if tone.is_empty() { "info".into() } else { tone.into() });
@@ -575,10 +703,22 @@ fn spawn_network_manager(
                             None
                         }
                     };
+                    // Devices whose traffic is counted already.
+                    let mut counting = std::collections::HashSet::new();
                     loop {
                         tokio::select! {
                             snapshot = snapshots.next() => match snapshot {
-                                Some(snapshot) => deliver(&weak, snapshot),
+                                Some(snapshot) => {
+                                    // Count traffic on the devices in use, for "Received / sent".
+                                    if let Ok(snap) = &snapshot {
+                                        for d in snap.devices.iter().filter(|d| d.active_connection.is_some() && d.traffic.is_none()) {
+                                            if counting.insert(d.path.clone()) {
+                                                let _ = client.count_traffic(&d.path, 5000).await;
+                                            }
+                                        }
+                                    }
+                                    deliver(&weak, snapshot)
+                                }
                                 None => break,
                             },
                             Some(command) = commands.recv() => {
@@ -664,16 +804,75 @@ async fn run(
     use view::Command::*;
     let (active, device, retry) = match command {
         OpenEditor { connection, new } => {
+            if *new == Some(editor::Kind::OpenVpn) && !openvpn::plugin_installed() {
+                notice(weak, OPENVPN_MISSING);
+                return Ok(None);
+            }
             let settings = match connection {
                 Some(path) => client.settings(path).await?,
                 None => Default::default(),
             };
+            let mut extras = editing::Extras::default();
+            if let Some(path) = connection
+                && settings.get("connection").and_then(|c| c.get("type")).and_then(|t| <&str>::try_from(&**t).ok())
+                    == Some("wireguard")
+            {
+                // For the public key; NetworkManager may ask polkit, and then there's none.
+                extras.wg_key =
+                    client.secrets(path, "wireguard").await.ok().and_then(|s| s.get("private-key").cloned());
+            }
             let zones = client.firewall_zones().await;
             let (path, new) = (connection.clone(), *new);
             let _ = weak.upgrade_in_event_loop(move |window| {
-                APP.with(|app| editing::open(&mut app.borrow_mut(), path, settings, zones, new));
+                APP.with(|app| editing::open(&mut app.borrow_mut(), path, settings, zones, new, extras));
                 render(&window);
             });
+            return Ok(None);
+        }
+        ChooseFile { field } => {
+            let (title, filters): (&str, &[portal::Filter]) = if field.ends_with("key") {
+                ("Choose the key", &[("Keys", &["*.pem", "*.key", "*.p12", "*.pfx"]), ("All files", &["*"])])
+            } else {
+                (
+                    "Choose the certificate",
+                    &[("Certificates", &["*.pem", "*.crt", "*.cer", "*.der", "*.p12"]), ("All files", &["*"])],
+                )
+            };
+            let path = portal::open_file(title, filters)
+                .await
+                .map(|p| p.map(|p| p.to_string_lossy().into_owned()))
+                .map_err(|e| e.to_string());
+            let field = field.clone();
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                APP.with(|app| editing::file_chosen(&mut app.borrow_mut(), &field, path));
+                render(&window);
+            });
+            return Ok(None);
+        }
+        ImportFile => {
+            import_file(client, weak).await;
+            return Ok(None);
+        }
+        ExportWireGuard { connection } => {
+            let settings = client.settings(connection).await?;
+            let secrets = client.secrets_raw(connection, "wireguard").await?;
+            let conf = wireguard::export(&wireguard::from_settings(&settings, &secrets));
+            let name = settings
+                .get("connection")
+                .and_then(|c| c.get("id"))
+                .and_then(|v| <&str>::try_from(&**v).ok())
+                .unwrap_or("wireguard")
+                .to_owned();
+            match portal::save_file("Export the WireGuard configuration", &format!("{name}.conf")).await {
+                Ok(Some(path)) => match write_private(&path, &conf) {
+                    Ok(()) => {
+                        notice(weak, &format!("Saved {}. It holds the private key: keep it safe.", path.display()))
+                    }
+                    Err(e) => notice(weak, &format!("Couldn't write {}: {e}.", path.display())),
+                },
+                Ok(None) => {}
+                Err(e) => notice(weak, &format!("{e}.")),
+            }
             return Ok(None);
         }
         SaveConnection { path, settings, secret, reapply } => {
@@ -695,6 +894,87 @@ async fn run(
             return client.set_setting(connection, setting, key, value).await.map(|()| None);
         }
         SaveHostname(name) => return client.save_hostname(name).await.map(|()| None),
+        ShareWifi { connection, name } => {
+            let settings = client.settings(connection).await?;
+            let secrets = client.secrets(connection, secrets::WIFI_SECURITY).await.unwrap_or_default();
+            let get = |setting: &str, key: &str| {
+                settings
+                    .get(setting)
+                    .and_then(|g| g.get(key))
+                    .and_then(|v| <&str>::try_from(&**v).ok())
+                    .map(str::to_owned)
+            };
+            let ssid = settings
+                .get("802-11-wireless")
+                .and_then(|w| w.get("ssid"))
+                .and_then(|v| <Vec<u8>>::try_from(v.try_clone().ok()?).ok())
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_else(|| name.clone());
+            let hidden =
+                settings.get("802-11-wireless").and_then(|w| w.get("hidden")).and_then(|v| bool::try_from(&**v).ok())
+                    == Some(true);
+            let wep = get(secrets::WIFI_SECURITY, "key-mgmt").as_deref() == Some("none");
+            let open = !settings.contains_key(secrets::WIFI_SECURITY);
+            let password = secrets.get("psk").or_else(|| secrets.get("wep-key0")).cloned();
+            if !open && password.is_none() {
+                notice(
+                    weak,
+                    &format!(
+                        "Couldn't read the password of {name}: it may be asked for each time, or not readable without an admin password."
+                    ),
+                );
+                return Ok(None);
+            }
+            let text = qr::wifi_text(&ssid, password.as_deref(), wep, hidden);
+            let share = (format!("Share {name}"), password.unwrap_or_default(), text);
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                APP.with(|app| app.borrow_mut().share = Some(share));
+                render(&window);
+            });
+            return Ok(None);
+        }
+        LoadHotspot { connection } => {
+            let settings = client.settings(connection).await?;
+            let password =
+                client.secrets(connection, secrets::WIFI_SECURITY).await.ok().and_then(|s| s.get("psk").cloned());
+            let ssid = settings
+                .get("802-11-wireless")
+                .and_then(|w| w.get("ssid"))
+                .and_then(|v| <Vec<u8>>::try_from(v.try_clone().ok()?).ok())
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
+            let band = settings
+                .get("802-11-wireless")
+                .and_then(|w| w.get("band"))
+                .and_then(|v| <&str>::try_from(&**v).ok())
+                .map_or(0, |b| hotspot::BANDS.iter().position(|x| *x == b).unwrap_or(0));
+            let fields = (ssid, password.unwrap_or_else(hotspot::new_password), band);
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                APP.with(|app| app.borrow_mut().hotspot_fields = Some(fields));
+                render(&window);
+            });
+            return Ok(None);
+        }
+        StopHotspot { active } => return client.deactivate(active).await.map(|()| None),
+        StartHotspot { connection, device, ssid, password, band } => {
+            let path = match connection {
+                Some(path) => {
+                    let mut settings = client.settings(path).await?;
+                    hotspot::apply(&mut settings, ssid, password, *band);
+                    client.update(path, &settings).await?;
+                    path.clone()
+                }
+                None => {
+                    let owner = secrets::username();
+                    client
+                        .add(&hotspot::settings(ssid, password, *band, &secrets::new_uuid(), owner.as_deref()))
+                        .await?
+                }
+            };
+            let active = client.activate(&path, Some(device), None).await?;
+            let retry = Activate { connection: path, device: Some(device.clone()), access_point: None };
+            (active, Some(device.clone()), retry)
+        }
         SetWifi(on) => return client.set_wireless_enabled(*on).await.map(|()| None),
         SetAirplane(on) => return client.set_airplane(*on).await.map(|()| None),
         Rescan { device } => return client.request_scan(device).await.map(|()| None),
@@ -744,6 +1024,112 @@ async fn run(
     })
 }
 
+const OPENVPN_MISSING: &str = "OpenVPN needs NetworkManager's OpenVPN plugin: networkmanager-openvpn on Arch, network-manager-openvpn on Debian and Ubuntu, NetworkManager-openvpn on Fedora. Install it, then try again.";
+
+/// A note above the list.
+fn notice(weak: &slint::Weak<MainWindow>, text: &str) {
+    let text = text.to_owned();
+    let _ = weak.upgrade_in_event_loop(move |window| {
+        APP.with(|app| {
+            let mut app = app.borrow_mut();
+            app.message_title.clear();
+            app.retry = None;
+            app.message = Some((text, "info"));
+        });
+        render(&window);
+    });
+}
+
+/// Writes a file only the user can read (keys and certificates).
+fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    file.write_all(contents.as_bytes())
+}
+
+/// Asks for a WireGuard or OpenVPN file and opens it in the editor as a new connection.
+async fn import_file(client: &vinculum_nm::Client, weak: &slint::Weak<MainWindow>) {
+    let filters: &[portal::Filter] = &[("WireGuard and OpenVPN", &["*.conf", "*.ovpn"]), ("All files", &["*"])];
+    let path = match portal::open_file("Import a VPN connection", filters).await {
+        Ok(Some(path)) => path,
+        Ok(None) => return,
+        Err(e) => return notice(weak, &format!("{e}.")),
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) => return notice(weak, &format!("Couldn't read {}: {e}.", path.display())),
+    };
+    let file = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    let owner = secrets::username();
+    let uuid = secrets::new_uuid();
+    let looks_wireguard = text.lines().any(|l| l.trim().eq_ignore_ascii_case("[interface]"));
+    let (settings, banner) = if looks_wireguard {
+        match wireguard::parse(&text) {
+            Ok(conf) => {
+                let name = file.trim_end_matches(".conf");
+                let peers =
+                    if conf.peers.len() == 1 { "1 peer".to_owned() } else { format!("{} peers", conf.peers.len()) };
+                (wireguard::settings(&conf, name, &uuid, owner.as_deref()), format!("Imported from {file} · {peers}"))
+            }
+            Err(e) => return notice(weak, &format!("{file} isn't a WireGuard file Vinculum can read: {e}")),
+        }
+    } else {
+        if !openvpn::plugin_installed() {
+            return notice(weak, OPENVPN_MISSING);
+        }
+        let name = file.trim_end_matches(".ovpn").trim_end_matches(".conf").to_owned();
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::path::PathBuf::from(home).join(".local/share/vinculum/certificates").join(&name);
+        let full = path.to_string_lossy().into_owned();
+        let imported = match openvpn::import(&text, &full, &dir) {
+            Ok(imported) => imported,
+            Err(e) => return notice(weak, &format!("{file} isn't an OpenVPN file Vinculum can read: {e}")),
+        };
+        for (path, contents) in &imported.files {
+            if let Err(e) = write_private(path, contents) {
+                return notice(weak, &format!("Couldn't save {}: {e}.", path.display()));
+            }
+        }
+        let mut settings = editor::new_settings(editor::Kind::OpenVpn, &uuid);
+        let put = |s: &mut vinculum_nm::Settings, k: &str, v: zbus::zvariant::Value| {
+            s.entry("connection".into())
+                .or_default()
+                .insert(k.into(), zbus::zvariant::OwnedValue::try_from(v).expect("no fds"));
+        };
+        put(&mut settings, "id", imported.name.as_str().into());
+        put(&mut settings, "autoconnect", false.into());
+        if let Some(owner) = &owner {
+            put(&mut settings, "permissions", vec![format!("user:{owner}:")].into());
+        }
+        openvpn::write(&mut settings, None, &imported.form);
+        let mut banner = format!("Imported from {file}");
+        if !imported.files.is_empty() {
+            let n = imported.files.len();
+            let files = if n == 1 { "1 certificate".to_owned() } else { format!("{n} certificates") };
+            banner += &format!(
+                " · {files} saved to {}",
+                dir.display().to_string().replacen(&std::env::var("HOME").unwrap_or_default(), "~", 1)
+            );
+        }
+        if !imported.ignored.is_empty() {
+            banner += &format!(" · not used: {}", imported.ignored.join(", "));
+        }
+        (settings, banner)
+    };
+    let zones = client.firewall_zones().await;
+    let _ = weak.upgrade_in_event_loop(move |window| {
+        APP.with(|app| {
+            let extras = editing::Extras { wg_key: None, banner };
+            editing::open(&mut app.borrow_mut(), None, settings, zones, None, extras)
+        });
+        render(&window);
+    });
+}
+
 /// Saves the editor's settings and gives the saved connection's path and settings back, or why
 /// it didn't work.
 async fn save_connection(
@@ -777,7 +1163,14 @@ async fn save_connection(
     }
     let path = match path {
         Some(path) => {
-            client.update(path, settings).await.map_err(explain)?;
+            let mut settings = settings.clone();
+            // Edited WireGuard peers come without their pre-shared keys; put the saved ones back.
+            if settings.get("wireguard").is_some_and(|w| w.contains_key("peers"))
+                && let Ok(secrets) = client.secrets_raw(path, "wireguard").await
+            {
+                wireguard::keep_preshared_keys(&mut settings, &secrets);
+            }
+            client.update(path, &settings).await.map_err(explain)?;
             path.to_owned()
         }
         None => client.add(settings).await.map_err(explain)?,
@@ -822,6 +1215,13 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &vincu
         SaveConnection { .. } => "Couldn't save the connection",
         SetSetting { .. } => "Couldn't change the connection",
         SaveHostname(_) => "Couldn't change the hostname",
+        ChooseFile { .. } => "Couldn't open the file dialog",
+        ImportFile => "Couldn't import the file",
+        ExportWireGuard { .. } => "Couldn't export the configuration",
+        ShareWifi { .. } => "Couldn't share the network",
+        LoadHotspot { .. } => "Couldn't read the hotspot's settings",
+        StartHotspot { .. } => "Couldn't start the hotspot",
+        StopHotspot { .. } => "Couldn't stop the hotspot",
         Deactivate { .. } => "Couldn't disconnect",
         Forget { .. } => "Couldn't forget the connection",
     };

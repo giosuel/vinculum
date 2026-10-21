@@ -10,10 +10,10 @@ import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel, Kbd } from "controls.slint";
-import { JoinDialog, TextField } from "dialogs.slint";
-import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi } from "editor.slint";
+import { JoinDialog, TextField, Segmented } from "dialogs.slint";
+import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi } from "editor.slint";
 
-export { Theme, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi }
+export { Theme, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi }
 
 export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool }
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
@@ -33,6 +33,7 @@ export struct Details {
     items: [DetailItem],
     note: string,
 }
+export struct HostRow { name: string, address: string, since: string }
 export struct SourceRow { n: int, label: string, path: string, status: string, tone: string, swatches: [color] }
 
 component NavButton inherits Rectangle {
@@ -238,6 +239,21 @@ export component MainWindow inherits Window {
     in property <bool> hostname-open;
     in-out property <string> hostname-input;
     in property <string> hostname-error;
+    // The hotspot page.
+    in property <bool> hotspot-available;
+    in property <bool> hotspot-on;
+    in property <string> hotspot-status;
+    in property <string> hotspot-warning;
+    in property <image> hotspot-qr;
+    in property <[HostRow]> hotspot-clients;
+    in-out property <string> hotspot-ssid;
+    in-out property <string> hotspot-password;
+    in-out property <int> hotspot-band;
+    // Sharing a network: its QR code and password.
+    in property <bool> share-open;
+    in property <string> share-title;
+    in property <string> share-password;
+    in property <image> share-qr;
     // Sidebar switch, and where passwords are kept (for Settings).
     in property <bool> airplane;
     in property <string> keyring-label;
@@ -268,7 +284,17 @@ export component MainWindow inherits Window {
     callback editor-add-dns(string);
     callback editor-edit-routes(string);
     callback editor-routes-done(bool);
+    callback editor-choose-file(string);
+    callback editor-wg-generate();
+    callback editor-wg-show-key();
+    callback editor-wg-export();
+    callback editor-add-allowed(int);
     callback add-clicked();
+    callback hotspot-toggled();
+    callback hotspot-new-password();
+    callback hotspot-edited();
+    callback share-closed();
+    callback empty-action-clicked();
     callback add-chosen(string);
     callback add-cancelled();
     callback hostname-clicked();
@@ -306,6 +332,7 @@ export component MainWindow inherits Window {
             if event.text == Key.Escape && root.editor-open { root.editor-back(); return accept; }
             if root.editor-open { return reject; }
             if event.text == Key.Escape && root.add-open { root.add-cancelled(); return accept; }
+            if event.text == Key.Escape && root.share-open { root.share-closed(); return accept; }
             if event.text == Key.Escape && root.hostname-open { root.hostname-cancelled(); return accept; }
             if event.text == "e" && root.has-details && !root.confirm-open && !root.join-open { root.action("edit"); return accept; }
             if event.text == Key.Return && !root.confirm-open && !root.join-open { root.activate-selected(); return accept; }
@@ -385,7 +412,7 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     vertical-stretch: 1;
                     // List page
-                    if root.page != "settings" && root.placeholder == "": Rectangle {
+                    if root.page != "settings" && root.page != "hotspot" && root.placeholder == "": Rectangle {
                         // A fixed 384 px next to the details pane; otherwise (loading, or an empty
                         // state) all the room, and the window's 1040 px preferred width with the sidebar.
                         min-width: root.has-details ? 384px : 0px;
@@ -536,7 +563,7 @@ export component MainWindow inherits Window {
                                 Text { text: root.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
                                 if root.empty-action != "": HorizontalLayout {
                                     alignment: center;
-                                    Button { label: root.empty-action; kind: "primary"; button-height: 36px; clicked => { root.wifi-switched(); } }
+                                    Button { label: root.empty-action; kind: "primary"; button-height: 36px; clicked => { root.empty-action-clicked(); } }
                                 }
                             }
                             if root.bottom-label != "" && root.empty-title == "": Rectangle {
@@ -554,7 +581,7 @@ export component MainWindow inherits Window {
                         }
                         Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; visible: root.has-details; }
                     }
-                    if root.page != "settings" && root.placeholder == "" && root.has-details: DetailsPane {
+                    if root.page != "settings" && root.page != "hotspot" && root.placeholder == "" && root.has-details: DetailsPane {
                         horizontal-stretch: 1;
                         details: root.details;
                         action(id) => { root.action(id); }
@@ -564,6 +591,103 @@ export component MainWindow inherits Window {
                         background: Theme.surface;
                         horizontal-stretch: 1;
                         Text { text: root.placeholder; color: Theme.muted; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; width: 70%; }
+                    }
+                    if root.page == "hotspot": Rectangle {
+                        background: Theme.surface;
+                        horizontal-stretch: 1;
+                        if !root.hotspot-available: VerticalLayout {
+                            alignment: center;
+                            spacing: 12px;
+                            Icon { name: "hotspot"; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+                            Text { text: "No Wi-Fi card"; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+                            Text { text: "A hotspot needs a Wi-Fi card to share the connection over."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
+                        }
+                        if root.hotspot-available: HorizontalLayout {
+                            padding: 28px;
+                            spacing: 40px;
+                            VerticalLayout {
+                                spacing: 16px;
+                                alignment: start;
+                                horizontal-stretch: 1;
+                                HorizontalLayout {
+                                    Text { text: "Hotspot"; color: Theme.text; font-size: 19px; font-weight: 600; horizontal-stretch: 1; }
+                                    Switch { on: root.hotspot-on; label: "Hotspot"; switch-width: 40px; toggled => { root.hotspot-toggled(); } }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    Rectangle { width: 8px; height: 8px; border-radius: 4px; y: (parent.height - 8px) / 2; background: root.hotspot-on ? Theme.accent : Theme.faint; }
+                                    Text { text: root.hotspot-status; color: root.hotspot-on ? Theme.accent : Theme.muted; font-size: 13px; }
+                                }
+                                for field[i] in ["Network name", "Password"]: HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: field; color: Theme.text; font-size: 13px; width: 168px; vertical-alignment: center; }
+                                    if i == 0: TextField { text <=> root.hotspot-ssid; mono: true; label: "Network name"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
+                                    if i == 1: TextField { text <=> root.hotspot-password; mono: true; label: "Password"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
+                                    if i == 1: Button { label: "New"; button-height: 36px; horizontal-stretch: 0; enabled: !root.hotspot-on; clicked => { root.hotspot-new-password(); } }
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Security"; color: Theme.text; font-size: 13px; width: 168px; }
+                                    Text { text: "WPA2 Personal"; color: Theme.text; font-size: 13px; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Band"; color: Theme.text; font-size: 13px; width: 168px; vertical-alignment: center; }
+                                    HorizontalLayout {
+                                        alignment: start;
+                                        Segmented { options: ["Automatic", "2.4 GHz", "5 GHz"]; selected <=> root.hotspot-band; label: "Band"; }
+                                    }
+                                }
+                                if root.hotspot-warning != "": Rectangle {
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: Theme.warn-border;
+                                    background: Theme.warn-bg;
+                                    height: warn.preferred-height;
+                                    warn := HorizontalLayout {
+                                        padding: 10px;
+                                        spacing: 10px;
+                                        Icon { name: "warning"; tint: Theme.warn-text; y: 2px; }
+                                        Text { text: root.hotspot-warning; color: Theme.warn-text; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
+                                    }
+                                }
+                                if root.hotspot-on: VerticalLayout {
+                                    spacing: 8px;
+                                    SectionLabel { text: root.hotspot-clients.length == 0 ? "NO DEVICES YET" : "CONNECTED DEVICES · " + root.hotspot-clients.length; }
+                                    for c in root.hotspot-clients: Rectangle {
+                                        height: 50px;
+                                        border-radius: 8px;
+                                        border-width: 1px;
+                                        border-color: Theme.border2;
+                                        HorizontalLayout {
+                                            padding-left: 12px;
+                                            padding-right: 12px;
+                                            VerticalLayout {
+                                                alignment: center;
+                                                horizontal-stretch: 1;
+                                                Text { text: c.name; color: Theme.text; font-weight: 500; }
+                                                Text { text: c.address; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; }
+                                            }
+                                            Text { text: c.since; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                                        }
+                                    }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: start;
+                                spacing: 12px;
+                                padding-top: 40px;
+                                Rectangle {
+                                    width: 220px;
+                                    height: 220px;
+                                    border-radius: 12px;
+                                    background: white;
+                                    Image { source: root.hotspot-qr; width: 200px; height: 200px; image-rendering: pixelated; }
+                                }
+                                Text { text: "Scan with a phone camera to join"; color: Theme.muted; font-size: 12px; horizontal-alignment: center; }
+                            }
+                        }
                     }
                     // Settings
                     if root.page == "settings": Rectangle {
@@ -732,6 +856,11 @@ export component MainWindow inherits Window {
         add-dns(family) => { root.editor-add-dns(family); }
         edit-routes(family) => { root.editor-edit-routes(family); }
         routes-done(keep) => { root.editor-routes-done(keep); }
+        choose-file(field) => { root.editor-choose-file(field); }
+        wg-generate => { root.editor-wg-generate(); }
+        wg-show-key => { root.editor-wg-show-key(); }
+        wg-export => { root.editor-wg-export(); }
+        add-allowed(i) => { root.editor-add-allowed(i); }
     }
 
     if root.add-open: Rectangle {
@@ -758,10 +887,10 @@ export component MainWindow inherits Window {
                     for kind[i] in [
                         { id: "wifi", icon: "wifi", title: "Wi-Fi", text: "A network to join, including hidden ones", ready: true },
                         { id: "wired", icon: "wired", title: "Wired", text: "Ethernet with DHCP or static addresses", ready: true },
-                        { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Comes in the next version", ready: false },
-                        { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "Comes in the next version", ready: false },
+                        { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Built into NetworkManager. Start empty, or import a .conf file", ready: true },
+                        { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "From an .ovpn file or by hand (NetworkManager-openvpn)", ready: true },
                         { id: "hotspot", icon: "hotspot", title: "Hotspot", text: "Comes in the next version", ready: false },
-                        { id: "import", icon: "saved", title: "Import from file…", text: "Comes in the next version", ready: false },
+                        { id: "import", icon: "saved", title: "Import from file…", text: "A WireGuard .conf or an OpenVPN .ovpn", ready: true },
                     ]: Rectangle {
                         col: mod(i, 2);
                         row: floor(i / 2);
@@ -833,6 +962,57 @@ export component MainWindow inherits Window {
                     alignment: end;
                     Button { label: "Cancel"; button-height: 36px; clicked => { root.hostname-cancelled(); keys.focus(); } }
                     Button { label: "Save"; kind: "primary"; button-height: 36px; enabled: root.hostname-error == ""; clicked => { root.hostname-save(); keys.focus(); } }
+                }
+            }
+        }
+    }
+
+    if root.share-open: Rectangle {
+        background: #05060799;
+        TouchArea { clicked => { root.share-closed(); keys.focus(); } }
+        Rectangle {
+            width: 400px;
+            height: share-form.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: Theme.ctrl-border;
+            background: Theme.surface;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000080;
+            TouchArea {}
+            share-form := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                VerticalLayout {
+                    spacing: 3px;
+                    Text { text: root.share-title; color: Theme.text; font-size: 17px; font-weight: 600; }
+                    Text { text: "Scan with a phone camera to join."; color: Theme.muted; font-size: 13px; }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 264px;
+                        height: 264px;
+                        border-radius: 14px;
+                        background: white;
+                        Image { source: root.share-qr; width: 240px; height: 240px; image-rendering: pixelated; }
+                    }
+                }
+                if root.share-password != "": HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: "Password"; color: Theme.muted; font-size: 13px; width: 90px; vertical-alignment: center; }
+                    Rectangle {
+                        height: 30px;
+                        horizontal-stretch: 1;
+                        TextInput { text: root.share-password; read-only: true; color: Theme.text; font-family: "JetBrains Mono"; font-size: 13px; vertical-alignment: center; single-line: true; }
+                    }
+                }
+                HorizontalLayout {
+                    padding-top: 4px;
+                    alignment: end;
+                    Button { label: "Close"; button-height: 36px; clicked => { root.share-closed(); keys.focus(); } }
                 }
             }
         }
