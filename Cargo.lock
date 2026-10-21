@@ -4842,8 +4842,14 @@ name = "vinculum"
 version = "0.0.0-dev"
 dependencies = [
  "clap",
+ "futures-util",
+ "serde",
+ "serde_json",
  "slint",
  "slint-build",
+ "tokio",
+ "toml",
+ "vinculum-nm",
 ]
 
 [[package]]

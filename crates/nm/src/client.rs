@@ -123,6 +123,7 @@ impl Client {
 
     async fn read(&self) -> zbus::Result<Snapshot> {
         let nm = Props::get_all(&self.conn, MANAGER, IFACE).await?;
+        let settings = Props::get_all(&self.conn, SETTINGS, "org.freedesktop.NetworkManager.Settings").await?;
         let device_paths: Vec<zbus::zvariant::OwnedObjectPath> = self.call(MANAGER, IFACE, "GetDevices", &()).await?;
         let connection_paths: Vec<zbus::zvariant::OwnedObjectPath> =
             self.call(SETTINGS, "org.freedesktop.NetworkManager.Settings", "ListConnections", &()).await?;
@@ -142,6 +143,7 @@ impl Client {
             connections: connections.into_iter().flatten().collect(),
             active: active.into_iter().flatten().collect(),
             primary_connection: nm.path("PrimaryConnection"),
+            hostname: settings.string("Hostname").unwrap_or_default(),
         })
     }
 
@@ -273,6 +275,12 @@ impl Client {
                 .and_then(|v| i32::try_from(&**v).ok())
                 .unwrap_or(0),
             interface: string("connection", "interface-name").filter(|i| !i.is_empty()),
+            // NMMetered: 1 yes, 2 no, 3 guessed yes, 4 guessed no; 0 (unknown) means automatic.
+            metered: match get("connection", "metered").and_then(|v| i32::try_from(&**v).ok()) {
+                Some(1 | 3) => Some(true),
+                Some(2 | 4) => Some(false),
+                _ => None,
+            },
         })
     }
 

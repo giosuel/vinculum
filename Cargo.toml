@@ -21,6 +21,7 @@ tokio = "1.53.2"
 vinculum-nm = { path = "crates/nm" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 slint-build = "1.18.1"
+toml = "1.1.6"
 
 [workspace.lints.rust]
 # deny, not forbid: Slint's generated code allows it locally.
