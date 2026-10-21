@@ -10,9 +10,10 @@ import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel, Kbd } from "controls.slint";
-import { JoinDialog } from "dialogs.slint";
+import { JoinDialog, TextField } from "dialogs.slint";
+import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi } from "editor.slint";
 
-export { Theme }
+export { Theme, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi }
 
 export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool }
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
@@ -216,6 +217,27 @@ export component MainWindow inherits Window {
     in-out property <string> join-password;
     in-out property <int> join-storage;
     in-out property <bool> join-autoconnect;
+    // The connection editor (see editor.slint).
+    in property <bool> editor-open;
+    in property <string> editor-title;
+    in property <string> editor-subtitle;
+    in property <[EditorTab]> editor-tabs;
+    in-out property <string> editor-tab: "general";
+    in-out property <EditorForm> editor-form;
+    in property <EditorErrors> editor-errors;
+    in property <EditorOptions> editor-options;
+    in property <bool> editor-dirty;
+    in property <bool> editor-valid: true;
+    in property <bool> editor-busy;
+    in property <bool> editor-new;
+    in property <string> editor-footer;
+    in property <string> editor-footer-tone: "muted";
+    in property <string> editor-routes;
+    // "Add a connection", and the hostname dialog.
+    in property <bool> add-open;
+    in property <bool> hostname-open;
+    in-out property <string> hostname-input;
+    in property <string> hostname-error;
     // Sidebar switch, and where passwords are kept (for Settings).
     in property <bool> airplane;
     in property <string> keyring-label;
@@ -237,6 +259,21 @@ export component MainWindow inherits Window {
     callback message-action-clicked();
     callback bottom-clicked();
     callback airplane-toggled();
+    callback editor-back();
+    callback editor-apply();
+    callback editor-revert();
+    callback editor-edited();
+    callback editor-add-row(string);
+    callback editor-remove-row(string, int);
+    callback editor-add-dns(string);
+    callback editor-edit-routes(string);
+    callback editor-routes-done(bool);
+    callback add-clicked();
+    callback add-chosen(string);
+    callback add-cancelled();
+    callback hostname-clicked();
+    callback hostname-save();
+    callback hostname-cancelled();
     callback join-accepted();
     callback join-cancelled();
     /// Whether the dialog's fields can be sent: (mode, name, security, password).
@@ -260,6 +297,12 @@ export component MainWindow inherits Window {
             if event.text == "/" && root.show-search { root.search-focus-requests += 1; return accept; }
             if event.text == Key.DownArrow { root.move-selection(1); return accept; }
             if event.text == Key.UpArrow { root.move-selection(-1); return accept; }
+            if event.text == Key.Escape && root.editor-open && root.editor-routes != "" { root.editor-routes-done(false); return accept; }
+            if event.text == Key.Escape && root.editor-open { root.editor-back(); return accept; }
+            if root.editor-open { return reject; }
+            if event.text == Key.Escape && root.add-open { root.add-cancelled(); return accept; }
+            if event.text == Key.Escape && root.hostname-open { root.hostname-cancelled(); return accept; }
+            if event.text == "e" && root.has-details && !root.confirm-open && !root.join-open { root.action("edit"); return accept; }
             if event.text == Key.Return && !root.confirm-open && !root.join-open { root.activate-selected(); return accept; }
             if event.text == Key.Escape && root.confirm-open { root.confirm-cancelled(); return accept; }
             if event.text == Key.Escape && root.join-open { root.join-cancelled(); return accept; }
@@ -300,11 +343,20 @@ export component MainWindow inherits Window {
                         Text { text: "Airplane mode"; color: Theme.text; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
                         Switch { on: root.airplane; label: "Airplane mode"; y: (parent.height - self.height) / 2; toggled => { root.airplane-toggled(); } }
                     }
-                    if root.hostname != "": HorizontalLayout {
-                        padding: 8px;
-                        spacing: 4px;
-                        Text { text: "Hostname"; color: Theme.faint; font-size: 12px; }
-                        Text { text: root.hostname; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+                    if root.hostname != "": Rectangle {
+                        height: host-row.preferred-height;
+                        border-radius: 6px;
+                        background: host-touch.has-hover ? Theme.sel-bg : transparent;
+                        accessible-role: button;
+                        accessible-label: "Change the hostname";
+                        accessible-action-default => { root.hostname-clicked(); }
+                        host-row := HorizontalLayout {
+                            padding: 8px;
+                            spacing: 6px;
+                            Text { text: "Hostname"; color: Theme.faint; font-size: 12px; }
+                            Text { text: root.hostname; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; horizontal-stretch: 1; }
+                        }
+                        host-touch := TouchArea { mouse-cursor: pointer; clicked => { root.hostname-clicked(); } }
                     }
                 }
                 Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; }
@@ -346,7 +398,7 @@ export component MainWindow inherits Window {
                                 spacing: 10px;
                                 Text { text: root.page-title; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
                                 if root.show-rescan && root.wifi-on: IconButton { icon: "rescan"; label: "Rescan"; clicked => { root.rescan(); } }
-                                if root.show-add: IconButton { icon: "plus"; label: "Add"; }
+                                if root.show-add: IconButton { icon: "plus"; label: "Add a connection"; clicked => { root.add-clicked(); } }
                                 if root.show-wifi-switch: Switch {
                                     on: root.wifi-on;
                                     label: "Wi-Fi";
@@ -643,5 +695,141 @@ export component MainWindow inherits Window {
         valid: root.join-check(root.join-mode, root.join-name, root.join-security, root.join-password);
         accepted => { root.join-accepted(); keys.focus(); }
         cancelled => { root.join-cancelled(); keys.focus(); }
+    }
+
+    // The editor sweeps in from the right, over everything but the dialogs above.
+    Editor {
+        x: root.editor-open ? 0 : root.width;
+        width: root.width;
+        height: root.height;
+        visible: self.x < root.width;
+        animate x { duration: 220ms; easing: ease-out; }
+        title: root.editor-title;
+        subtitle: root.editor-subtitle;
+        tabs: root.editor-tabs;
+        tab <=> root.editor-tab;
+        form <=> root.editor-form;
+        errors: root.editor-errors;
+        options: root.editor-options;
+        dirty: root.editor-dirty;
+        valid: root.editor-valid;
+        busy: root.editor-busy;
+        new: root.editor-new;
+        footer: root.editor-footer;
+        footer-tone: root.editor-footer-tone;
+        routes-open: root.editor-routes;
+        back => { root.editor-back(); keys.focus(); }
+        apply => { root.editor-apply(); }
+        revert => { root.editor-revert(); }
+        form-edited => { root.editor-edited(); }
+        add-row(what) => { root.editor-add-row(what); }
+        remove-row(what, i) => { root.editor-remove-row(what, i); }
+        add-dns(family) => { root.editor-add-dns(family); }
+        edit-routes(family) => { root.editor-edit-routes(family); }
+        routes-done(keep) => { root.editor-routes-done(keep); }
+    }
+
+    if root.add-open: Rectangle {
+        background: #05060799;
+        TouchArea { clicked => { root.add-cancelled(); } }
+        Rectangle {
+            width: 620px;
+            height: add-form.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: Theme.ctrl-border;
+            background: Theme.surface;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000080;
+            TouchArea {}
+            add-form := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                Text { text: "Add a connection"; color: Theme.text; font-size: 17px; font-weight: 600; }
+                GridLayout {
+                    spacing: 10px;
+                    for kind[i] in [
+                        { id: "wifi", icon: "wifi", title: "Wi-Fi", text: "A network to join, including hidden ones", ready: true },
+                        { id: "wired", icon: "wired", title: "Wired", text: "Ethernet with DHCP or static addresses", ready: true },
+                        { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Comes in the next version", ready: false },
+                        { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "Comes in the next version", ready: false },
+                        { id: "hotspot", icon: "hotspot", title: "Hotspot", text: "Comes in the next version", ready: false },
+                        { id: "import", icon: "saved", title: "Import from file…", text: "Comes in the next version", ready: false },
+                    ]: Rectangle {
+                        col: mod(i, 2);
+                        row: floor(i / 2);
+                        height: 76px;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: Theme.border2;
+                        background: tile.has-hover && kind.ready ? Theme.sel-bg : transparent;
+                        opacity: kind.ready ? 1 : 0.5;
+                        accessible-role: button;
+                        accessible-label: kind.title;
+                        accessible-enabled: kind.ready;
+                        accessible-action-default => { if kind.ready { root.add-chosen(kind.id); } }
+                        HorizontalLayout {
+                            padding: 14px;
+                            spacing: 12px;
+                            Icon { name: kind.icon; tint: Theme.accent; y: 2px; }
+                            VerticalLayout {
+                                spacing: 3px;
+                                alignment: start;
+                                Text { text: kind.title; color: Theme.text; font-weight: 600; font-size: 14px; }
+                                Text { text: kind.text; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                            }
+                        }
+                        tile := TouchArea { enabled: kind.ready; mouse-cursor: kind.ready ? pointer : default; clicked => { root.add-chosen(kind.id); } }
+                    }
+                }
+                HorizontalLayout {
+                    padding-top: 6px;
+                    alignment: end;
+                    Button { label: "Cancel"; button-height: 36px; clicked => { root.add-cancelled(); keys.focus(); } }
+                }
+            }
+        }
+    }
+
+    if root.hostname-open: Rectangle {
+        background: #05060799;
+        TouchArea { clicked => { root.hostname-cancelled(); keys.focus(); } }
+        Rectangle {
+            width: 420px;
+            height: host-form.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: Theme.ctrl-border;
+            background: Theme.surface;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000080;
+            TouchArea {}
+            host-form := VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                Text { text: "Hostname"; color: Theme.text; font-size: 17px; font-weight: 600; }
+                Text { text: "The computer's name on the network. Changing it needs an admin password."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                TextField {
+                    text <=> root.hostname-input;
+                    mono: true;
+                    autofocus: true;
+                    label: "Hostname";
+                    invalid: root.hostname-error != "";
+                    accepted => { if root.hostname-error == "" { root.hostname-save(); keys.focus(); } }
+                }
+                if root.hostname-error != "": Text { text: root.hostname-error; color: Theme.danger; font-size: 12px; }
+                HorizontalLayout {
+                    padding-top: 6px;
+                    spacing: 8px;
+                    alignment: end;
+                    Button { label: "Cancel"; button-height: 36px; clicked => { root.hostname-cancelled(); keys.focus(); } }
+                    Button { label: "Save"; kind: "primary"; button-height: 36px; enabled: root.hostname-error == ""; clicked => { root.hostname-save(); keys.focus(); } }
+                }
+            }
+        }
     }
 }

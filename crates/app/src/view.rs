@@ -814,12 +814,39 @@ pub enum Command {
         join: WifiJoin,
     },
     SetAirplane(bool),
+    /// Read a connection's settings (or none, for a new one) and open the editor.
+    OpenEditor {
+        connection: Option<String>,
+        new: Option<crate::editor::Kind>,
+    },
+    /// Save the editor's settings: update (or add, without a path), keyring secret first, then
+    /// reapply to the active connection.
+    SaveConnection {
+        path: Option<String>,
+        settings: crate::editing::Shared,
+        secret: Option<crate::editing::KeyringSecret>,
+        reapply: Option<(String, Option<String>)>,
+    },
+    /// One key of a saved connection, from the details pane's switches.
+    SetSetting {
+        connection: String,
+        setting: &'static str,
+        key: &'static str,
+        value: SettingValue,
+    },
+    SaveHostname(String),
     Deactivate {
         active: String,
     },
     Forget {
         connection: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingValue {
+    Bool(bool),
+    I32(i32),
 }
 
 /// What pressing a button means.
@@ -861,14 +888,20 @@ pub fn key_mgmt(security: Security) -> Option<KeyMgmt> {
     }
 }
 
-const LATER_EDITOR: &str = "Editing connections comes with the connection editor, in a later version.";
-
 /// The command behind a details button (`action` is its id) for the selected row.
 pub fn intent(snap: &Snapshot, selected: &str, action: &str) -> Option<Intent> {
     match action {
-        "edit" => return Some(Intent::Notice(LATER_EDITOR.into())),
+        "edit" => {
+            let path = saved_connection(snap, selected)?.path.clone();
+            return Some(Intent::Run(Command::OpenEditor { connection: Some(path), new: None }));
+        }
         "share" => return Some(Intent::Notice("Sharing a network as a QR code comes in a later version.".into())),
-        "add-wired" => return Some(Intent::Notice("Adding connections comes in a later version.".into())),
+        "add-wired" => {
+            return Some(Intent::Run(Command::OpenEditor {
+                connection: None,
+                new: Some(crate::editor::Kind::Ethernet),
+            }));
+        }
         _ => {}
     }
     if let Some(id) = selected.strip_prefix("wifi:") {
@@ -957,6 +990,30 @@ fn forget(c: &SavedConnection) -> Intent {
 /// The Wi-Fi switch, or the "Turn on Wi-Fi" button.
 pub fn wifi_switch(snap: &Snapshot) -> Command {
     Command::SetWifi(!snap.wireless_enabled)
+}
+
+/// The saved connection behind a row, if it has one.
+pub fn saved_connection<'a>(snap: &'a Snapshot, id: &str) -> Option<&'a SavedConnection> {
+    if id.starts_with("wifi:") {
+        let device = wifi_device(snap)?;
+        let networks = snap.networks().into_iter().find(|(p, _)| *p == device.path)?.1;
+        let uuid = networks.into_iter().find(|n| network_id(n) == id)?.saved?;
+        return snap.connections.iter().find(|c| c.uuid == uuid);
+    }
+    let uuid = id.strip_prefix("conn:")?;
+    snap.connections.iter().find(|c| c.uuid == uuid)
+}
+
+/// The switches in the details pane ("autoconnect", "metered") as a command.
+pub fn toggle_command(snap: &Snapshot, selected: &str, id: &str) -> Option<Command> {
+    let c = saved_connection(snap, selected)?;
+    let (key, value) = match id {
+        "autoconnect" => ("autoconnect", SettingValue::Bool(!c.autoconnect)),
+        // NMMetered: 1 yes, 2 no.
+        "metered" => ("metered", SettingValue::I32(if c.metered == Some(true) { 2 } else { 1 })),
+        _ => return None,
+    };
+    Some(Command::SetSetting { connection: c.path.clone(), setting: "connection", key, value })
 }
 
 /// The name a row shows, for messages about it.
@@ -1245,5 +1302,30 @@ mod tests {
         snap.wwan_enabled = false;
         assert_eq!(airplane_switch(&snap), Command::SetAirplane(false));
         assert_eq!(hidden_network_device(&snap).as_deref(), Some("/d/wlan"));
+    }
+
+    #[test]
+    fn edit_and_the_details_switches_become_commands() {
+        let snap = home();
+        let ids = build(Some(&snap), None, &UiState::default()).row_ids;
+        assert_eq!(
+            intent(&snap, &ids[0], "edit"),
+            Some(Intent::Run(Command::OpenEditor { connection: Some("/c/1".into()), new: None }))
+        );
+        // The unsaved café network has nothing to edit.
+        assert_eq!(intent(&snap, &ids[1], "edit"), None);
+        assert_eq!(
+            toggle_command(&snap, &ids[0], "autoconnect"),
+            Some(Command::SetSetting {
+                connection: "/c/1".into(),
+                setting: "connection",
+                key: "autoconnect",
+                value: SettingValue::Bool(false)
+            })
+        );
+        assert!(matches!(
+            toggle_command(&snap, &ids[0], "metered"),
+            Some(Command::SetSetting { key: "metered", value: SettingValue::I32(1), .. })
+        ));
     }
 }

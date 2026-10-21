@@ -1,0 +1,711 @@
+// The connection editor: a full-window sheet that sweeps in from the right, with a tab per
+// settings group, as in the mockups (EditGeneral, EditWifi, EditSecurity, EditIPv4, EditIPv6,
+// EditEthernet, Routes). The form is one struct, two-way bound to the controls; Rust checks it
+// whenever it changes (see src/editor.rs) and sends back the errors.
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+import { Button, Switch } from "controls.slint";
+import { TextField, Segmented, CheckBox, Select } from "dialogs.slint";
+
+export struct AddressRow { address: string, prefix: string }
+export struct RouteRow { dest: string, prefix: string, gateway: string, metric: string }
+export struct IpFormUi {
+    method: int,
+    addresses: [AddressRow],
+    gateway: string,
+    dns: [string],
+    dns-input: string,
+    search: string,
+    ignore-auto-dns: bool,
+    routes: [RouteRow],
+    ignore-auto-routes: bool,
+    never-default: bool,
+    required: bool,
+    privacy: int,
+    stable-privacy: bool,
+}
+export struct EditorForm {
+    name: string,
+    autoconnect: bool,
+    priority: string,
+    only-me: bool,
+    metered: int,
+    zone: int,
+    vpn: int,
+    ssid: string,
+    mode: int,
+    band: int,
+    bssid: int,
+    hidden: bool,
+    security: int,
+    password: string,
+    storage: int,
+    mac: int,
+    mac-fixed: string,
+    mtu: string,
+    interface: int,
+    negotiation: int,
+    speed: string,
+    full-duplex: bool,
+    wol-magic: bool,
+    wol-unicast: bool,
+    wol-broadcast: bool,
+    ip4: IpFormUi,
+    ip6: IpFormUi,
+}
+export struct EditorErrors {
+    name: string,
+    priority: string,
+    ssid: string,
+    bssid: string,
+    password: string,
+    mac: string,
+    mtu: string,
+    speed: string,
+    ip4-addresses: string,
+    ip4-dns: string,
+    ip4-routes: string,
+    ip6-addresses: string,
+    ip6-dns: string,
+    ip6-routes: string,
+}
+export struct EditorTab { id: string, label: string, errors: int }
+/// The choices that depend on the connection and the computer.
+export struct EditorOptions {
+    zones: [string],
+    vpns: [string],
+    bssids: [string],
+    interfaces: [string],
+    securities: [string],
+    security-details: [string],
+    macs: [string],
+    ip4-methods: [string],
+    ip6-methods: [string],
+    privacy: [string],
+    /// IPv6 addresses the device has now, for the IPv6 tab.
+    current-ip6: [string],
+    /// "Negotiated: 1000 Mb/s, full duplex".
+    link: string,
+    has-zones: bool,
+}
+
+component Label inherits Text {
+    color: Theme.text;
+    font-size: 13px;
+    vertical-alignment: center;
+    width: 224px;
+    wrap: word-wrap;
+}
+
+component Hint inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    wrap: word-wrap;
+    horizontal-stretch: 1;
+}
+
+component Error inherits Text {
+    color: Theme.danger;
+    font-size: 12px;
+    wrap: word-wrap;
+}
+
+/// A label on the left and the control (and its notes) on the right.
+component Row inherits HorizontalLayout {
+    in property <string> label;
+    in property <length> label-top: 10px;
+    spacing: 0px;
+    VerticalLayout {
+        alignment: start;
+        padding-top: root.label-top;
+        Label { text: root.label; }
+    }
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: 6px;
+        alignment: start;
+        @children
+    }
+}
+
+/// A small "×" button.
+component Remove inherits Rectangle {
+    in property <string> label: "Remove";
+    callback clicked();
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: touch.has-hover ? Theme.sel-bg : transparent;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { clicked(); }
+    Path {
+        width: 12px; height: 12px;
+        viewbox-width: 16; viewbox-height: 16;
+        stroke: Theme.faint; stroke-width: 1.6px; fill: transparent;
+        commands: "M4 4l8 8M12 4l-8 8";
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+/// A dashed "Add address" style button.
+component AddButton inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 32px;
+    width: text.preferred-width + 24px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.ctrl-border;
+    background: touch.has-hover ? Theme.sel-bg : transparent;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { clicked(); }
+    text := Text { text: root.label; color: Theme.icon-soft; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+/// The routes dialog's rows.
+component RouteRows inherits VerticalLayout {
+    in-out property <[RouteRow]> routes;
+    callback edited();
+    callback remove(int);
+    spacing: 8px;
+    for r[i] in root.routes: HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        HorizontalLayout { alignment: start; TextField { text <=> r.dest; mono: true; width: 180px; label: "Destination"; edited => { root.edited(); } } }
+        TextField { text <=> r.prefix; mono: true; width: 64px; label: "Prefix"; edited => { root.edited(); } }
+        HorizontalLayout { alignment: start; TextField { text <=> r.gateway; mono: true; width: 180px; label: "Gateway"; placeholder: "On-link"; edited => { root.edited(); } } }
+        TextField { text <=> r.metric; mono: true; width: 80px; label: "Metric"; placeholder: "Auto"; edited => { root.edited(); } }
+        Remove { y: (parent.height - self.height) / 2; label: "Remove the route"; clicked => { root.remove(i); } }
+    }
+}
+
+/// One IP family's settings, for the IPv4 and IPv6 tabs.
+component IpPage inherits VerticalLayout {
+    in property <bool> v6;
+    in-out property <IpFormUi> ip;
+    in property <[string]> methods;
+    in property <[string]> privacy;
+    in property <[string]> current;
+    in property <string> addresses-error;
+    in property <string> dns-error;
+    callback row-edited();
+    callback add-address();
+    callback remove-address(int);
+    callback add-dns();
+    callback remove-dns(int);
+    callback edit-routes();
+    // Manual is index 1 for IPv4, 2 for IPv6.
+    property <bool> manual: root.ip.method == (root.v6 ? 2 : 1);
+    property <bool> off: root.v6 ? root.ip.method >= 4 : root.ip.method == 4;
+    spacing: 18px;
+    Row {
+        label: "Method";
+        label-top: 12px;
+        HorizontalLayout { alignment: start; Segmented { options: root.methods; selected <=> root.ip.method; label: "Method"; height: 40px; } }
+    }
+    if root.v6 && root.current.length > 0: Row {
+        label: "Current addresses";
+        label-top: 0px;
+        for a in root.current: Text { text: a; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; }
+    }
+    if !root.off && (root.manual || root.ip.addresses.length > 0): Row {
+        label: root.manual ? "Addresses" : "Extra addresses";
+        label-top: 24px;
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Address"; color: Theme.muted; font-size: 12px; width: 180px; }
+            Text { text: "Prefix"; color: Theme.muted; font-size: 12px; width: 72px; }
+            Text { text: "Gateway"; color: Theme.muted; font-size: 12px; width: 180px; }
+            Rectangle {}
+        }
+        for a[i] in root.ip.addresses: HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            TextField { text <=> a.address; mono: true; width: 180px; label: "Address"; invalid: root.addresses-error != ""; edited => { root.row-edited(); } }
+            TextField { text <=> a.prefix; mono: true; width: 72px; label: "Prefix"; edited => { root.row-edited(); } }
+            if i == 0: TextField { text <=> root.ip.gateway; mono: true; width: 180px; label: "Gateway"; placeholder: "None"; invalid: root.addresses-error != ""; }
+            if i != 0: Rectangle { width: 180px; }
+            Remove { y: (parent.height - self.height) / 2; label: "Remove the address"; clicked => { root.remove-address(i); } }
+        }
+        if root.addresses-error != "": Error { text: root.addresses-error; }
+        HorizontalLayout { alignment: start; AddButton { label: "Add address"; clicked => { root.add-address(); } } }
+    }
+    if !root.off && !root.manual && root.ip.addresses.length == 0: Row {
+        label: "Addresses";
+        label-top: 6px;
+        HorizontalLayout {
+            alignment: start;
+            spacing: 10px;
+            Hint { text: "From the network."; vertical-alignment: center; }
+            AddButton { label: "Add an address of your own"; clicked => { root.add-address(); } }
+        }
+    }
+    if root.v6 && !root.off: Row {
+        label: "Privacy extensions";
+        HorizontalLayout { alignment: start; Select { options: root.privacy; selected <=> root.ip.privacy; label: "Privacy extensions"; width: 360px; } }
+    }
+    if root.v6 && !root.off: Row {
+        label: "Address generation";
+        label-top: 12px;
+        HorizontalLayout { alignment: start; Segmented { options: ["Stable privacy", "From MAC (EUI-64)"]; selected: root.ip.stable-privacy ? 0 : 1; label: "Address generation"; width: 300px; changed(i) => { root.ip.stable-privacy = i == 0; } } }
+    }
+    if !root.off: Row {
+        label: "DNS servers";
+        label-top: 8px;
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            for d[i] in root.ip.dns: Rectangle {
+                height: 34px;
+                width: chip.preferred-width + 40px;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.ctrl-border;
+                background: Theme.ctrl-bg;
+                chip := Text { x: 10px; text: d; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; height: parent.height; }
+                Remove { x: parent.width - 30px; y: 3px; label: "Remove " + d; clicked => { root.remove-dns(i); } }
+            }
+            TextField {
+                text <=> root.ip.dns-input;
+                mono: true;
+                width: 150px;
+                height: 34px;
+                label: "Add a DNS server";
+                placeholder: "Add server";
+                invalid: root.dns-error != "";
+                accepted => { root.add-dns(); }
+            }
+        }
+        if root.dns-error != "": Error { text: root.dns-error; }
+        if root.ip.dns.length == 0 && root.dns-error == "": Hint { text: "Type an address and press Enter."; }
+    }
+    if !root.off: Row {
+        label: "Search domains";
+        HorizontalLayout { alignment: start; TextField { text <=> root.ip.search; mono: true; width: 360px; label: "Search domains"; placeholder: "home.arpa, example.com"; } }
+    }
+    if !root.off && !root.manual: Row {
+        label: "Automatic DNS";
+        label-top: 2px;
+        CheckBox { checked: !root.ip.ignore-auto-dns; text: "Also use DNS servers from the network"; toggled(on) => { root.ip.ignore-auto-dns = !on; } }
+    }
+    if !root.off: Row {
+        label: "Routes";
+        label-top: 8px;
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
+            Button { label: "Edit routes…"; clicked => { root.edit-routes(); } }
+            Hint {
+                text: root.ip.routes.length == 0 ? "None" : root.ip.routes.length == 1 ? "1 route" : root.ip.routes.length + " routes";
+                vertical-alignment: center;
+            }
+        }
+    }
+    if !root.off: Row {
+        label: "Required";
+        label-top: 2px;
+        CheckBox { checked <=> root.ip.required; text: root.v6 ? "Fail the connection if IPv6 can't be configured" : "Fail the connection if IPv4 can't be configured"; }
+    }
+}
+
+export component Editor inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <[EditorTab]> tabs;
+    in-out property <string> tab: "general";
+    in-out property <EditorForm> form;
+    in property <EditorErrors> errors;
+    in property <EditorOptions> options;
+    in property <bool> dirty;
+    in property <bool> valid: true;
+    in property <bool> busy;
+    in property <string> footer;
+    in property <string> footer-tone: "muted";
+    in property <bool> new: false;
+    // "", "ipv4" or "ipv6": the routes dialog.
+    in property <string> routes-open;
+    callback back();
+    callback apply();
+    callback revert();
+    callback form-edited();
+    callback add-row(string);
+    callback remove-row(string, int);
+    callback add-dns(string);
+    callback edit-routes(string);
+    callback routes-done(bool);
+
+    changed form => { root.form-edited(); }
+
+    background: Theme.surface;
+    // Clicks don't fall through to the window underneath.
+    TouchArea {}
+    // Esc from any field closes the routes dialog, or else the editor.
+    FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape && root.routes-open != "" { root.routes-done(false); return accept; }
+            if event.text == Key.Escape { root.back(); return accept; }
+            reject
+        }
+    VerticalLayout {
+        // Header
+        HorizontalLayout {
+            padding: 20px;
+            padding-left: 24px;
+            padding-bottom: 12px;
+            spacing: 14px;
+            Rectangle {
+                width: 34px;
+                height: 34px;
+                y: 2px;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.ctrl-border;
+                background: back.has-hover ? Theme.sel-bg : transparent;
+                accessible-role: button;
+                accessible-label: "Back";
+                accessible-action-default => { root.back(); }
+                Path {
+                    width: 14px; height: 14px;
+                    viewbox-width: 16; viewbox-height: 16;
+                    stroke: Theme.icon-soft; stroke-width: 1.8px; fill: transparent;
+                    commands: "M10 3l-5 5 5 5";
+                }
+                back := TouchArea { mouse-cursor: pointer; clicked => { root.back(); } }
+            }
+            VerticalLayout {
+                spacing: 2px;
+                horizontal-stretch: 1;
+                Text { text: root.title; color: Theme.text; font-size: 19px; font-weight: 600; overflow: elide; }
+                Text { text: root.subtitle; color: Theme.muted; font-size: 12px; overflow: elide; }
+            }
+            if root.dirty: HorizontalLayout {
+                horizontal-stretch: 0;
+                spacing: 7px;
+                alignment: center;
+                Rectangle { width: 7px; height: 7px; border-radius: 3.5px; background: Theme.warn-text; y: (parent.height - 7px) / 2; }
+                Text { text: "Unsaved changes"; color: Theme.warn-text; font-size: 13px; vertical-alignment: center; }
+            }
+        }
+        // Tabs
+        Rectangle {
+            height: 38px;
+            HorizontalLayout {
+                padding-left: 20px;
+                spacing: 4px;
+                alignment: start;
+                for t in root.tabs: Rectangle {
+                    width: label.preferred-width + (t.errors > 0 ? 38px : 24px);
+                    accessible-role: AccessibleRole.tab;
+                    accessible-label: t.label;
+                    accessible-item-selected: t.id == root.tab;
+                    accessible-action-default => { root.tab = t.id; }
+                    label := Text {
+                        x: 12px;
+                        text: t.label;
+                        color: t.id == root.tab ? Theme.text : Theme.muted;
+                        font-size: 13px;
+                        font-weight: t.id == root.tab ? 600 : 400;
+                        vertical-alignment: center;
+                        height: parent.height - 2px;
+                    }
+                    if t.errors > 0: Rectangle {
+                        x: label.x + label.preferred-width + 7px;
+                        y: (parent.height - 6px) / 2 - 1px;
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Theme.danger;
+                    }
+                    Rectangle { y: parent.height - 2px; height: 2px; background: t.id == root.tab ? Theme.accent : transparent; }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.tab = t.id; } }
+                }
+            }
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+        }
+        // The tab's settings
+        Flickable {
+            vertical-stretch: 1;
+            content-height: page.preferred-height;
+            page := VerticalLayout {
+                width: parent.width;
+                padding: 24px;
+                padding-top: 22px;
+                spacing: 18px;
+                alignment: start;
+                if root.tab == "general": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "Name";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.name; width: 360px; label: "Name"; invalid: root.errors.name != ""; } }
+                        if root.errors.name != "": Error { text: root.errors.name; }
+                    }
+                    Row {
+                        label: "Connect automatically";
+                        label-top: 0px;
+                        Switch { on: root.form.autoconnect; label: "Connect automatically"; switch-width: 40px; toggled => { root.form.autoconnect = !root.form.autoconnect; } }
+                    }
+                    Row {
+                        label: "Priority";
+                        HorizontalLayout {
+                            spacing: 12px;
+                            alignment: start;
+                            HorizontalLayout { alignment: start; TextField { text <=> root.form.priority; mono: true; width: 96px; label: "Priority"; invalid: root.errors.priority != ""; } }
+                            Hint { text: "Higher wins when several saved networks are in range."; vertical-alignment: center; }
+                        }
+                        if root.errors.priority != "": Error { text: root.errors.priority; }
+                    }
+                    Row {
+                        label: "Available to";
+                        label-top: 12px;
+                        HorizontalLayout { alignment: start; Segmented { options: ["All users", "Only me"]; selected: root.form.only-me ? 1 : 0; label: "Available to"; width: 220px; changed(i) => { root.form.only-me = i == 1; } } }
+                        Hint { text: root.form.only-me ? "Only you can see and use it; changing it needs no admin password." : "Everyone on this computer can use it; changing it needs an admin password."; }
+                    }
+                    Row {
+                        label: "Metered";
+                        label-top: 12px;
+                        HorizontalLayout { alignment: start; Segmented { options: ["Automatic", "Yes", "No"]; selected <=> root.form.metered; label: "Metered"; width: 300px; } }
+                    }
+                    if root.options.has-zones: Row {
+                        label: "Firewall zone";
+                        HorizontalLayout { alignment: start; Select { options: root.options.zones; selected <=> root.form.zone; label: "Firewall zone"; width: 240px; } }
+                    }
+                    if root.options.vpns.length > 1: Row {
+                        label: "Start VPN with this network";
+                        HorizontalLayout { alignment: start; Select { options: root.options.vpns; selected <=> root.form.vpn; label: "Start VPN with this network"; width: 240px; } }
+                    }
+                }
+                if root.tab == "wifi": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "Network name (SSID)";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.ssid; width: 360px; label: "Network name"; invalid: root.errors.ssid != ""; } }
+                        if root.errors.ssid != "": Error { text: root.errors.ssid; }
+                    }
+                    Row {
+                        label: "Mode";
+                        label-top: 12px;
+                        HorizontalLayout { alignment: start; Segmented { options: ["Client", "Hotspot", "Ad-hoc"]; selected <=> root.form.mode; label: "Mode"; width: 280px; } }
+                    }
+                    Row {
+                        label: "Band";
+                        label-top: 12px;
+                        HorizontalLayout { alignment: start; Segmented { options: ["Automatic", "2.4 GHz", "5 GHz"]; selected <=> root.form.band; label: "Band"; width: 300px; } }
+                    }
+                    Row {
+                        label: "Access point";
+                        HorizontalLayout { alignment: start; Select { options: root.options.bssids; selected <=> root.form.bssid; label: "Access point"; width: 360px; } }
+                        Hint { text: "Locking to one access point stops roaming between them."; }
+                    }
+                    Row {
+                        label: "MAC address";
+                        HorizontalLayout { alignment: start; Select { options: root.options.macs; selected <=> root.form.mac; label: "MAC address"; width: 360px; } }
+                        if root.form.mac == root.options.macs.length - 1: HorizontalLayout { alignment: start; TextField { text <=> root.form.mac-fixed; mono: true; width: 220px; label: "Fixed MAC address"; placeholder: "54:E1:AD:7C:20:9B"; invalid: root.errors.mac != ""; } }
+                        if root.errors.mac != "": Error { text: root.errors.mac; }
+                    }
+                    Row {
+                        label: "MTU";
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            HorizontalLayout { alignment: start; TextField { text <=> root.form.mtu; mono: true; width: 120px; label: "MTU"; placeholder: "Automatic"; invalid: root.errors.mtu != ""; } }
+                            Hint { text: "bytes"; vertical-alignment: center; }
+                        }
+                        if root.errors.mtu != "": Error { text: root.errors.mtu; }
+                    }
+                    Row {
+                        label: "Hidden network";
+                        label-top: 2px;
+                        CheckBox { checked <=> root.form.hidden; text: "Probe for this network even when it isn't broadcast"; }
+                    }
+                }
+                if root.tab == "security": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "Security";
+                        HorizontalLayout { alignment: start; Select { options: root.options.securities; details: root.options.security-details; selected <=> root.form.security; label: "Security"; width: 360px; } }
+                    }
+                    if root.form.security >= 2 && root.form.security <= 4: Row {
+                        label: "Password";
+                        HorizontalLayout { alignment: start; TextField {
+                            text <=> root.form.password;
+                            password: true;
+                            width: 360px;
+                            label: "Password";
+                            placeholder: root.new ? "" : "Saved; type to change it";
+                            invalid: root.errors.password != "";
+                        } }
+                        if root.errors.password != "": Error { text: root.errors.password; }
+                    }
+                    if root.form.security >= 2 && root.form.security <= 4: Row {
+                        label: "Remember the password";
+                        label-top: 12px;
+                        HorizontalLayout { alignment: start; Segmented { options: ["For me only", "All users", "Ask each time"]; selected <=> root.form.storage; label: "Remember the password"; width: 400px; } }
+                    }
+                    if root.form.security >= 5: Hint {
+                        text: "Enterprise (802.1X) settings get their own editor in the next version. Until then they stay as they are.";
+                    }
+                }
+                if root.tab == "ethernet": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "Device";
+                        HorizontalLayout { alignment: start; Select { options: root.options.interfaces; selected <=> root.form.interface; label: "Device"; width: 360px; } }
+                    }
+                    Row {
+                        label: "MAC address";
+                        HorizontalLayout { alignment: start; Select { options: root.options.macs; selected <=> root.form.mac; label: "MAC address"; width: 360px; } }
+                        if root.form.mac == root.options.macs.length - 1: HorizontalLayout { alignment: start; TextField { text <=> root.form.mac-fixed; mono: true; width: 220px; label: "Fixed MAC address"; placeholder: "54:E1:AD:7C:20:9B"; invalid: root.errors.mac != ""; } }
+                        if root.errors.mac != "": Error { text: root.errors.mac; }
+                    }
+                    Row {
+                        label: "MTU";
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            HorizontalLayout { alignment: start; TextField { text <=> root.form.mtu; mono: true; width: 120px; label: "MTU"; placeholder: "Automatic"; invalid: root.errors.mtu != ""; } }
+                            Hint { text: "bytes"; vertical-alignment: center; }
+                        }
+                        if root.errors.mtu != "": Error { text: root.errors.mtu; }
+                    }
+                    Row {
+                        label: "Link negotiation";
+                        label-top: 12px;
+                        HorizontalLayout { alignment: start; Segmented { options: ["Automatic", "Manual", "Ignore"]; selected <=> root.form.negotiation; label: "Link negotiation"; width: 300px; } }
+                    }
+                    Row {
+                        label: "Speed and duplex";
+                        label-top: root.form.negotiation == 1 ? 10px : 0px;
+                        if root.form.negotiation != 1: Hint { text: root.options.link; }
+                        if root.form.negotiation == 1: HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            HorizontalLayout { alignment: start; TextField { text <=> root.form.speed; mono: true; width: 100px; label: "Speed"; placeholder: "1000"; invalid: root.errors.speed != ""; } }
+                            Hint { text: "Mb/s"; vertical-alignment: center; }
+                            CheckBox { checked <=> root.form.full-duplex; text: "Full duplex"; y: (parent.height - self.height) / 2; }
+                        }
+                        if root.errors.speed != "": Error { text: root.errors.speed; }
+                    }
+                    Row {
+                        label: "Wake-on-LAN";
+                        label-top: 2px;
+                        HorizontalLayout {
+                            spacing: 18px;
+                            alignment: start;
+                            CheckBox { checked <=> root.form.wol-magic; text: "Magic packet"; }
+                            CheckBox { checked <=> root.form.wol-unicast; text: "Unicast"; }
+                            CheckBox { checked <=> root.form.wol-broadcast; text: "Broadcast"; }
+                        }
+                    }
+                }
+                if root.tab == "ipv4": IpPage {
+                    v6: false;
+                    ip <=> root.form.ip4;
+                    methods: root.options.ip4-methods;
+                    addresses-error: root.errors.ip4-addresses;
+                    dns-error: root.errors.ip4-dns;
+                    row-edited => { root.form-edited(); }
+                    add-address => { root.add-row("ip4-address"); }
+                    remove-address(i) => { root.remove-row("ip4-address", i); }
+                    add-dns => { root.add-dns("ip4"); }
+                    remove-dns(i) => { root.remove-row("ip4-dns", i); }
+                    edit-routes => { root.edit-routes("ipv4"); }
+                }
+                if root.tab == "ipv6": IpPage {
+                    v6: true;
+                    ip <=> root.form.ip6;
+                    methods: root.options.ip6-methods;
+                    privacy: root.options.privacy;
+                    current: root.options.current-ip6;
+                    addresses-error: root.errors.ip6-addresses;
+                    dns-error: root.errors.ip6-dns;
+                    row-edited => { root.form-edited(); }
+                    add-address => { root.add-row("ip6-address"); }
+                    remove-address(i) => { root.remove-row("ip6-address", i); }
+                    add-dns => { root.add-dns("ip6"); }
+                    remove-dns(i) => { root.remove-row("ip6-dns", i); }
+                    edit-routes => { root.edit-routes("ipv6"); }
+                }
+            }
+        }
+        // Footer
+        Rectangle {
+            height: 64px;
+            Rectangle { y: 0; height: 1px; background: Theme.border; }
+            HorizontalLayout {
+                padding-left: 24px;
+                padding-right: 24px;
+                spacing: 10px;
+                Text { text: root.footer; color: Theme.tone(root.footer-tone); font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                Button { label: "Revert"; button-height: 36px; horizontal-stretch: 0; enabled: root.dirty && !root.busy; y: (parent.height - self.height) / 2; clicked => { root.revert(); } }
+                Button {
+                    horizontal-stretch: 0;
+                    label: root.new ? "Save" : "Apply";
+                    kind: "primary";
+                    button-height: 36px;
+                    enabled: (root.dirty || root.new) && root.valid && !root.busy;
+                    y: (parent.height - self.height) / 2;
+                    clicked => { root.apply(); }
+                }
+            }
+        }
+    }
+
+    }
+
+    // Routes dialog
+    if root.routes-open != "": Rectangle {
+        property <bool> v6: root.routes-open == "ipv6";
+        background: #05060799;
+        TouchArea { clicked => { root.routes-done(false); } }
+        Rectangle {
+            width: min(640px, parent.width - 48px);
+            height: routes.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: Theme.ctrl-border;
+            background: Theme.surface;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000080;
+            TouchArea {}
+            routes := VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                Text { text: (v6 ? "IPv6 routes · " : "IPv4 routes · ") + root.form.name; color: Theme.text; font-size: 17px; font-weight: 600; }
+                Text { text: "Extra routes added when this connection is up."; color: Theme.muted; font-size: 13px; }
+                if (v6 ? root.form.ip6.routes.length : root.form.ip4.routes.length) == 0: Text {
+                    text: "No extra routes yet.";
+                    color: Theme.faint;
+                    font-size: 13px;
+                }
+                if (v6 ? root.form.ip6.routes.length : root.form.ip4.routes.length) > 0: HorizontalLayout {
+                    spacing: 8px;
+                    Text { text: "Destination"; color: Theme.muted; font-size: 12px; width: 180px; }
+                    Text { text: "Prefix"; color: Theme.muted; font-size: 12px; width: 64px; }
+                    Text { text: "Gateway"; color: Theme.muted; font-size: 12px; width: 180px; }
+                    Text { text: "Metric"; color: Theme.muted; font-size: 12px; width: 80px; }
+                    Rectangle {}
+                }
+                if !v6: RouteRows { routes <=> root.form.ip4.routes; edited => { root.form-edited(); } remove(i) => { root.remove-row("ip4-route", i); } }
+                if v6: RouteRows { routes <=> root.form.ip6.routes; edited => { root.form-edited(); } remove(i) => { root.remove-row("ip6-route", i); } }
+                if (v6 ? root.errors.ip6-routes : root.errors.ip4-routes) != "": Error { text: v6 ? root.errors.ip6-routes : root.errors.ip4-routes; }
+                HorizontalLayout { alignment: start; AddButton { label: "Add route"; clicked => { root.add-row(v6 ? "ip6-route" : "ip4-route"); } } }
+                if !v6: CheckBox { checked <=> root.form.ip4.ignore-auto-routes; text: "Ignore routes from DHCP"; }
+                if v6: CheckBox { checked <=> root.form.ip6.ignore-auto-routes; text: "Ignore routes from the network"; }
+                if !v6: CheckBox { checked <=> root.form.ip4.never-default; text: "Use this connection only for resources on its network"; }
+                if v6: CheckBox { checked <=> root.form.ip6.never-default; text: "Use this connection only for resources on its network"; }
+                HorizontalLayout {
+                    padding-top: 6px;
+                    spacing: 8px;
+                    alignment: end;
+                    Button { label: "Cancel"; button-height: 36px; clicked => { root.routes-done(false); } }
+                    Button { label: "Done"; kind: "primary"; button-height: 36px; clicked => { root.routes-done(true); } }
+                }
+            }
+        }
+    }
+}
