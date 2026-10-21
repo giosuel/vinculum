@@ -11,9 +11,10 @@ import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel, Kbd } from "controls.slint";
 import { JoinDialog, TextField, Segmented } from "dialogs.slint";
+import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi } from "editor.slint";
 
-export { Theme, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi }
+export { Theme, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi }
 
 export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool }
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
@@ -192,6 +193,10 @@ export component MainWindow inherits Window {
     in property <string> config-path;
     in property <[SourceRow]> sources;
     in property <string> builtin-label;
+    in property <int> builtin-choice;
+    in property <[Toggle]> options;
+    callback builtin-chosen(int);
+    callback option-toggled(string);
     in property <string> placeholder;
     // A message above the list: an error ("danger"), a polkit problem ("warn"), or a note ("info").
     in property <string> message;
@@ -701,7 +706,7 @@ export component MainWindow inherits Window {
                             HorizontalLayout {
                                 spacing: 12px;
                                 Text { text: "Settings"; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; }
-                                Text { text: "Read from"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                                Text { text: "Saved to"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
                                 Text { text: root.config-path; color: Theme.icon-soft; font-size: 12px; font-family: "JetBrains Mono"; vertical-alignment: center; }
                             }
                             VerticalLayout {
@@ -741,15 +746,29 @@ export component MainWindow inherits Window {
                             }
                             HorizontalLayout {
                                 spacing: 24px;
-                                Text { text: "Built-in theme"; color: Theme.icon-soft; width: 200px; }
-                                Text { text: root.builtin-label; color: Theme.text; }
+                                Text { text: "Built-in theme"; color: Theme.icon-soft; width: 200px; vertical-alignment: center; }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    Segmented {
+                                        label: "Built-in theme";
+                                        options: ["Follow system", "Dark", "Light"];
+                                        selected: root.builtin-choice;
+                                        changed(i) => { root.builtin-chosen(i); }
+                                    }
+                                }
+                            }
+                            for o in root.options: HorizontalLayout {
+                                spacing: 24px;
+                                Text { text: o.label; color: Theme.icon-soft; width: 200px; vertical-alignment: center; }
+                                Switch { on: o.on; label: o.label; y: (parent.height - self.height) / 2; toggled => { root.option-toggled(o.id); } }
+                                Text { text: o.sub; color: Theme.muted; font-size: 13px; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
                             }
                             HorizontalLayout {
                                 spacing: 24px;
                                 Text { text: "Passwords \"for me only\""; color: Theme.icon-soft; width: 200px; }
                                 Text { text: root.keyring-label; color: Theme.text; wrap: word-wrap; horizontal-stretch: 1; }
                             }
-                            Text { text: "Changes are made in the file for now; editing them here comes in a later version."; color: Theme.faint; font-size: 12px; }
+                            Text { text: "Colour sources are changed in the file."; color: Theme.faint; font-size: 12px; }
                         }
                     }
                 }
