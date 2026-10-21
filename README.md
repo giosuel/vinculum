@@ -4,7 +4,8 @@ A network manager for Linux desktops that don't come with one, such as Hyprland 
 `nmtui` does, plus the settings depth of KDE's network panel, in a native app written in Rust with
 [Slint](https://slint.dev). It drives NetworkManager over D-Bus.
 
-**Status:** in development. The window shows your networks and connections live, but can't change them yet.
+**Status:** in development. It connects to Wi-Fi (open, password-protected and hidden networks),
+wired and VPN connections, and keeps passwords in your keyring; editing connections comes next.
 
 ## Building
 
@@ -20,6 +21,27 @@ The app ID is `ch.giosuel.Vinculum`, so Hyprland window rules can match it:
 ```
 windowrule = float, class:^(ch\.giosuel\.Vinculum)$
 ```
+
+## Passwords and the background mode
+
+When you join a network, Vinculum asks where to keep its password:
+
+- **For me only** (the default): in your keyring (GNOME Keyring, KeePassXC or anything else that
+  speaks the Secret Service, or KWallet), and the connection is yours alone. No admin password
+  needed. Without a keyring, NetworkManager keeps the password instead.
+- **All users**: NetworkManager keeps it for everyone; changing it needs an admin password (polkit).
+- **Ask each time**: not saved at all.
+
+"For me only" passwords live in your keyring, so NetworkManager asks Vinculum for them whenever it
+connects, including at login. Start Vinculum in the background so it's there to answer:
+
+```
+exec-once = vinculum --background
+```
+
+It runs without a window until NetworkManager needs a password; `vinculum` (from a keybind, say)
+then opens the window of the running one, and closing the window leaves it running. Passwords that
+nm-applet or GNOME Settings put in the keyring are found too.
 
 ## Colours
 
@@ -51,7 +73,8 @@ runs every test, including the ones against a mock NetworkManager (python-dbusmo
 bus, so the real one is never touched). It needs `dbus-daemon` and python-dbusmock
 (`apt install python3-dbusmock`, or `pip install python-dbusmock` in a venv with
 `VINCULUM_PYTHON` pointing at its `python`), and fails rather than skipping them when they're
-missing.
+missing. With `gnome-keyring` installed, the keyring tests also run against a real one on a
+private bus.
 
 `scripts/mock-nm.sh COMMAND` runs any command against the same mock, filled with the networks from
 the mockups, for example the debug tool that prints what Vinculum reads from NetworkManager:
