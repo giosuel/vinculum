@@ -29,6 +29,10 @@ impl Props {
         self.value(name).and_then(|v| i64::try_from(v).ok())
     }
 
+    pub(crate) fn u64(&self, name: &str) -> Option<u64> {
+        self.value(name).and_then(|v| u64::try_from(v).ok())
+    }
+
     pub(crate) fn u8(&self, name: &str) -> Option<u8> {
         self.value(name).and_then(|v| u8::try_from(v).ok())
     }
