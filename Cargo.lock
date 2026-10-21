@@ -4849,7 +4849,9 @@ dependencies = [
  "slint-build",
  "tokio",
  "toml",
+ "vinculum-keyring",
  "vinculum-nm",
+ "zbus",
 ]
 
 [[package]]
@@ -4860,6 +4862,17 @@ dependencies = [
  "futures-util",
  "tokio",
  "vinculum-nm",
+]
+
+[[package]]
+name = "vinculum-keyring"
+version = "0.0.0-dev"
+dependencies = [
+ "futures-util",
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+ "zbus",
 ]
 
 [[package]]

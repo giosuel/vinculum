@@ -86,6 +86,17 @@ impl Bus {
         let reply = conn.call_method(Some(vinculum_nm::BUS_NAME), MANAGER, Some(MOCK), method, body).await.unwrap();
         reply.body().deserialize().unwrap()
     }
+
+    /// Calls a mock method on another of the mock's objects.
+    async fn mock_at<B, R>(&self, path: &str, method: &str, body: &B) -> R
+    where
+        B: serde::Serialize + zbus::zvariant::DynamicType,
+        R: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type,
+    {
+        let conn = self.connect().await;
+        let reply = conn.call_method(Some(vinculum_nm::BUS_NAME), path, Some(MOCK), method, body).await.unwrap();
+        reply.body().deserialize().unwrap()
+    }
 }
 
 impl Drop for Bus {
@@ -272,4 +283,200 @@ async fn join_an_open_network() {
     let saved = snap.connection(&connection).expect("a new profile");
     assert_eq!(saved.wifi_ssid(), Some(&b"Bibliothek-Free"[..]));
     assert!(snap.networks()[0].1.iter().any(|n| n.name() == "Bibliothek-Free" && n.saved.is_some()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn join_a_secured_network_with_the_password_in_the_keyring() {
+    use vinculum_nm::{KeyMgmt, Storage, WifiJoin};
+    let Some(bus) = Bus::start(true).await else { return };
+    let (wifi, _) = home_setup(&bus).await;
+    let client = Client::new(bus.connect().await);
+    let snap = client.snapshot().await.unwrap();
+    // The mock can't match non-ASCII names, so not "Aster Café".
+    let library = snap.networks()[0].1.iter().find(|n| n.name() == "Bibliothek-Free").unwrap().strongest().path.clone();
+    let join = WifiJoin {
+        ssid: "Bibliothek-Free".into(),
+        uuid: "0b8c3d0e-1f2a-4b5c-8d9e-0f1a2b3c4d5e".into(),
+        security: Some((KeyMgmt::WpaPsk, "café-pass".into())),
+        storage: Storage::Agent,
+        owner: Some("giosuel".into()),
+        autoconnect: true,
+        hidden: false,
+    };
+    client.join_wifi(&wifi, Some(&library), &join).await.unwrap();
+    // The mock makes its own profile from the access point, so check what was sent instead.
+    let calls: Vec<(u64, String, Vec<zbus::zvariant::OwnedValue>)> = bus.mock("GetCalls", &()).await;
+    let (_, _, args) = calls.iter().find(|(_, m, _)| m == "AddAndActivateConnection").expect("the call");
+    let settings =
+        std::collections::HashMap::<String, std::collections::HashMap<String, zbus::zvariant::OwnedValue>>::try_from(
+            args[0].try_clone().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(<&str>::try_from(&*settings["connection"]["uuid"]).unwrap(), join.uuid);
+    assert_eq!(<&str>::try_from(&*settings["802-11-wireless-security"]["psk"]).unwrap(), "café-pass");
+    let security = &settings["802-11-wireless-security"];
+    assert_eq!(u32::try_from(&security["psk-flags"]).unwrap(), 1, "agent-owned");
+    let permissions = <Vec<String>>::try_from(settings["connection"]["permissions"].clone()).unwrap();
+    assert_eq!(permissions, ["user:giosuel:"]);
+}
+
+/// The agent registers with the AgentManager and answers NetworkManager (here, the mock calling
+/// it the way NetworkManager does), but no one else.
+#[tokio::test(flavor = "multi_thread")]
+async fn secret_agent_answers_only_network_manager() {
+    use vinculum_nm::{AgentEvent, Refusal};
+    let Some(bus) = Bus::start(true).await else { return };
+    // The mock has no AgentManager: add one, and a test method that calls the agent from the
+    // mock's own connection (the one that owns NetworkManager's name), remembering the answer.
+    let _: () = bus
+        .mock(
+            "AddObject",
+            &(
+                "/org/freedesktop/NetworkManager/AgentManager",
+                "org.freedesktop.NetworkManager.AgentManager",
+                std::collections::HashMap::<String, zbus::zvariant::Value>::new(),
+                vec![("RegisterWithCapabilities", "su", "", "")],
+            ),
+        )
+        .await;
+    let call_agent_code = r#"
+import dbus
+self.answer = 'pending'
+def ok(secrets, self=self): self.answer = 'ok ' + str(secrets['802-11-wireless-security']['psk'])
+def err(e, self=self): self.answer = 'error ' + e.get_dbus_name()
+agent = self.connection.get_object(args[0], '/org/freedesktop/NetworkManager/SecretAgent')
+settings = {
+    'connection': {'id': 'Aster Café', 'uuid': 'u-cafe', 'type': '802-11-wireless'},
+    '802-11-wireless': {'ssid': dbus.ByteArray(b'Aster Caf\xc3\xa9')},
+    '802-11-wireless-security': {'key-mgmt': 'wpa-psk', 'psk-flags': dbus.UInt32(1)},
+}
+agent.GetSecrets(dbus.Dictionary(settings, signature='sa{sv}'), dbus.ObjectPath('/org/freedesktop/NetworkManager/Settings/9'),
+    '802-11-wireless-security', dbus.Array([], signature='s'), dbus.UInt32(args[1]),
+    dbus_interface='org.freedesktop.NetworkManager.SecretAgent', reply_handler=ok, error_handler=err, timeout=30)
+"#;
+    let _: () =
+        bus.mock("AddMethod", &("org.freedesktop.DBus.Mock.Test", "CallAgent", "su", "", call_agent_code)).await;
+    let _: () = bus
+        .mock("AddMethod", &("org.freedesktop.DBus.Mock.Test", "Answer", "", "s", "ret = getattr(self, 'answer', '')"))
+        .await;
+
+    let agent_conn = bus.connect().await;
+    let agent_name = agent_conn.unique_name().unwrap().to_string();
+    let client = Client::new(agent_conn);
+    let mut events = client.register_agent("ch.giosuel.Vinculum").await.expect("registered");
+    let calls: Vec<(u64, String, Vec<zbus::zvariant::OwnedValue>)> =
+        bus.mock_at("/org/freedesktop/NetworkManager/AgentManager", "GetCalls", &()).await;
+    assert!(calls.iter().any(|(_, m, _)| m == "RegisterWithCapabilities"));
+
+    // Answered with a password.
+    call_agent(&bus, &agent_name, 1).await;
+    let Some(AgentEvent::GetSecrets(request)) = events.recv().await else { panic!("a request") };
+    assert_eq!(request.connection.id, "Aster Café");
+    assert_eq!(request.connection.ssid, "Aster Café".as_bytes());
+    assert_eq!(request.setting, "802-11-wireless-security");
+    assert_eq!(request.connection.secret_flags("802-11-wireless-security", "psk"), 1);
+    assert!(request.interactive() && !request.request_new());
+    request.reply(Ok([("psk".to_owned(), "café-pass".to_owned())].into()));
+    assert_eq!(agent_answer(&bus).await, "ok café-pass");
+
+    // The user cancelled.
+    call_agent(&bus, &agent_name, 3).await;
+    let Some(AgentEvent::GetSecrets(request)) = events.recv().await else { panic!("a request") };
+    assert!(request.request_new());
+    request.reply(Err(Refusal::UserCanceled));
+    assert_eq!(agent_answer(&bus).await, "error org.freedesktop.NetworkManager.SecretAgent.UserCanceled");
+
+    // Someone other than NetworkManager asks.
+    let other = bus.connect().await;
+    let settings: std::collections::HashMap<&str, std::collections::HashMap<&str, zbus::zvariant::Value>> =
+        [("connection", [("id", "x".into())].into())].into();
+    let refused = other
+        .call_method(
+            Some(agent_name.as_str()),
+            "/org/freedesktop/NetworkManager/SecretAgent",
+            Some("org.freedesktop.NetworkManager.SecretAgent"),
+            "GetSecrets",
+            &(
+                settings,
+                zbus::zvariant::ObjectPath::try_from("/x").unwrap(),
+                "802-11-wireless-security",
+                Vec::<String>::new(),
+                1u32,
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("NotAuthorized"), "{refused}");
+    assert!(events.try_recv().is_err(), "no request reached the app");
+}
+
+async fn call_agent(bus: &Bus, agent: &str, flags: u32) {
+    let conn = bus.connect().await;
+    conn.call_method(
+        Some(vinculum_nm::BUS_NAME),
+        MANAGER,
+        Some("org.freedesktop.DBus.Mock.Test"),
+        "CallAgent",
+        &(agent, flags),
+    )
+    .await
+    .unwrap();
+}
+
+/// What the agent answered the mock's last `CallAgent`.
+async fn agent_answer(bus: &Bus) -> String {
+    let conn = bus.connect().await;
+    for _ in 0..100 {
+        let reply = conn
+            .call_method(Some(vinculum_nm::BUS_NAME), MANAGER, Some("org.freedesktop.DBus.Mock.Test"), "Answer", &())
+            .await
+            .unwrap();
+        let text: String = reply.body().deserialize().unwrap();
+        if text != "pending" && !text.is_empty() {
+            return text;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the agent didn't answer");
+}
+
+/// A wrong password: the device fails with "supplicant disconnected", then the attempt ends.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_attempt_says_why() {
+    use vinculum_nm::Outcome;
+    let Some(bus) = Bus::start(true).await else { return };
+    let (wifi, _) = home_setup(&bus).await;
+    let cafe_conn: String = bus.mock("AddWiFiConnection", &(&wifi, "cafeconn", "Bibliothek-Free", "wpa-psk")).await;
+    // State 1: activating.
+    let active: String = bus.mock("AddActiveConnection", &(vec![&wifi], &cafe_conn, "/", "cafeactive", 1u32)).await;
+    let client = Client::new(bus.connect().await);
+    let waiting = tokio::spawn({
+        let (client, active, wifi) = (client.clone(), active.clone(), wifi.clone());
+        async move { client.outcome(&active, Some(&wifi)).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let emit =
+        |path: String, interface: &'static str, signature: &'static str, args: Vec<zbus::zvariant::Value<'static>>| {
+            let bus = &bus;
+            async move {
+                let conn = bus.connect().await;
+                conn.call_method(
+                    Some(vinculum_nm::BUS_NAME),
+                    path.as_str(),
+                    Some(MOCK),
+                    "EmitSignal",
+                    &(interface, "StateChanged", signature, args),
+                )
+                .await
+                .unwrap();
+            }
+        };
+    // Device: FAILED (120) from CONFIG (50), reason SUPPLICANT_DISCONNECT (8).
+    emit(wifi.clone(), "org.freedesktop.NetworkManager.Device", "uuu", vec![120u32.into(), 50u32.into(), 8u32.into()])
+        .await;
+    // Active connection: DEACTIVATED (4), reason DEVICE_DISCONNECTED (4).
+    emit(active.clone(), "org.freedesktop.NetworkManager.Connection.Active", "uu", vec![4u32.into(), 4u32.into()])
+        .await;
+    let outcome = tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap().unwrap();
+    assert_eq!(outcome, Outcome::Failed("The network rejected the password.".into()));
 }

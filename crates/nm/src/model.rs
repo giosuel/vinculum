@@ -12,6 +12,8 @@ pub struct Snapshot {
     pub wireless_enabled: bool,
     /// Wi-Fi not blocked by a hardware switch or rfkill.
     pub wireless_hardware_enabled: bool,
+    /// Mobile broadband switched on.
+    pub wwan_enabled: bool,
     pub devices: Vec<Device>,
     /// Saved connection profiles.
     pub connections: Vec<SavedConnection>,
@@ -22,6 +24,11 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Airplane mode is Wi-Fi and mobile broadband both switched off.
+    pub fn airplane(&self) -> bool {
+        !self.wireless_enabled && !self.wwan_enabled
+    }
+
     pub fn device(&self, path: &str) -> Option<&Device> {
         self.devices.iter().find(|d| d.path == path)
     }

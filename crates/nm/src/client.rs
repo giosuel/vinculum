@@ -41,7 +41,7 @@ pub enum Error {
 }
 
 impl Error {
-    fn from_dbus(error: zbus::Error) -> Self {
+    pub(crate) fn from_dbus(error: zbus::Error) -> Self {
         let name = error_name(&error).unwrap_or_default();
         let message = match &error {
             zbus::Error::MethodError(_, Some(message), _) => message.clone(),
@@ -94,6 +94,10 @@ impl Client {
         Self { conn }
     }
 
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
     /// Reads everything once.
     pub async fn snapshot(&self) -> Result<Snapshot, Error> {
         self.read().await.map_err(Error::from_dbus)
@@ -141,6 +145,23 @@ impl Client {
             )
             .await
             .map_err(Error::from_dbus)?;
+        Ok(())
+    }
+
+    /// Airplane mode: Wi-Fi and mobile broadband off (or back on).
+    pub async fn set_airplane(&self, on: bool) -> Result<(), Error> {
+        for property in ["WirelessEnabled", "WwanEnabled"] {
+            self.conn
+                .call_method(
+                    Some(BUS_NAME),
+                    MANAGER,
+                    Some("org.freedesktop.DBus.Properties"),
+                    "Set",
+                    &(IFACE, property, Value::from(!on)),
+                )
+                .await
+                .map_err(Error::from_dbus)?;
+        }
         Ok(())
     }
 
@@ -197,7 +218,7 @@ impl Client {
             .map_err(Error::from_dbus)
     }
 
-    async fn call<B, R>(&self, path: &str, interface: &str, method: &str, body: &B) -> zbus::Result<R>
+    pub(crate) async fn call<B, R>(&self, path: &str, interface: &str, method: &str, body: &B) -> zbus::Result<R>
     where
         B: serde::Serialize + zbus::zvariant::DynamicType,
         R: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type,
@@ -224,6 +245,7 @@ impl Client {
             networking_enabled: nm.bool("NetworkingEnabled").unwrap_or(true),
             wireless_enabled: nm.bool("WirelessEnabled").unwrap_or(false),
             wireless_hardware_enabled: nm.bool("WirelessHardwareEnabled").unwrap_or(true),
+            wwan_enabled: nm.bool("WwanEnabled").unwrap_or(true),
             devices: devices.into_iter().flatten().collect(),
             connections: connections.into_iter().flatten().collect(),
             active: active.into_iter().flatten().collect(),
@@ -383,7 +405,7 @@ impl Client {
     }
 }
 
-fn object_path(path: &str) -> Result<ObjectPath<'_>, Error> {
+pub(crate) fn object_path(path: &str) -> Result<ObjectPath<'_>, Error> {
     ObjectPath::try_from(path).map_err(|e| Error::DBus(e.into()))
 }
 
