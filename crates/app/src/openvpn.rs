@@ -25,6 +25,11 @@ pub const COMPRESSION: [(&str, &str); 4] = [("", "No"), ("lz4", "LZ4"), ("lzo", 
 /// Whether NetworkManager-openvpn is installed (NetworkManager lists its VPN plugins in these
 /// folders).
 pub fn plugin_installed() -> bool {
+    // In a Flatpak these are the sandbox's folders, not the system's: let NetworkManager say so
+    // when the plugin is missing.
+    if std::env::var_os("FLATPAK_ID").is_some() {
+        return true;
+    }
     [
         "/usr/lib/NetworkManager/VPN",
         "/usr/lib64/NetworkManager/VPN",

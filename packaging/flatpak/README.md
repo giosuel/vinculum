@@ -40,10 +40,9 @@ folders above. To drop one, for example the KWallet names on a GNOME desktop:
 - **Hotspot clients:** the list of connected devices comes from NetworkManager's lease file in
   `/var/lib/NetworkManager`, which the sandbox can't see, so the list stays empty. The hotspot
   itself works.
-- **OpenVPN:** the app looks for NetworkManager's OpenVPN plugin under `/usr/lib/NetworkManager`
-  and `/etc/NetworkManager`, which in the sandbox are the runtime's, not your system's. So it
-  always says the plugin is missing, and adding or importing OpenVPN connections doesn't work
-  yet. WireGuard is built into NetworkManager and works.
+- **OpenVPN:** the sandbox can't see whether NetworkManager's OpenVPN plugin is installed, so the
+  app doesn't check: without the plugin, NetworkManager refuses the connection when it's saved or
+  started. WireGuard is built into NetworkManager.
 - **Certificates chosen in the editor** come through the file chooser portal. One outside the
   folders above arrives as a `/run/user/<uid>/doc/…` path, which NetworkManager can't read. Put
   certificates in `~/.local/share/vinculum/certificates` first. (Imported `.ovpn` files are

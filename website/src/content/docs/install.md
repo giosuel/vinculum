@@ -60,8 +60,8 @@ differently there:
 
 - The settings are in `~/.var/app/ch.giosuel.Vinculum/config/vinculum/config.toml`.
 - The hotspot can't list the devices connected to it.
-- Adding OpenVPN connections doesn't work yet: Vinculum can't see whether NetworkManager's OpenVPN
-  plugin is installed, and says it isn't. WireGuard works.
+- Vinculum can't see whether NetworkManager's OpenVPN plugin is installed; without it, OpenVPN
+  connections fail when they're saved or started. WireGuard needs no plugin.
 - Certificates you pick in the editor should be in `~/.local/share/vinculum/certificates`, where
   NetworkManager can read them.
 - With Hyprland, start it with `exec-once = flatpak run ch.giosuel.Vinculum --background`.
