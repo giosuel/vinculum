@@ -610,6 +610,19 @@ pub fn new_settings(kind: Kind, uuid: &str) -> Settings {
     s
 }
 
+/// A new connection to an Enterprise network: its name and security filled in, PEAP with
+/// MSCHAPv2 (what eduroam and most companies use) to start from.
+pub fn enterprise_settings(ssid: &[u8], suite_b: bool, uuid: &str) -> Settings {
+    let mut s = new_settings(Kind::Wifi, uuid);
+    put(&mut s, "connection", "id", Value::from(String::from_utf8_lossy(ssid).into_owned()));
+    put(&mut s, "802-11-wireless", "ssid", Value::from(ssid.to_vec()));
+    let key_mgmt = if suite_b { "wpa-eap-suite-b-192" } else { "wpa-eap" };
+    put(&mut s, "802-11-wireless-security", "key-mgmt", Value::from(key_mgmt));
+    put(&mut s, "802-1x", "eap", Value::from(vec!["peap".to_owned()]));
+    put(&mut s, "802-1x", "phase2-auth", Value::from("mschapv2"));
+    s
+}
+
 // Checking.
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1283,6 +1296,17 @@ fn write_ip(s: &mut Settings, setting: &str, v6: bool, initial: Option<&IpForm>,
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_new_enterprise_connection_starts_filled_in() {
+        let s = super::enterprise_settings(b"eduroam", false, "u-1");
+        let (kind, form) = super::read(&s);
+        assert_eq!(kind, super::Kind::Wifi);
+        assert_eq!((form.name.as_str(), form.ssid.as_str()), ("eduroam", "eduroam"));
+        assert_eq!(super::KEY_MGMT[form.security], "wpa-eap");
+        assert!(form.eap.enabled);
+        assert_eq!(super::EAP_METHODS[form.eap.method].0, "peap");
+    }
+
     use super::*;
 
     fn settings(groups: &[(&str, Vec<(&str, Value<'static>)>)]) -> Settings {

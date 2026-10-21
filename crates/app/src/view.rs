@@ -903,6 +903,12 @@ pub enum Command {
         connection: Option<String>,
         new: Option<crate::editor::Kind>,
     },
+    /// Open the editor on a new connection to an Enterprise (802.1X) network.
+    NewEnterprise {
+        ssid: Vec<u8>,
+        /// WPA3 Enterprise 192-bit.
+        suite_b: bool,
+    },
     /// Save the editor's settings: update (or add, without a path), keyring secret first, then
     /// reapply to the active connection.
     SaveConnection {
@@ -976,8 +982,6 @@ pub enum Intent {
     },
     /// Ask for the password (and where to keep it) first.
     Join(JoinTarget),
-    /// Not possible (yet): say why.
-    Notice(String),
 }
 
 /// A secured network to join, for the password dialog.
@@ -1053,10 +1057,11 @@ pub fn intent(snap: &Snapshot, selected: &str, action: &str) -> Option<Intent> {
                         key_mgmt,
                         strength: network.strongest().strength,
                     }),
-                    None => Intent::Notice(format!(
-                        "Enterprise (802.1X) networks need the connection editor, which comes in a later version. Until then: nmcli --ask device wifi connect '{}'",
-                        network.name()
-                    )),
+                    // An Enterprise network needs more than a password: the editor, filled in.
+                    None => Intent::Run(Command::NewEnterprise {
+                        ssid: network.ssid.clone(),
+                        suite_b: network.security == Security::Wpa3Enterprise,
+                    }),
                 },
             }),
             "disconnect" => Some(Intent::Run(Command::Deactivate { active: device.active_connection.clone()? })),
@@ -1308,6 +1313,19 @@ mod tests {
         let actions: Vec<String> = d.actions.iter().map(|a| a.label.to_string()).collect();
         assert_eq!(actions, ["Connect"]);
         assert_eq!(d.toggles.row_count(), 0);
+    }
+
+    #[test]
+    fn an_enterprise_network_opens_the_editor() {
+        let mut snap = home();
+        let wifi = snap.devices[0].wifi.as_mut().unwrap();
+        wifi.access_points.push(ap("/ap/9", "eduroam", 5500, 70, Security::Enterprise));
+        let view = build(Some(&snap), None, &UiState::default());
+        let id = view.row_ids.iter().find(|id| id.contains(&hex(b"eduroam"))).unwrap();
+        assert_eq!(
+            intent(&snap, id, "connect"),
+            Some(Intent::Run(Command::NewEnterprise { ssid: b"eduroam".to_vec(), suite_b: false }))
+        );
     }
 
     #[test]
