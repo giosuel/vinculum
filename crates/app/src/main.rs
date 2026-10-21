@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::time::{Duration, SystemTime};
 
 use clap::Parser;
@@ -6,6 +7,8 @@ use futures_util::StreamExt;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 mod config;
+mod instance;
+mod secrets;
 mod theme;
 mod view;
 
@@ -19,7 +22,44 @@ const THEME_POLL: Duration = Duration::from_secs(1);
 
 #[derive(Parser)]
 #[command(name = "vinculum", version = env!("APP_VERSION"), about = "Manage Wi-Fi, wired and VPN connections")]
-struct Cli {}
+struct Cli {
+    /// Start without a window and keep running when it's closed, so NetworkManager can ask for
+    /// passwords kept in the keyring (for example `exec-once = vinculum --background` in
+    /// Hyprland). Starting `vinculum` again shows the window.
+    #[arg(long)]
+    background: bool,
+}
+
+/// The security choices of the hidden-network dialog, by index; the others use them too.
+const SECURITIES: [&str; 4] = ["None (open)", "WPA/WPA2 Personal", "WPA3 Personal", "WEP"];
+const PASSWORD_HINTS: [&str; 4] = ["", "8 to 63 characters", "", "5 or 13 characters, or a passphrase"];
+
+fn security_index(key_mgmt: vinculum_nm::KeyMgmt) -> i32 {
+    match key_mgmt {
+        vinculum_nm::KeyMgmt::WpaPsk => 1,
+        vinculum_nm::KeyMgmt::Sae => 2,
+        vinculum_nm::KeyMgmt::Wep => 3,
+    }
+}
+
+fn key_mgmt_at(index: i32) -> Option<vinculum_nm::KeyMgmt> {
+    match index {
+        1 => Some(vinculum_nm::KeyMgmt::WpaPsk),
+        2 => Some(vinculum_nm::KeyMgmt::Sae),
+        3 => Some(vinculum_nm::KeyMgmt::Wep),
+        _ => None,
+    }
+}
+
+/// The password dialog's three forms.
+enum Dialog {
+    /// Joining a secured network from the list.
+    Join(view::JoinTarget),
+    /// Typing a hidden network's name.
+    Hidden { device: String },
+    /// NetworkManager asking through the secret agent.
+    Prompt(secrets::Prompt),
+}
 
 /// The UI thread's state: the latest snapshot, and what the user picked.
 #[derive(Default)]
@@ -38,6 +78,19 @@ struct App {
     /// The command waiting for the confirmation dialog, and the dialog's title, text and button.
     confirm: Option<view::Command>,
     confirm_text: Option<(String, String, String)>,
+    /// The password dialog, and NetworkManager's requests waiting behind it.
+    dialog: Option<Dialog>,
+    prompts: VecDeque<secrets::Prompt>,
+    /// Set when a dialog opens, to clear its fields once.
+    reset_dialog: bool,
+    /// What the keyring is called ("keyring", "KWallet"); `None` while there's none.
+    keyring: Option<&'static str>,
+    /// The row and name of the last connection attempt, for its failure.
+    attempt: Option<(String, String)>,
+    /// What the message's "Try again" runs.
+    retry: Option<view::Command>,
+    /// The message's bold first line.
+    message_title: String,
 }
 
 thread_local! {
@@ -45,10 +98,38 @@ thread_local! {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
-    Cli::parse();
+    let cli = Cli::parse();
     let window = MainWindow::new()?;
     // Needs the platform, which creating the first window sets up; takes effect when it's shown.
     slint::set_xdg_app_id(APP_ID)?;
+    let weak = window.as_weak();
+    let shown = instance::claim(APP_ID, !cli.background, move || {
+        let _ = weak.upgrade_in_event_loop(|window| {
+            let _ = window.show();
+        });
+    });
+    if matches!(shown, instance::Claim::Shown) {
+        return Ok(());
+    }
+    let background = cli.background;
+    window.window().on_close_requested(move || {
+        // Closing the window answers its questions with "cancel": nobody sees them any more.
+        APP.with(|app| {
+            let mut app = app.borrow_mut();
+            if let Some(Dialog::Prompt(prompt)) = app.dialog.take() {
+                let _ = prompt.reply.send(None);
+            }
+            app.dialog = None;
+            for prompt in app.prompts.drain(..) {
+                let _ = prompt.reply.send(None);
+            }
+        });
+        // In the background the agent keeps running; otherwise closing the window quits.
+        if !background {
+            let _ = slint::quit_event_loop();
+        }
+        slint::CloseRequestResponse::HideWindow
+    });
     window.set_version(env!("APP_VERSION").into());
     connect_callbacks(&window);
     apply_theme(&window);
@@ -57,7 +138,10 @@ fn main() -> Result<(), slint::PlatformError> {
     APP.with(|app| app.borrow_mut().commands = Some(commands));
     spawn_network_manager(window.as_weak(), receiver);
     spawn_theme_watcher(window.as_weak());
-    window.run()
+    if !background {
+        window.show()?;
+    }
+    slint::run_event_loop_until_quit()
 }
 
 fn connect_callbacks(window: &MainWindow) {
@@ -97,6 +181,7 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_toggle(move |_| {
         update(&weak, |app| {
+            app.message_title.clear();
             app.message = Some(("Changing this comes with the connection editor, in a later version.".into(), "info"));
         })
     });
@@ -128,24 +213,156 @@ fn connect_callbacks(window: &MainWindow) {
     });
     let weak = window.as_weak();
     window.on_confirm_cancelled(move || update(&weak, |app| app.confirm = None));
+    let weak = window.as_weak();
+    window.on_message_action_clicked(move || {
+        update(&weak, |app| {
+            if let Some(command) = app.retry.take() {
+                app.ui.failed = None;
+                send(app, command);
+            }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_bottom_clicked(move || {
+        update(&weak, |app| {
+            if app.ui.page == view::Page::Wifi
+                && let Some(device) = app.snapshot.as_ref().and_then(view::hidden_network_device)
+            {
+                open_dialog(app, Dialog::Hidden { device });
+            }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_airplane_toggled(move || {
+        update(&weak, |app| {
+            if let Some(command) = app.snapshot.as_ref().map(view::airplane_switch) {
+                send(app, command);
+            }
+        })
+    });
+    window.on_join_check(|mode, name, security, password| {
+        let password_ok = |index| key_mgmt_at(index).is_some_and(|k| k.accepts(&password));
+        if mode == "hidden" {
+            !name.is_empty() && name.len() <= 32 && (security == 0 || password_ok(security))
+        } else {
+            password_ok(security)
+        }
+    });
+    let weak = window.as_weak();
+    window.on_join_accepted(move || {
+        let Some(window) = weak.upgrade() else { return };
+        let fields = (
+            window.get_join_name().to_string(),
+            window.get_join_security(),
+            window.get_join_password().to_string(),
+            window.get_join_storage(),
+            window.get_join_autoconnect(),
+        );
+        update(&weak, |app| accept_dialog(app, fields));
+    });
+    let weak = window.as_weak();
+    window.on_join_cancelled(move || {
+        update(&weak, |app| {
+            if let Some(Dialog::Prompt(prompt)) = app.dialog.take() {
+                let _ = prompt.reply.send(None);
+            }
+            next_prompt(app);
+        })
+    });
+}
+
+fn open_dialog(app: &mut App, dialog: Dialog) {
+    if let Some(Dialog::Prompt(prompt)) = app.dialog.take() {
+        // A request from NetworkManager isn't dropped for a dialog the user opened.
+        app.prompts.push_front(prompt);
+    }
+    app.dialog = Some(dialog);
+    app.reset_dialog = true;
+}
+
+/// Shows the next waiting request from NetworkManager, if any.
+fn next_prompt(app: &mut App) {
+    if app.dialog.is_none()
+        && let Some(prompt) = app.prompts.pop_front()
+    {
+        app.dialog = Some(Dialog::Prompt(prompt));
+        app.reset_dialog = true;
+    }
+}
+
+/// Connect in the password dialog, with its (name, security, password, storage, autoconnect).
+fn accept_dialog(app: &mut App, (name, security, password, storage, autoconnect): (String, i32, String, i32, bool)) {
+    let storage = match storage {
+        1 => vinculum_nm::Storage::System,
+        2 => vinculum_nm::Storage::Ask,
+        _ => vinculum_nm::Storage::Agent,
+    };
+    // "All users" connections are everyone's; the others belong to this user.
+    let owner = if storage == vinculum_nm::Storage::System { None } else { secrets::username() };
+    match app.dialog.take() {
+        Some(Dialog::Join(target)) => {
+            let join = vinculum_nm::WifiJoin {
+                ssid: target.ssid.clone(),
+                uuid: secrets::new_uuid(),
+                security: Some((target.key_mgmt, password)),
+                storage,
+                owner,
+                autoconnect,
+                hidden: false,
+            };
+            app.attempt = app.ui.selected.clone().map(|row| (row, target.name.clone()));
+            send(app, view::Command::Join { device: target.device, access_point: Some(target.access_point), join });
+        }
+        Some(Dialog::Hidden { device }) => {
+            let join = vinculum_nm::WifiJoin {
+                ssid: name.clone().into_bytes(),
+                uuid: secrets::new_uuid(),
+                security: key_mgmt_at(security).map(|k| (k, password)),
+                storage,
+                owner,
+                autoconnect,
+                hidden: true,
+            };
+            app.attempt = Some((String::new(), name));
+            send(app, view::Command::Join { device, access_point: None, join });
+        }
+        Some(Dialog::Prompt(prompt)) => {
+            let _ = prompt.reply.send(Some(password));
+        }
+        None => {}
+    }
+    next_prompt(app);
 }
 
 /// A details button (or Enter, for "connect") on the selected row.
 fn act(app: &mut App, action: &str) {
     let (Some(snapshot), Some(selected)) = (app.snapshot.as_ref(), app.ui.selected.as_deref()) else { return };
+    let name = view::row_name(snapshot, selected);
     match view::intent(snapshot, selected, action) {
-        Some(view::Intent::Run(command)) => send(app, command),
+        Some(view::Intent::Run(command)) => {
+            if matches!(command, view::Command::Activate { .. } | view::Command::ConnectOpen { .. }) {
+                app.attempt = name.map(|n| (selected.to_owned(), n));
+                app.ui.failed = None;
+            }
+            send(app, command)
+        }
+        Some(view::Intent::Join(target)) => open_dialog(app, Dialog::Join(target)),
         Some(view::Intent::Confirm { title, text, button, command }) => {
             app.confirm = Some(command);
             app.confirm_text = Some((title, text, button));
         }
-        Some(view::Intent::Notice(text)) => app.message = Some((text, "info")),
+        Some(view::Intent::Notice(text)) => {
+            app.message_title.clear();
+            app.message = Some((text, "info"));
+        }
         None => {}
     }
 }
 
 fn send(app: &mut App, command: view::Command) {
     app.message = None;
+    app.message_title.clear();
+    app.retry = None;
     if let Some(commands) = &app.commands {
         let _ = commands.send(command);
     }
@@ -199,14 +416,72 @@ fn render(window: &MainWindow) {
             window.set_confirm_text(text.into());
             window.set_confirm_button(button.into());
         }
+        window.set_message_title(if app.message.is_some() { app.message_title.as_str().into() } else { "".into() });
+        window.set_message_action(if app.retry.is_some() { "Try again".into() } else { "".into() });
+        window.set_airplane(app.snapshot.as_ref().is_some_and(|s| s.airplane()));
+        let keyring = app.keyring;
+        window.set_keyring_label(
+            match keyring {
+                Some("KWallet") => "Kept in KWallet",
+                Some(_) => "Kept in your keyring (Secret Service)",
+                None => "No keyring found, so NetworkManager keeps them, readable by administrators",
+            }
+            .into(),
+        );
+        render_dialog(window, &mut app);
         app.row_ids = v.row_ids;
         // Keep a selection that went away (a network out of range) from sticking.
         app.ui.selected = v.selected;
     });
 }
 
-/// Watches NetworkManager on a tokio thread, hands every snapshot to the UI thread, and runs the
-/// UI's commands, reporting their failures back.
+fn render_dialog(window: &MainWindow, app: &mut App) {
+    window.set_join_open(app.dialog.is_some());
+    let Some(dialog) = &app.dialog else { return };
+    let (mode, title, subtitle, error, security) = match dialog {
+        Dialog::Join(t) => {
+            let subtitle = format!("{} · signal {} %", view::security_long(t.security), t.strength);
+            ("new", format!("Connect to {}", t.name), subtitle, String::new(), security_index(t.key_mgmt))
+        }
+        Dialog::Hidden { .. } => (
+            "hidden",
+            "Connect to a hidden network".to_owned(),
+            "The network doesn't broadcast its name, so type it exactly.".to_owned(),
+            String::new(),
+            1,
+        ),
+        Dialog::Prompt(p) => {
+            let error =
+                if p.retry { "The password was rejected. Check it and try again.".to_owned() } else { String::new() };
+            ("prompt", p.title.clone(), p.subtitle.clone(), error, security_index(p.key_mgmt))
+        }
+    };
+    window.set_join_mode(mode.into());
+    window.set_join_title(title.into());
+    window.set_join_subtitle(subtitle.into());
+    window.set_join_error(error.into());
+    window.set_join_securities(model(SECURITIES.iter().map(|&s| s.into()).collect()));
+    window.set_join_password_hints(model(PASSWORD_HINTS.iter().map(|&s| s.into()).collect()));
+    let keyring_hint = match app.keyring {
+        Some(name) => format!("Kept in your {name}. No admin password needed."),
+        None => "No keyring is running, so NetworkManager keeps it, readable by administrators. Only you can use the connection.".into(),
+    };
+    window.set_join_storage_hints(model(vec![
+        keyring_hint.into(),
+        "NetworkManager keeps it for everyone on this computer. Needs an admin password.".into(),
+        "Not saved: you'll be asked each time you connect.".into(),
+    ]));
+    if std::mem::take(&mut app.reset_dialog) {
+        window.set_join_name("".into());
+        window.set_join_security(security);
+        window.set_join_password("".into());
+        window.set_join_storage(0);
+        window.set_join_autoconnect(true);
+    }
+}
+
+/// Watches NetworkManager on a tokio thread, hands every snapshot to the UI thread, runs the
+/// UI's commands (reporting their failures back), and answers the secret agent's requests.
 fn spawn_network_manager(
     weak: slint::Weak<MainWindow>,
     mut commands: tokio::sync::mpsc::UnboundedReceiver<view::Command>,
@@ -214,10 +489,22 @@ fn spawn_network_manager(
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime");
         runtime.block_on(async move {
+            let keyrings = secrets::Keyrings::default();
+            let ui = AgentUi(weak.clone());
             loop {
+                tell_keyring(&weak, &keyrings).await;
                 let result = async {
                     let client = vinculum_nm::Client::system().await?;
                     let mut snapshots = Box::pin(client.watch().await?);
+                    // Without the agent (NetworkManager refuses agents outside a login session),
+                    // everything but the password dialog still works.
+                    let mut agent = match client.register_agent(APP_ID).await {
+                        Ok(agent) => Some(agent),
+                        Err(error) => {
+                            eprintln!("vinculum: couldn't register the secret agent: {error}");
+                            None
+                        }
+                    };
                     loop {
                         tokio::select! {
                             snapshot = snapshots.next() => match snapshot {
@@ -225,12 +512,18 @@ fn spawn_network_manager(
                                 None => break,
                             },
                             Some(command) = commands.recv() => {
-                                let (client, weak) = (client.clone(), weak.clone());
+                                let (client, weak, keyrings) = (client.clone(), weak.clone(), keyrings.clone());
                                 tokio::spawn(async move {
-                                    if let Err(error) = run(&client, &command).await {
-                                        report(&weak, &command, &error);
+                                    match run(&client, &keyrings, &command).await {
+                                        Ok(Some((reason, retry))) => failed(&weak, reason, retry),
+                                        Ok(None) => {}
+                                        Err(error) => report(&weak, &command, &error),
                                     }
                                 });
+                            }
+                            Some(event) = async { agent.as_mut()?.recv().await } => {
+                                let (keyrings, ui) = (keyrings.clone(), ui.clone());
+                                tokio::spawn(async move { secrets::handle(event, &keyrings, &ui).await });
                             }
                         }
                     }
@@ -247,18 +540,121 @@ fn spawn_network_manager(
     });
 }
 
-async fn run(client: &vinculum_nm::Client, command: &view::Command) -> Result<(), vinculum_nm::Error> {
-    use view::Command::*;
-    match command {
-        SetWifi(on) => client.set_wireless_enabled(*on).await,
-        Rescan { device } => client.request_scan(device).await,
-        Activate { connection, device, access_point } => {
-            client.activate(connection, device.as_deref(), access_point.as_deref()).await.map(drop)
-        }
-        ConnectOpen { device, access_point, ssid } => client.connect_open(device, access_point, ssid).await.map(drop),
-        Deactivate { active } => client.deactivate(active).await,
-        Forget { connection } => client.forget(connection).await,
+async fn tell_keyring(weak: &slint::Weak<MainWindow>, keyrings: &secrets::Keyrings) {
+    let name = keyrings.get().await.map(|k| k.name());
+    let _ = weak.upgrade_in_event_loop(move |window| {
+        APP.with(|app| app.borrow_mut().keyring = name);
+        render(&window);
+    });
+}
+
+/// The secret agent's way to the password dialog.
+#[derive(Clone)]
+struct AgentUi(slint::Weak<MainWindow>);
+
+impl secrets::Ui for AgentUi {
+    fn ask(&self, prompt: secrets::Prompt) {
+        let _ = self.0.upgrade_in_event_loop(move |window| {
+            APP.with(|app| {
+                let mut app = app.borrow_mut();
+                app.prompts.push_back(prompt);
+                next_prompt(&mut app);
+            });
+            // Started in the background, or closed: the question needs the window.
+            if !window.window().is_visible() {
+                let _ = window.show();
+            }
+            render(&window);
+        });
     }
+
+    fn cancel(&self, connection_path: String) {
+        let _ = self.0.upgrade_in_event_loop(move |window| {
+            APP.with(|app| {
+                let mut app = app.borrow_mut();
+                app.prompts.retain(|p| p.connection_path != connection_path);
+                if matches!(&app.dialog, Some(Dialog::Prompt(p)) if p.connection_path == connection_path) {
+                    app.dialog = None;
+                }
+                next_prompt(&mut app);
+            });
+            render(&window);
+        });
+    }
+}
+
+/// Runs a command. For a connection attempt it waits for the outcome, and gives the reason it
+/// failed and what "Try again" should run.
+async fn run(
+    client: &vinculum_nm::Client,
+    keyrings: &secrets::Keyrings,
+    command: &view::Command,
+) -> Result<Option<(String, Option<view::Command>)>, vinculum_nm::Error> {
+    use view::Command::*;
+    let (active, device, retry) = match command {
+        SetWifi(on) => return client.set_wireless_enabled(*on).await.map(|()| None),
+        SetAirplane(on) => return client.set_airplane(*on).await.map(|()| None),
+        Rescan { device } => return client.request_scan(device).await.map(|()| None),
+        Deactivate { active } => return client.deactivate(active).await.map(|()| None),
+        Forget { connection } => return client.forget(connection).await.map(|()| None),
+        Activate { connection, device, access_point } => {
+            let active = client.activate(connection, device.as_deref(), access_point.as_deref()).await?;
+            (active, device.clone(), command.clone())
+        }
+        ConnectOpen { device, access_point, ssid } => {
+            let (connection, active) = client.connect_open(device, access_point, ssid).await?;
+            let retry = Activate { connection, device: Some(device.clone()), access_point: Some(access_point.clone()) };
+            (active, Some(device.clone()), retry)
+        }
+        Join { device, access_point, join } => {
+            let mut join = join.clone();
+            if let (vinculum_nm::Storage::Agent, Some((key_mgmt, password))) = (join.storage, &join.security) {
+                match keyrings.get().await {
+                    Some(keyring) => {
+                        let name = String::from_utf8_lossy(&join.ssid).into_owned();
+                        let key = secrets::join_key(*key_mgmt);
+                        let entry = vinculum_keyring::Entry { uuid: &join.uuid, setting: secrets::WIFI_SECURITY, key };
+                        keyring.store(entry, &name, password).await.map_err(|e| {
+                            vinculum_nm::Error::Refused(format!("the keyring didn't take the password ({e})"))
+                        })?;
+                    }
+                    // No keyring after all: NetworkManager keeps it, and the connection stays the user's.
+                    None => join.storage = vinculum_nm::Storage::System,
+                }
+            }
+            let joined = client.join_wifi(device, access_point.as_deref(), &join).await;
+            if joined.is_err()
+                && join.storage == vinculum_nm::Storage::Agent
+                && let Some(keyring) = keyrings.get().await
+            {
+                // No connection came of it, so its password goes too.
+                let _ = keyring.delete(&join.uuid).await;
+            }
+            let (connection, active) = joined?;
+            let retry = Activate { connection, device: Some(device.clone()), access_point: access_point.clone() };
+            (active, Some(device.clone()), retry)
+        }
+    };
+    Ok(match client.outcome(&active, device.as_deref()).await? {
+        vinculum_nm::Outcome::Failed(reason) => Some((reason, Some(retry))),
+        vinculum_nm::Outcome::Connected | vinculum_nm::Outcome::Stopped => None,
+    })
+}
+
+/// A connection attempt failed: mark its row, and offer "Try again".
+fn failed(weak: &slint::Weak<MainWindow>, reason: String, retry: Option<view::Command>) {
+    let _ = weak.upgrade_in_event_loop(move |window| {
+        APP.with(|app| {
+            let mut app = app.borrow_mut();
+            let (row, name) = app.attempt.clone().unwrap_or_default();
+            app.message_title =
+                if name.is_empty() { "Couldn't connect".to_owned() } else { format!("Couldn't connect to {name}") };
+            app.message = Some((reason.clone(), "danger"));
+            app.retry = retry;
+            app.ui.failed = (!row.is_empty()).then_some((row, reason));
+        });
+        render(&window);
+    });
 }
 
 /// Shows why a command failed, above the list.
@@ -267,8 +663,10 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &vincu
     let what = match command {
         SetWifi(true) => "Couldn't turn Wi-Fi on",
         SetWifi(false) => "Couldn't turn Wi-Fi off",
+        SetAirplane(true) => "Couldn't turn airplane mode on",
+        SetAirplane(false) => "Couldn't turn airplane mode off",
         Rescan { .. } => "Couldn't scan",
-        Activate { .. } | ConnectOpen { .. } => "Couldn't connect",
+        Activate { .. } | ConnectOpen { .. } | Join { .. } => "Couldn't connect",
         Deactivate { .. } => "Couldn't disconnect",
         Forget { .. } => "Couldn't forget the connection",
     };
@@ -282,7 +680,12 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &vincu
         other => (format!("{what}: {other}."), "danger"),
     };
     let _ = weak.upgrade_in_event_loop(move |window| {
-        APP.with(|app| app.borrow_mut().message = Some((text, tone)));
+        APP.with(|app| {
+            let mut app = app.borrow_mut();
+            app.message_title.clear();
+            app.retry = None;
+            app.message = Some((text, tone));
+        });
         render(&window);
     });
 }

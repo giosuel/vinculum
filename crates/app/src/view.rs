@@ -3,7 +3,8 @@
 
 use slint::{ModelRc, SharedString, VecModel};
 use vinculum_nm::{
-    ActiveState, Band, ConnectionKind, Device, DeviceKind, Network, SavedConnection, Security, Snapshot, bars, channel,
+    ActiveState, Band, ConnectionKind, Device, DeviceKind, KeyMgmt, Network, SavedConnection, Security, Snapshot,
+    WifiJoin, bars, channel,
 };
 
 use crate::{Action, DetailItem, Details, NavItem, Row, Section, Toggle};
@@ -50,6 +51,8 @@ pub struct UiState {
     /// The selected row's id; `None` picks the first one.
     pub selected: Option<String>,
     pub search: String,
+    /// The row whose last connection attempt failed, and why.
+    pub failed: Option<(String, String)>,
 }
 
 /// An empty state shown instead of the list.
@@ -150,7 +153,7 @@ fn bands_label(bands: &[Band]) -> String {
 }
 
 /// "WPA2/WPA3 Personal", as the details say it.
-fn security_long(security: Security) -> String {
+pub fn security_long(security: Security) -> String {
     match security {
         Security::Wpa | Security::Wpa2 | Security::Wpa2Wpa3 | Security::Wpa3 => {
             format!("{} Personal", security.label())
@@ -256,7 +259,7 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
         })
         .collect();
     if let Some(id) = &selected {
-        view.details = details(snapshot, state.page, id).map(Details::from);
+        view.details = details(snapshot, state, id).map(Details::from);
     }
     if view.empty.is_none() && view.row_ids.is_empty() && state.page != Page::Settings && view.placeholder.is_empty() {
         view.empty = Some(nothing_here(state.page, !state.search.is_empty()));
@@ -428,7 +431,10 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
     let (mut connected, mut available) = (Vec::new(), Vec::new());
     for n in networks.iter().filter(|n| matches_search(&n.name(), &state.search)) {
         let bands = bands_label(&n.bands);
-        let (meta, tone) = if n.active && connecting {
+        let failed = state.failed.as_ref().is_some_and(|(id, _)| *id == network_id(n)) && !n.active;
+        let (meta, tone) = if failed {
+            (format!("Couldn't connect · {}", n.security.label()), "danger")
+        } else if n.active && connecting {
             (format!("Connecting… · {}", n.security.label()), "accent")
         } else if n.active {
             (format!("Connected · {} · {bands}", n.security.label()), "accent")
@@ -620,12 +626,12 @@ fn saved_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String,
         .collect()
 }
 
-fn details(snap: &Snapshot, page: Page, id: &str) -> Option<DetailsData> {
+fn details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsData> {
     if let Some(rest) = id.strip_prefix("wifi:") {
-        return wifi_details(snap, rest);
+        return wifi_details(snap, state, rest);
     }
     if let Some(uuid) = id.strip_prefix("conn:") {
-        return connection_details(snap, page, uuid);
+        return connection_details(snap, state.page, uuid);
     }
     if let Some(path) = id.strip_prefix("dev:") {
         let device = snap.device(path)?;
@@ -647,7 +653,7 @@ fn details(snap: &Snapshot, page: Page, id: &str) -> Option<DetailsData> {
     None
 }
 
-fn wifi_details(snap: &Snapshot, id: &str) -> Option<DetailsData> {
+fn wifi_details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsData> {
     let device = wifi_device(snap)?;
     let networks = snap.networks().into_iter().find(|(p, _)| *p == device.path)?.1;
     let n = networks.into_iter().find(|n| network_id(n) == format!("wifi:{id}"))?;
@@ -661,7 +667,10 @@ fn wifi_details(snap: &Snapshot, id: &str) -> Option<DetailsData> {
             None => band.to_owned(),
         }
     };
-    let (status, tone, extra) = if connecting {
+    let failed = !n.active && state.failed.as_ref().is_some_and(|(f, _)| *f == network_id(&n));
+    let (status, tone, extra) = if failed {
+        ("Not connected".to_owned(), "danger", "· last attempt failed".to_owned())
+    } else if connecting {
         ("Connecting…".to_owned(), "accent", String::new())
     } else if n.active {
         let wifi = device.wifi.as_ref();
@@ -785,11 +794,32 @@ fn connection_details(snap: &Snapshot, page: Page, uuid: &str) -> Option<Details
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     SetWifi(bool),
-    Rescan { device: String },
-    Activate { connection: String, device: Option<String>, access_point: Option<String> },
-    ConnectOpen { device: String, access_point: String, ssid: Vec<u8> },
-    Deactivate { active: String },
-    Forget { connection: String },
+    Rescan {
+        device: String,
+    },
+    Activate {
+        connection: String,
+        device: Option<String>,
+        access_point: Option<String>,
+    },
+    ConnectOpen {
+        device: String,
+        access_point: String,
+        ssid: Vec<u8>,
+    },
+    /// A new network with a password (or a hidden one, with no access point).
+    Join {
+        device: String,
+        access_point: Option<String>,
+        join: WifiJoin,
+    },
+    SetAirplane(bool),
+    Deactivate {
+        active: String,
+    },
+    Forget {
+        connection: String,
+    },
 }
 
 /// What pressing a button means.
@@ -803,8 +833,32 @@ pub enum Intent {
         button: String,
         command: Command,
     },
+    /// Ask for the password (and where to keep it) first.
+    Join(JoinTarget),
     /// Not possible (yet): say why.
     Notice(String),
+}
+
+/// A secured network to join, for the password dialog.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JoinTarget {
+    pub device: String,
+    pub access_point: String,
+    pub ssid: Vec<u8>,
+    pub name: String,
+    pub security: Security,
+    pub key_mgmt: KeyMgmt,
+    pub strength: u8,
+}
+
+/// How a network checks the password, for the kinds the password dialog handles.
+pub fn key_mgmt(security: Security) -> Option<KeyMgmt> {
+    match security {
+        Security::Wpa | Security::Wpa2 | Security::Wpa2Wpa3 => Some(KeyMgmt::WpaPsk),
+        Security::Wpa3 => Some(KeyMgmt::Sae),
+        Security::Wep => Some(KeyMgmt::Wep),
+        Security::Open | Security::Owe | Security::Enterprise | Security::Wpa3Enterprise => None,
+    }
 }
 
 const LATER_EDITOR: &str = "Editing connections comes with the connection editor, in a later version.";
@@ -839,10 +893,21 @@ pub fn intent(snap: &Snapshot, selected: &str, action: &str) -> Option<Intent> {
                     access_point: network.strongest().path.clone(),
                     ssid: network.ssid.clone(),
                 }),
-                None => Intent::Notice(format!(
-                    "Joining a new secured network asks for its password, which comes in the next version. Until then: nmcli --ask device wifi connect '{}'",
-                    network.name()
-                )),
+                None => match key_mgmt(network.security) {
+                    Some(key_mgmt) => Intent::Join(JoinTarget {
+                        device: device.path.clone(),
+                        access_point: network.strongest().path.clone(),
+                        ssid: network.ssid.clone(),
+                        name: network.name(),
+                        security: network.security,
+                        key_mgmt,
+                        strength: network.strongest().strength,
+                    }),
+                    None => Intent::Notice(format!(
+                        "Enterprise (802.1X) networks need the connection editor, which comes in a later version. Until then: nmcli --ask device wifi connect '{}'",
+                        network.name()
+                    )),
+                },
             }),
             "disconnect" => Some(Intent::Run(Command::Deactivate { active: device.active_connection.clone()? })),
             "forget" => saved.map(forget),
@@ -892,6 +957,27 @@ fn forget(c: &SavedConnection) -> Intent {
 /// The Wi-Fi switch, or the "Turn on Wi-Fi" button.
 pub fn wifi_switch(snap: &Snapshot) -> Command {
     Command::SetWifi(!snap.wireless_enabled)
+}
+
+/// The name a row shows, for messages about it.
+pub fn row_name(snap: &Snapshot, id: &str) -> Option<String> {
+    if id.starts_with("wifi:") {
+        let device = wifi_device(snap)?;
+        let networks = snap.networks().into_iter().find(|(p, _)| *p == device.path)?.1;
+        return networks.into_iter().find(|n| network_id(n) == id).map(|n| n.name());
+    }
+    let uuid = id.strip_prefix("conn:")?;
+    snap.connections.iter().find(|c| c.uuid == uuid).map(|c| c.id.clone())
+}
+
+/// Airplane mode on or off.
+pub fn airplane_switch(snap: &Snapshot) -> Command {
+    Command::SetAirplane(!snap.airplane())
+}
+
+/// The Wi-Fi device a hidden network is joined on.
+pub fn hidden_network_device(snap: &Snapshot) -> Option<String> {
+    wifi_device(snap).map(|d| d.path.clone())
 }
 
 /// Rescanning on the Wi-Fi device, if there is one.
@@ -969,6 +1055,7 @@ mod tests {
             networking_enabled: true,
             wireless_enabled: true,
             wireless_hardware_enabled: true,
+            wwan_enabled: true,
             devices: vec![wifi, eth],
             connections: vec![SavedConnection {
                 path: "/c/1".into(),
@@ -1105,10 +1192,11 @@ mod tests {
             intent(&snap, &ids[0], "forget"),
             Some(Intent::Confirm { command: Command::Forget { .. }, .. })
         ));
-        // The open library network is joined directly; the secured café one isn't possible yet.
+        // The open library network is joined directly; the secured café one asks for the password.
         let library = ids.iter().find(|id| id.ends_with(":Open")).unwrap();
         assert!(matches!(intent(&snap, library, "connect"), Some(Intent::Run(Command::ConnectOpen { .. }))));
-        assert!(matches!(intent(&snap, &ids[1], "connect"), Some(Intent::Notice(_))));
+        let Some(Intent::Join(cafe)) = intent(&snap, &ids[1], "connect") else { panic!("the password dialog") };
+        assert_eq!((cafe.name.as_str(), cafe.key_mgmt), ("Aster Café", KeyMgmt::WpaPsk));
         assert_eq!(wifi_switch(&snap), Command::SetWifi(false));
         assert_eq!(rescan(&snap), Some(Command::Rescan { device: "/d/wlan".into() }));
     }
@@ -1128,5 +1216,34 @@ mod tests {
                 access_point: Some("/ap/1".into())
             }))
         );
+    }
+
+    #[test]
+    fn a_failed_attempt_marks_its_row_and_details() {
+        let snap = home();
+        let ids = build(Some(&snap), None, &UiState::default()).row_ids;
+        let cafe = ids[1].clone();
+        assert_eq!(row_name(&snap, &cafe).as_deref(), Some("Aster Café"));
+        let state = UiState {
+            selected: Some(cafe.clone()),
+            failed: Some((cafe, "The network rejected the password.".into())),
+            ..UiState::default()
+        };
+        let v = build(Some(&snap), None, &state);
+        let row = v.sections.iter().flat_map(|s| s.rows.iter()).find(|r| r.name == "Aster Café").unwrap();
+        assert_eq!((row.meta.as_str(), row.tone.as_str()), ("Couldn't connect · WPA2", "danger"));
+        let d = v.details.unwrap();
+        assert_eq!((d.status.as_str(), d.status_tone.as_str()), ("Not connected", "danger"));
+    }
+
+    #[test]
+    fn airplane_mode_is_wifi_and_mobile_broadband_off() {
+        let mut snap = home();
+        assert_eq!(airplane_switch(&snap), Command::SetAirplane(true));
+        snap.wireless_enabled = false;
+        assert!(!snap.airplane(), "mobile broadband is still on");
+        snap.wwan_enabled = false;
+        assert_eq!(airplane_switch(&snap), Command::SetAirplane(false));
+        assert_eq!(hidden_network_device(&snap).as_deref(), Some("/d/wlan"));
     }
 }
