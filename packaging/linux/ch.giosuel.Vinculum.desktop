@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Vinculum
+GenericName=Network Manager
+Comment=Manage Wi-Fi, wired and VPN connections
+Exec=vinculum
+Icon=ch.giosuel.Vinculum
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=wifi;wireless;network;ethernet;vpn;wireguard;networkmanager;
+StartupWMClass=ch.giosuel.Vinculum

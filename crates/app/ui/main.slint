@@ -1,0 +1,77 @@
+// The main window. For now just the shell: the sidebar and an empty page.
+
+// Colours from the mockups' built-in dark theme. M2 fills these from the configured colour
+// sources (matugen palettes) and reloads them live.
+export global Theme {
+    in-out property <color> bg: #111315;
+    in-out property <color> panel: #17191c;
+    in-out property <color> border: #262a2f;
+    in-out property <color> text: #e8eaed;
+    in-out property <color> muted: #a0a7af;
+    in-out property <color> accent: #5cc8b0;
+}
+
+export component MainWindow inherits Window {
+    in property <string> version;
+
+    title: "Vinculum";
+    icon: @image-url("assets/logo-mark.svg");
+    preferred-width: 1040px;
+    preferred-height: 680px;
+    min-width: 720px;
+    min-height: 480px;
+    background: Theme.bg;
+    default-font-size: 14px;
+
+    HorizontalLayout {
+        Rectangle {
+            width: 196px;
+            VerticalLayout {
+                padding: 18px;
+                spacing: 10px;
+                alignment: start;
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: start;
+                    Image {
+                        source: @image-url("assets/logo-mark.svg");
+                        width: 28px;
+                        height: 28px;
+                    }
+                    Text {
+                        text: "Vinculum";
+                        color: Theme.text;
+                        font-size: 15px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            width: 1px;
+            background: Theme.border;
+        }
+
+        Rectangle {
+            background: Theme.panel;
+            VerticalLayout {
+                alignment: center;
+                spacing: 6px;
+                Text {
+                    text: "Nothing here yet";
+                    color: Theme.text;
+                    font-size: 17px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "Version " + root.version;
+                    color: Theme.muted;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}

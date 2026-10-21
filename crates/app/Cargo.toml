@@ -1,0 +1,20 @@
+[package]
+name = "vinculum"
+description = "Manage Wi-Fi, wired and VPN connections on Linux desktops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[dependencies]
+clap.workspace = true
+slint.workspace = true
+
+[build-dependencies]
+slint-build.workspace = true
+
+[lints]
+workspace = true

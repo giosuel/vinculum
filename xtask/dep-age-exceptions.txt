@@ -1,0 +1,5 @@
+# Crate versions allowed although they are younger than 14 days
+# (`cargo xtask dep-age`): security fixes, and explicit owner exceptions,
+# each with its reason:
+#
+#   name version  # reason (advisory id, or owner decision and date)
