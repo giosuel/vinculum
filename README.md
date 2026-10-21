@@ -106,6 +106,8 @@ Addresses, gateway, DNS, link speed, channel, and how much has been received and
 chmod +x Vinculum-*-x86_64.AppImage && ./Vinculum-*-x86_64.AppImage
 ```
 
+**Nix** – `nix run github:giosuel/vinculum`, or the flake as an input ([`packaging/nix/`](packaging/nix/README.md)).
+
 Every release also has ARM64 builds. All of them need NetworkManager. Optional: NetworkManager's
 OpenVPN plugin (`networkmanager-openvpn` on Arch) for OpenVPN, an XDG desktop portal with a file
 dialog (`xdg-desktop-portal-gtk`, say) for choosing certificates and VPN files, and a keyring.
