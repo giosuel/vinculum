@@ -285,7 +285,12 @@ export component MainWindow inherits Window {
     icon: @image-url("assets/logo-mark.svg");
     preferred-width: 1040px;
     preferred-height: 680px;
+    // Fixed limits: Slint shrinks the window whenever the limits it works out from the content
+    // change (an empty page getting a list and details, say), so they mustn't change.
+    min-width: 936px;
     min-height: 480px;
+    max-width: 100000px;
+    max-height: 100000px;
     background: Theme.bg;
     default-font-family: "Inter";
     default-font-size: 14px;
