@@ -4,12 +4,16 @@
 //! Properties are read with `GetAll` and parsed leniently: NetworkManager versions differ in
 //! which properties they have, and a missing one shouldn't make the whole snapshot fail.
 
+pub mod agent;
 mod client;
+mod join;
 mod model;
 mod props;
 mod wifi;
 
+pub use agent::{AgentConnection, AgentEvent, Refusal, SecretRequest};
 pub use client::{Client, Error};
+pub use join::{KeyMgmt, Outcome, Storage, WifiJoin};
 pub use model::{
     AccessPoint, ActiveConnection, ActiveState, ConnectionKind, Device, DeviceKind, DeviceState, IpConfig,
     SavedConnection, Snapshot, WifiDevice, WiredDevice,
