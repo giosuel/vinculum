@@ -15,7 +15,7 @@ futures-util.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 slint.workspace = true
-tokio = { workspace = true, features = ["rt", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 toml.workspace = true
 vinculum-nm.workspace = true
 

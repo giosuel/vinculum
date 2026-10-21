@@ -2,7 +2,7 @@
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 
-/// kind: "primary", "secondary" or "danger".
+/// kind: "primary", "secondary", "danger" (red text) or "destructive" (red button).
 export component Button inherits Rectangle {
     in property <string> label;
     in property <string> kind: "secondary";
@@ -12,21 +12,23 @@ export component Button inherits Rectangle {
     height: button-height;
     // Shrinks (eliding the label) before it makes a narrow window impossible.
     min-width: 56px;
-    preferred-width: text.preferred-width + 28px;
+    preferred-width: text.preferred-width + 24px;
     border-radius: 8px;
-    border-width: kind == "danger" ? 0 : 1px;
+    border-width: kind == "danger" || kind == "destructive" ? 0 : 1px;
     border-color: kind == "primary" ? Theme.accent : Theme.ctrl-border;
-    background: kind == "primary" ? Theme.accent : kind == "danger" ? transparent : (touch.has-hover && enabled ? Theme.sel-bg : Theme.ctrl-bg);
+    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (touch.has-hover && enabled ? Theme.sel-bg : Theme.ctrl-bg);
     opacity: enabled ? 1 : 0.45;
     accessible-role: button;
     accessible-label: label;
     accessible-enabled: enabled;
     accessible-action-default => { if enabled { clicked(); } }
     text := Text {
+        x: 12px;
+        width: parent.width - 24px;
         text: root.label;
-        color: kind == "primary" ? Theme.on-accent : kind == "danger" ? Theme.danger : Theme.text;
+        color: kind == "primary" ? Theme.on-accent : kind == "destructive" ? Theme.bg : kind == "danger" ? Theme.danger : Theme.text;
         font-size: 13px;
-        font-weight: kind == "primary" ? 500 : 400;
+        font-weight: kind == "primary" || kind == "destructive" ? 600 : 400;
         vertical-alignment: center;
         horizontal-alignment: center;
         overflow: elide;

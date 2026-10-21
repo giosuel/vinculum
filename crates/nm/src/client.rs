@@ -6,7 +6,7 @@ use std::time::Duration;
 use futures_util::future::{try_join_all, try_join3};
 use futures_util::{Stream, StreamExt, stream};
 use zbus::message::Type as MessageType;
-use zbus::zvariant::OwnedValue;
+use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, DBusError, MatchRule, MessageStream};
 
 use crate::BUS_NAME;
@@ -20,6 +20,7 @@ use crate::wifi::Security;
 const MANAGER: &str = "/org/freedesktop/NetworkManager";
 const SETTINGS: &str = "/org/freedesktop/NetworkManager/Settings";
 const IFACE: &str = "org.freedesktop.NetworkManager";
+const WIRELESS: &str = "org.freedesktop.NetworkManager.Device.Wireless";
 
 /// How long the change signals have to go quiet before a new snapshot is taken. A scan or a
 /// connection attempt sends dozens of them in a burst.
@@ -29,14 +30,30 @@ const QUIET: Duration = Duration::from_millis(120);
 pub enum Error {
     #[error("NetworkManager isn't running")]
     NotRunning,
+    /// polkit said no, or had no agent to ask the user with.
+    #[error("not allowed: {0}")]
+    Denied(String),
+    /// NetworkManager refused the request, with its reason.
+    #[error("{0}")]
+    Refused(String),
     #[error(transparent)]
     DBus(#[from] zbus::Error),
 }
 
 impl Error {
     fn from_dbus(error: zbus::Error) -> Self {
-        if error_name(&error).as_deref() == Some("org.freedesktop.DBus.Error.ServiceUnknown") {
+        let name = error_name(&error).unwrap_or_default();
+        let message = match &error {
+            zbus::Error::MethodError(_, Some(message), _) => message.clone(),
+            zbus::Error::FDO(fdo) => fdo.description().unwrap_or_default().to_owned(),
+            _ => String::new(),
+        };
+        if name == "org.freedesktop.DBus.Error.ServiceUnknown" {
             Self::NotRunning
+        } else if name.ends_with(".PermissionDenied") || name == "org.freedesktop.DBus.Error.AccessDenied" {
+            Self::Denied(message)
+        } else if name.starts_with("org.freedesktop.NetworkManager") && !message.is_empty() {
+            Self::Refused(message)
         } else {
             Self::DBus(error)
         }
@@ -110,6 +127,74 @@ impl Client {
             let snapshot = client.snapshot().await;
             Some((snapshot, (client, signals, false)))
         }))
+    }
+
+    /// Switches Wi-Fi on or off (what airplane mode does to Wi-Fi, but only Wi-Fi).
+    pub async fn set_wireless_enabled(&self, on: bool) -> Result<(), Error> {
+        self.conn
+            .call_method(
+                Some(BUS_NAME),
+                MANAGER,
+                Some("org.freedesktop.DBus.Properties"),
+                "Set",
+                &(IFACE, "WirelessEnabled", Value::from(on)),
+            )
+            .await
+            .map_err(Error::from_dbus)?;
+        Ok(())
+    }
+
+    /// Asks a Wi-Fi device to scan; new access points arrive through [`Client::watch`].
+    pub async fn request_scan(&self, device: &str) -> Result<(), Error> {
+        let options: HashMap<&str, Value> = HashMap::new();
+        self.call::<_, ()>(device, WIRELESS, "RequestScan", &(options,)).await.map_err(Error::from_dbus)
+    }
+
+    /// Activates a saved connection, on `device` (or wherever NetworkManager picks, with `None`)
+    /// and, for Wi-Fi, through a given access point. Returns the active connection's path.
+    pub async fn activate(
+        &self,
+        connection: &str,
+        device: Option<&str>,
+        specific: Option<&str>,
+    ) -> Result<String, Error> {
+        let body =
+            (object_path(connection)?, object_path(device.unwrap_or("/"))?, object_path(specific.unwrap_or("/"))?);
+        let active: OwnedObjectPath =
+            self.call(MANAGER, IFACE, "ActivateConnection", &body).await.map_err(Error::from_dbus)?;
+        Ok(active.to_string())
+    }
+
+    /// Joins a network that needs no password (open, or Enhanced Open): NetworkManager makes the
+    /// profile from the access point. Returns the new connection's and the active connection's
+    /// paths.
+    pub async fn connect_open(&self, device: &str, access_point: &str, ssid: &[u8]) -> Result<(String, String), Error> {
+        let name = String::from_utf8_lossy(ssid).into_owned();
+        let settings: HashMap<&str, HashMap<&str, Value>> = HashMap::from([
+            ("connection", HashMap::from([("type", Value::from("802-11-wireless")), ("id", Value::from(name))])),
+            (
+                "802-11-wireless",
+                HashMap::from([("ssid", Value::from(ssid.to_vec())), ("mode", Value::from("infrastructure"))]),
+            ),
+        ]);
+        let body = (settings, object_path(device)?, object_path(access_point)?);
+        let (connection, active): (OwnedObjectPath, OwnedObjectPath) =
+            self.call(MANAGER, IFACE, "AddAndActivateConnection", &body).await.map_err(Error::from_dbus)?;
+        Ok((connection.to_string(), active.to_string()))
+    }
+
+    /// Disconnects an active connection; the device stays available for others.
+    pub async fn deactivate(&self, active_connection: &str) -> Result<(), Error> {
+        self.call::<_, ()>(MANAGER, IFACE, "DeactivateConnection", &(object_path(active_connection)?,))
+            .await
+            .map_err(Error::from_dbus)
+    }
+
+    /// Deletes a saved connection (disconnecting it first if it's active).
+    pub async fn forget(&self, connection: &str) -> Result<(), Error> {
+        self.call::<_, ()>(connection, "org.freedesktop.NetworkManager.Settings.Connection", "Delete", &())
+            .await
+            .map_err(Error::from_dbus)
     }
 
     async fn call<B, R>(&self, path: &str, interface: &str, method: &str, body: &B) -> zbus::Result<R>
@@ -199,7 +284,6 @@ impl Client {
 
     /// The Wi-Fi details, and the MAC address the wireless interface reports.
     async fn wifi_device(&self, path: &str) -> zbus::Result<(WifiDevice, String)> {
-        const WIRELESS: &str = "org.freedesktop.NetworkManager.Device.Wireless";
         let props = Props::get_all(&self.conn, path, WIRELESS).await?;
         let ap_paths: Vec<zbus::zvariant::OwnedObjectPath> =
             self.call(path, WIRELESS, "GetAllAccessPoints", &()).await?;
@@ -297,6 +381,10 @@ impl Client {
             vpn: p.bool("Vpn").unwrap_or(false),
         })
     }
+}
+
+fn object_path(path: &str) -> Result<ObjectPath<'_>, Error> {
+    ObjectPath::try_from(path).map_err(|e| Error::DBus(e.into()))
 }
 
 async fn skip_vanished<T>(read: impl Future<Output = zbus::Result<T>>) -> zbus::Result<Option<T>> {

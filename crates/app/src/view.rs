@@ -683,7 +683,7 @@ fn wifi_details(snap: &Snapshot, id: &str) -> Option<DetailsData> {
     if saved.is_some() {
         actions.push(action("edit", "Edit", "secondary"));
         if n.active {
-            actions.push(action("share", "Share as QR code", "secondary"));
+            actions.push(action("share", "Share", "secondary"));
         }
         actions.push(action("forget", "Forget", "danger"));
     }
@@ -779,6 +779,124 @@ fn connection_details(snap: &Snapshot, page: Page, uuid: &str) -> Option<Details
         items,
         note,
     })
+}
+
+/// A change asked of NetworkManager.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Command {
+    SetWifi(bool),
+    Rescan { device: String },
+    Activate { connection: String, device: Option<String>, access_point: Option<String> },
+    ConnectOpen { device: String, access_point: String, ssid: Vec<u8> },
+    Deactivate { active: String },
+    Forget { connection: String },
+}
+
+/// What pressing a button means.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Intent {
+    Run(Command),
+    /// Ask first ("Forget Office-Guest?"), then run it.
+    Confirm {
+        title: String,
+        text: String,
+        button: String,
+        command: Command,
+    },
+    /// Not possible (yet): say why.
+    Notice(String),
+}
+
+const LATER_EDITOR: &str = "Editing connections comes with the connection editor, in a later version.";
+
+/// The command behind a details button (`action` is its id) for the selected row.
+pub fn intent(snap: &Snapshot, selected: &str, action: &str) -> Option<Intent> {
+    match action {
+        "edit" => return Some(Intent::Notice(LATER_EDITOR.into())),
+        "share" => return Some(Intent::Notice("Sharing a network as a QR code comes in a later version.".into())),
+        "add-wired" => return Some(Intent::Notice("Adding connections comes in a later version.".into())),
+        _ => {}
+    }
+    if let Some(id) = selected.strip_prefix("wifi:") {
+        let device = wifi_device(snap)?;
+        let network = snap
+            .networks()
+            .into_iter()
+            .find(|(p, _)| *p == device.path)?
+            .1
+            .into_iter()
+            .find(|n| network_id(n) == format!("wifi:{id}"))?;
+        let saved = network.saved.as_deref().and_then(|uuid| snap.connections.iter().find(|c| c.uuid == uuid));
+        return match action {
+            "connect" => Some(match saved {
+                Some(c) => Intent::Run(Command::Activate {
+                    connection: c.path.clone(),
+                    device: Some(device.path.clone()),
+                    access_point: Some(network.strongest().path.clone()),
+                }),
+                None if !network.security.needs_secrets() => Intent::Run(Command::ConnectOpen {
+                    device: device.path.clone(),
+                    access_point: network.strongest().path.clone(),
+                    ssid: network.ssid.clone(),
+                }),
+                None => Intent::Notice(format!(
+                    "Joining a new secured network asks for its password, which comes in the next version. Until then: nmcli --ask device wifi connect '{}'",
+                    network.name()
+                )),
+            }),
+            "disconnect" => Some(Intent::Run(Command::Deactivate { active: device.active_connection.clone()? })),
+            "forget" => saved.map(forget),
+            _ => None,
+        };
+    }
+    if let Some(uuid) = selected.strip_prefix("conn:") {
+        let c = snap.connections.iter().find(|c| c.uuid == uuid)?;
+        let active = active_uuid_state(snap, uuid);
+        return match action {
+            "connect" => {
+                // A wired profile goes on its own (or the first) Ethernet port; NetworkManager
+                // picks the device for VPNs.
+                let device = match c.kind {
+                    ConnectionKind::Ethernet => snap
+                        .devices
+                        .iter()
+                        .filter(|d| d.kind == DeviceKind::Ethernet)
+                        .find(|d| c.interface.as_deref().is_none_or(|i| i == d.interface))
+                        .map(|d| d.path.clone()),
+                    _ => None,
+                };
+                Some(Intent::Run(Command::Activate { connection: c.path.clone(), device, access_point: None }))
+            }
+            "disconnect" => Some(Intent::Run(Command::Deactivate { active: active?.path.clone() })),
+            "forget" => Some(forget(c)),
+            _ => None,
+        };
+    }
+    None
+}
+
+fn forget(c: &SavedConnection) -> Intent {
+    let password = matches!(c.kind, ConnectionKind::Wifi { .. });
+    Intent::Confirm {
+        title: format!("Forget {}?", c.id),
+        text: if password {
+            "This deletes the saved password and settings. You'll need the password to connect again.".into()
+        } else {
+            "This deletes the connection and its settings.".into()
+        },
+        button: "Forget".into(),
+        command: Command::Forget { connection: c.path.clone() },
+    }
+}
+
+/// The Wi-Fi switch, or the "Turn on Wi-Fi" button.
+pub fn wifi_switch(snap: &Snapshot) -> Command {
+    Command::SetWifi(!snap.wireless_enabled)
+}
+
+/// Rescanning on the Wi-Fi device, if there is one.
+pub fn rescan(snap: &Snapshot) -> Option<Command> {
+    wifi_device(snap).map(|d| Command::Rescan { device: d.path.clone() })
 }
 
 #[cfg(test)]
@@ -908,7 +1026,7 @@ mod tests {
         assert_eq!(detail(&view, "IPv4 address").as_deref(), Some("192.168.1.42/24"));
         assert_eq!(detail(&view, "IPv6 address").as_deref(), Some("fd12:3a::42/64"));
         let actions: Vec<String> = d.actions.iter().map(|a| a.label.to_string()).collect();
-        assert_eq!(actions, ["Disconnect", "Edit", "Share as QR code", "Forget"]);
+        assert_eq!(actions, ["Disconnect", "Edit", "Share", "Forget"]);
         assert_eq!(view.nav[0].sub, "Lumen Home");
         assert_eq!(view.nav[1].sub, "Cable unplugged");
         assert_eq!(view.hostname, "thinkpad-x1");
@@ -972,5 +1090,43 @@ mod tests {
         let view = build(Some(&home()), None, &state);
         assert_eq!(rows(&view), [("WI-FI".into(), vec!["Lumen Home".into()])]);
         assert_eq!(view.nav[4].sub, "1 connection");
+    }
+
+    #[test]
+    fn buttons_become_commands() {
+        let snap = home();
+        let ids = build(Some(&snap), None, &UiState::default()).row_ids;
+        // Connected "Lumen Home": disconnect it, or forget it after asking.
+        assert_eq!(
+            intent(&snap, &ids[0], "disconnect"),
+            Some(Intent::Run(Command::Deactivate { active: "/a/1".into() }))
+        );
+        assert!(matches!(
+            intent(&snap, &ids[0], "forget"),
+            Some(Intent::Confirm { command: Command::Forget { .. }, .. })
+        ));
+        // The open library network is joined directly; the secured café one isn't possible yet.
+        let library = ids.iter().find(|id| id.ends_with(":Open")).unwrap();
+        assert!(matches!(intent(&snap, library, "connect"), Some(Intent::Run(Command::ConnectOpen { .. }))));
+        assert!(matches!(intent(&snap, &ids[1], "connect"), Some(Intent::Notice(_))));
+        assert_eq!(wifi_switch(&snap), Command::SetWifi(false));
+        assert_eq!(rescan(&snap), Some(Command::Rescan { device: "/d/wlan".into() }));
+    }
+
+    #[test]
+    fn saved_wifi_reconnects_through_its_strongest_access_point() {
+        let mut snap = home();
+        snap.active.clear();
+        snap.devices[0].active_connection = None;
+        snap.devices[0].wifi.as_mut().unwrap().active_access_point = None;
+        let ids = build(Some(&snap), None, &UiState::default()).row_ids;
+        assert_eq!(
+            intent(&snap, &ids[0], "connect"),
+            Some(Intent::Run(Command::Activate {
+                connection: "/c/1".into(),
+                device: Some("/d/wlan".into()),
+                access_point: Some("/ap/1".into())
+            }))
+        );
     }
 }
