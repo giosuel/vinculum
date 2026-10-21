@@ -67,8 +67,9 @@ async fn private_bus() -> Option<Bus> {
         eprintln!("skipped: set VINCULUM_DBUSMOCK=1 (scripts/test.sh does) to run against python-dbusmock");
         return None;
     }
+    let config = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/bus.conf");
     let mut daemon = Command::new("dbus-daemon")
-        .args(["--session", "--nofork", "--print-address=1"])
+        .args(["--config-file", config, "--nofork", "--print-address=1"])
         .stdout(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
