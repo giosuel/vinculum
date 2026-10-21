@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" role="img" aria-label="The Vinculum window: a sidebar, the list of Wi-Fi networks, and the details of the connected one">
+<rect x="10" y="10" width="940" height="540" rx="18" fill="#111315" stroke="#2f343a" stroke-width="1.5"/>
+<g transform="translate(34 34) scale(0.42)"><line x1="32.00" y1="32.00" x2="32.00" y2="8.00" stroke="#3c5650" stroke-width="1.6" stroke-linecap="round"/><line x1="32.00" y1="32.00" x2="11.22" y2="44.00" stroke="#3c5650" stroke-width="1.6" stroke-linecap="round"/><line x1="32.00" y1="32.00" x2="52.78" y2="44.00" stroke="#3c5650" stroke-width="1.6" stroke-linecap="round"/><line x1="32.00" y1="8.00" x2="11.22" y2="20.00" stroke="#5cc8b0" stroke-width="3" stroke-linecap="round"/><line x1="32.00" y1="8.00" x2="52.78" y2="20.00" stroke="#5cc8b0" stroke-width="3" stroke-linecap="round"/><line x1="11.22" y1="44.00" x2="11.22" y2="20.00" stroke="#5cc8b0" stroke-width="3" stroke-linecap="round"/><line x1="11.22" y1="44.00" x2="32.00" y2="56.00" stroke="#5cc8b0" stroke-width="3" stroke-linecap="round"/><line x1="11.22" y1="20.00" x2="32.00" y2="32.00" stroke="#5cc8b0" stroke-width="3" stroke-linecap="round"/><line x1="52.78" y1="44.00" x2="52.78" y2="20.00" stroke="#5cc8b0" stroke-width="3" stroke-linecap="round"/><line x1="52.78" y1="44.00" x2="32.00" y2="56.00" stroke="#5cc8b0" stroke-width="3" stroke-linecap="round"/><line x1="52.78" y1="20.00" x2="32.00" y2="32.00" stroke="#5cc8b0" stroke-width="3" stroke-linecap="round"/><line x1="32.00" y1="56.00" x2="32.00" y2="32.00" stroke="#5cc8b0" stroke-width="3" stroke-linecap="round"/><line x1="32" y1="32" x2="32.00" y2="32.00" stroke="#3c5650" stroke-width="1.1"/><line x1="32" y1="32" x2="32.00" y2="8.00" stroke="#3c5650" stroke-width="1.1"/><line x1="32" y1="32" x2="11.22" y2="44.00" stroke="#3c5650" stroke-width="1.1"/><line x1="32" y1="32" x2="11.22" y2="20.00" stroke="#3c5650" stroke-width="1.1"/><line x1="32" y1="32" x2="52.78" y2="44.00" stroke="#3c5650" stroke-width="1.1"/><line x1="32" y1="32" x2="52.78" y2="20.00" stroke="#3c5650" stroke-width="1.1"/><line x1="32" y1="32" x2="32.00" y2="56.00" stroke="#3c5650" stroke-width="1.1"/><line x1="32" y1="32" x2="32.00" y2="32.00" stroke="#3c5650" stroke-width="1.1"/><circle cx="32.00" cy="32.00" r="2.8" fill="#111315"/><circle cx="32.00" cy="32.00" r="2" fill="#3c5650"/><circle cx="32.00" cy="8.00" r="4.4" fill="#111315"/><circle cx="32.00" cy="8.00" r="3.4" fill="#5cc8b0"/><circle cx="11.22" cy="44.00" r="4.4" fill="#111315"/><circle cx="11.22" cy="44.00" r="3.4" fill="#5cc8b0"/><circle cx="11.22" cy="20.00" r="4.4" fill="#111315"/><circle cx="11.22" cy="20.00" r="3.4" fill="#5cc8b0"/><circle cx="52.78" cy="44.00" r="4.4" fill="#111315"/><circle cx="52.78" cy="44.00" r="3.4" fill="#5cc8b0"/><circle cx="52.78" cy="20.00" r="4.4" fill="#111315"/><circle cx="52.78" cy="20.00" r="3.4" fill="#5cc8b0"/><circle cx="32.00" cy="56.00" r="4.4" fill="#111315"/><circle cx="32.00" cy="56.00" r="3.4" fill="#5cc8b0"/><circle cx="32.00" cy="32.00" r="4.4" fill="#111315"/><circle cx="32.00" cy="32.00" r="3.4" fill="#a6e6d6"/><circle cx="32" cy="32" r="5" fill="#e9efe9"/></g>
+<text x="70" y="55" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="600" fill="#e8eaed">Vinculum</text>
+<rect x="24" y="86" width="166" height="42" rx="8" fill="#1f2a27"/>
+<circle cx="42" cy="102" r="5" fill="#5cc8b0"/>
+<text x="56" y="106" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">Wi-Fi</text>
+<text x="56" y="121" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a0a7af">Lumen Home</text>
+<circle cx="42" cy="152" r="5" fill="#4b5158"/>
+<text x="56" y="156" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">Wired</text>
+<text x="56" y="171" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a0a7af">Wired connection 1</text>
+<circle cx="42" cy="202" r="5" fill="#4b5158"/>
+<text x="56" y="206" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">VPN</text>
+<text x="56" y="221" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a0a7af">wg-home</text>
+<circle cx="42" cy="252" r="5" fill="#4b5158"/>
+<text x="56" y="256" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">Hotspot</text>
+<text x="56" y="271" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a0a7af">Off</text>
+<circle cx="42" cy="302" r="5" fill="#4b5158"/>
+<text x="56" y="306" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">Saved</text>
+<text x="56" y="321" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a0a7af">9 connections</text>
+<line x1="210" y1="10" x2="210" y2="550" stroke="#262a2f"/>
+<rect x="210.5" y="10.5" width="330" height="539" fill="#17191c"/>
+<text x="230" y="56" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="600" fill="#e8eaed">Wi-Fi</text>
+<rect x="480" y="38" width="40" height="22" rx="11" fill="#5cc8b0"/><circle cx="509" cy="49" r="8" fill="#0c1513"/>
+<rect x="226" y="76" width="298" height="34" rx="8" fill="#1f2226" stroke="#2a2e33"/>
+<text x="246" y="98" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="12" fill="#8b929a">Search networks</text>
+<rect x="226" y="128" width="298" height="50" rx="9" fill="#1f2a27" stroke="#2c4a42"/>
+<rect x="240" y="156" width="3" height="4" rx="1" fill="#5cc8b0"/>
+<rect x="245" y="153" width="3" height="7" rx="1" fill="#5cc8b0"/>
+<rect x="250" y="150" width="3" height="10" rx="1" fill="#5cc8b0"/>
+<rect x="255" y="147" width="3" height="13" rx="1" fill="#5cc8b0"/>
+<text x="272" y="150" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">Lumen Home</text>
+<text x="272" y="166" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#5cc8b0">Connected · WPA2/WPA3 · 5 GHz</text>
+<text x="234" y="200" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="10" font-weight="600" letter-spacing="0.8" fill="#8b929a">AVAILABLE</text>
+<rect x="240" y="236" width="3" height="4" rx="1" fill="#5cc8b0"/>
+<rect x="245" y="233" width="3" height="7" rx="1" fill="#5cc8b0"/>
+<rect x="250" y="230" width="3" height="10" rx="1" fill="#5cc8b0"/>
+<rect x="255" y="227" width="3" height="13" rx="1" fill="#3a3f46"/>
+<text x="272" y="230" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">Lumen Home 2.4</text>
+<text x="272" y="246" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a0a7af">Saved · WPA2 · 2.4 GHz</text>
+<rect x="240" y="294" width="3" height="4" rx="1" fill="#5cc8b0"/>
+<rect x="245" y="291" width="3" height="7" rx="1" fill="#5cc8b0"/>
+<rect x="250" y="288" width="3" height="10" rx="1" fill="#5cc8b0"/>
+<rect x="255" y="285" width="3" height="13" rx="1" fill="#3a3f46"/>
+<text x="272" y="288" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">Aster Café</text>
+<text x="272" y="304" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a0a7af">WPA2 · 2.4 / 5 GHz</text>
+<rect x="240" y="352" width="3" height="4" rx="1" fill="#5cc8b0"/>
+<rect x="245" y="349" width="3" height="7" rx="1" fill="#5cc8b0"/>
+<rect x="250" y="346" width="3" height="10" rx="1" fill="#3a3f46"/>
+<rect x="255" y="343" width="3" height="13" rx="1" fill="#3a3f46"/>
+<text x="272" y="346" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">Bibliothek-Free</text>
+<text x="272" y="362" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a0a7af">Open · 5 GHz</text>
+<rect x="240" y="410" width="3" height="4" rx="1" fill="#5cc8b0"/>
+<rect x="245" y="407" width="3" height="7" rx="1" fill="#5cc8b0"/>
+<rect x="250" y="404" width="3" height="10" rx="1" fill="#3a3f46"/>
+<rect x="255" y="401" width="3" height="13" rx="1" fill="#3a3f46"/>
+<text x="272" y="404" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">eduroam</text>
+<text x="272" y="420" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a0a7af">Enterprise · 5 GHz</text>
+<rect x="240" y="468" width="3" height="4" rx="1" fill="#5cc8b0"/>
+<rect x="245" y="465" width="3" height="7" rx="1" fill="#3a3f46"/>
+<rect x="250" y="462" width="3" height="10" rx="1" fill="#3a3f46"/>
+<rect x="255" y="459" width="3" height="13" rx="1" fill="#3a3f46"/>
+<text x="272" y="462" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e8eaed">Nachbar_5G</text>
+<text x="272" y="478" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a0a7af">WPA3 · 5 GHz</text>
+<text x="234" y="120" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="10" font-weight="600" letter-spacing="0.8" fill="#8b929a">CONNECTED</text>
+<line x1="540.5" y1="10" x2="540.5" y2="550" stroke="#262a2f"/>
+<path d="M541 10.5 H932 a17.5 17.5 0 0 1 17.5 17.5 V532 a17.5 17.5 0 0 1 -17.5 17.5 H541 Z" fill="#1b1e21"/>
+<text x="568" y="64" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="24" font-weight="600" fill="#e8eaed">Lumen Home</text>
+<circle cx="572" cy="84" r="4" fill="#5cc8b0"/>
+<text x="582" y="88" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="12" fill="#5cc8b0">Connected</text><text x="648" y="88" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="12" fill="#a0a7af">· 5 GHz · 866 Mb/s</text>
+<rect x="568" y="108" width="92" height="32" rx="8" fill="#23272b" stroke="#353a40"/><text x="614.0" y="129" text-anchor="middle" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="12" fill="#e8eaed">Disconnect</text>
+<rect x="668" y="108" width="52" height="32" rx="8" fill="#23272b" stroke="#353a40"/><text x="694.0" y="129" text-anchor="middle" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="12" fill="#e8eaed">Edit</text>
+<rect x="728" y="108" width="124" height="32" rx="8" fill="#23272b" stroke="#353a40"/><text x="790.0" y="129" text-anchor="middle" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="12" fill="#e8eaed">Share as QR code</text>
+<text x="874" y="129" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="12" fill="#f08a7a">Forget</text>
+<rect x="568" y="160" width="356" height="92" rx="10" fill="none" stroke="#2a2e33"/><line x1="568" y1="206" x2="924" y2="206" stroke="#2a2e33"/>
+<text x="584" y="188" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" fill="#e8eaed">Connect automatically</text>
+<rect x="874" y="174" width="34" height="20" rx="10" fill="#5cc8b0"/><circle cx="898" cy="184" r="7" fill="#0c1513"/>
+<text x="584" y="226" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="13" fill="#e8eaed">Metered connection</text><text x="584" y="241" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="10" fill="#a0a7af">Apps may limit background data</text>
+<rect x="874" y="220" width="34" height="20" rx="10" fill="#3a3f46"/><circle cx="884" cy="230" r="7" fill="#c9ced4"/>
+<text x="568" y="284" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#8b929a">Signal</text><text x="568" y="301" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="12" fill="#e8eaed">78 % (−54 dBm)</text>
+<text x="758" y="284" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#8b929a">Security</text><text x="758" y="301" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="12" fill="#e8eaed">WPA2/WPA3 Personal</text>
+<text x="568" y="334" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#8b929a">Band</text><text x="568" y="351" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="12" fill="#e8eaed">5 GHz · channel 36</text>
+<text x="758" y="334" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#8b929a">IPv4 address</text><text x="758" y="351" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="12" fill="#e8eaed">192.168.1.42/24</text>
+<text x="568" y="384" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#8b929a">Gateway</text><text x="568" y="401" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="12" fill="#e8eaed">192.168.1.1</text>
+<text x="758" y="384" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#8b929a">DNS</text><text x="758" y="401" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="12" fill="#e8eaed">192.168.1.1, 9.9.9.9</text>
+<text x="568" y="434" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#8b929a">IPv6 address</text><text x="568" y="451" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="12" fill="#e8eaed">fd12:3a::42/64</text>
+<text x="758" y="434" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="11" fill="#8b929a">BSSID</text><text x="758" y="451" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="12" fill="#e8eaed">3C:A6:2F:11:8E:20</text>
+</svg>
