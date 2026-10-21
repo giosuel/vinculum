@@ -222,3 +222,54 @@ async fn missing_network_manager_is_reported() {
     let client = Client::new(bus.connect().await);
     assert!(matches!(client.snapshot().await, Err(Error::NotRunning)));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wifi_switch_and_scan() {
+    let Some(bus) = Bus::start(true).await else { return };
+    let (wifi, _) = home_setup(&bus).await;
+    let client = Client::new(bus.connect().await);
+    client.set_wireless_enabled(false).await.unwrap();
+    assert!(!client.snapshot().await.unwrap().wireless_enabled);
+    client.set_wireless_enabled(true).await.unwrap();
+    assert!(client.snapshot().await.unwrap().wireless_enabled);
+    client.request_scan(&wifi).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disconnect_reconnect_and_forget() {
+    let Some(bus) = Bus::start(true).await else { return };
+    let (wifi, home_5) = home_setup(&bus).await;
+    let client = Client::new(bus.connect().await);
+    let snap = client.snapshot().await.unwrap();
+    let active = snap.device(&wifi).unwrap().active_connection.clone().expect("connected");
+    let saved = snap.connections[0].path.clone();
+
+    client.deactivate(&active).await.unwrap();
+    let snap = client.snapshot().await.unwrap();
+    assert!(snap.active.is_empty());
+    assert!(!snap.networks()[0].1.iter().any(|n| n.active));
+
+    client.activate(&saved, Some(&wifi), Some(&home_5)).await.unwrap();
+    let snap = client.snapshot().await.unwrap();
+    assert_eq!(snap.active.len(), 1);
+    assert!(snap.networks()[0].1[0].active);
+
+    client.forget(&saved).await.unwrap();
+    let snap = client.snapshot().await.unwrap();
+    assert!(snap.connections.is_empty());
+    assert!(snap.active.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn join_an_open_network() {
+    let Some(bus) = Bus::start(true).await else { return };
+    let (wifi, _) = home_setup(&bus).await;
+    let client = Client::new(bus.connect().await);
+    let snap = client.snapshot().await.unwrap();
+    let library = snap.networks()[0].1.iter().find(|n| n.name() == "Bibliothek-Free").unwrap().strongest().path.clone();
+    let (connection, _active) = client.connect_open(&wifi, &library, b"Bibliothek-Free").await.unwrap();
+    let snap = client.snapshot().await.unwrap();
+    let saved = snap.connection(&connection).expect("a new profile");
+    assert_eq!(saved.wifi_ssid(), Some(&b"Bibliothek-Free"[..]));
+    assert!(snap.networks()[0].1.iter().any(|n| n.name() == "Bibliothek-Free" && n.saved.is_some()));
+}

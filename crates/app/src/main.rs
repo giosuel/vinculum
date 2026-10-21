@@ -31,6 +31,13 @@ struct App {
     /// The palette from the colour sources; `None` means the built-in theme.
     palette: Option<theme::Palette>,
     builtin: config::Builtin,
+    /// Commands for the NetworkManager thread.
+    commands: Option<tokio::sync::mpsc::UnboundedSender<view::Command>>,
+    /// The message above the list, and its tone ("danger", "warn", "info").
+    message: Option<(String, &'static str)>,
+    /// The command waiting for the confirmation dialog, and the dialog's title, text and button.
+    confirm: Option<view::Command>,
+    confirm_text: Option<(String, String, String)>,
 }
 
 thread_local! {
@@ -46,10 +53,10 @@ fn main() -> Result<(), slint::PlatformError> {
     connect_callbacks(&window);
     apply_theme(&window);
     render(&window);
-    spawn_network_manager(window.as_weak());
+    let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
+    APP.with(|app| app.borrow_mut().commands = Some(commands));
+    spawn_network_manager(window.as_weak(), receiver);
     spawn_theme_watcher(window.as_weak());
-    // The start size, as in the mockups. (A min-width on the window would win over it.)
-    window.window().set_size(slint::LogicalSize::new(1040.0, 680.0));
     window.run()
 }
 
@@ -83,11 +90,65 @@ fn connect_callbacks(window: &MainWindow) {
             app.ui.selected = Some(ids[next].clone());
         });
     });
-    // Changing things comes in the next step (M2b); until then the buttons say so.
-    window.on_action(|id| eprintln!("vinculum: \"{id}\" isn't wired up yet"));
-    window.on_toggle(|id| eprintln!("vinculum: switching \"{id}\" isn't wired up yet"));
-    window.on_wifi_switched(|| eprintln!("vinculum: switching Wi-Fi isn't wired up yet"));
-    window.on_rescan(|| eprintln!("vinculum: rescanning isn't wired up yet"));
+    let weak = window.as_weak();
+    window.on_action(move |id| update(&weak, |app| act(app, &id)));
+    let weak = window.as_weak();
+    window.on_activate_selected(move || update(&weak, |app| act(app, "connect")));
+    let weak = window.as_weak();
+    window.on_toggle(move |_| {
+        update(&weak, |app| {
+            app.message = Some(("Changing this comes with the connection editor, in a later version.".into(), "info"));
+        })
+    });
+    let weak = window.as_weak();
+    window.on_wifi_switched(move || {
+        update(&weak, |app| {
+            if let Some(command) = app.snapshot.as_ref().map(view::wifi_switch) {
+                send(app, command);
+            }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_rescan(move || {
+        update(&weak, |app| {
+            if let Some(command) = app.snapshot.as_ref().and_then(view::rescan) {
+                send(app, command);
+            }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_dismiss_message(move || update(&weak, |app| app.message = None));
+    let weak = window.as_weak();
+    window.on_confirm_accepted(move || {
+        update(&weak, |app| {
+            if let Some(command) = app.confirm.take() {
+                send(app, command);
+            }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_confirm_cancelled(move || update(&weak, |app| app.confirm = None));
+}
+
+/// A details button (or Enter, for "connect") on the selected row.
+fn act(app: &mut App, action: &str) {
+    let (Some(snapshot), Some(selected)) = (app.snapshot.as_ref(), app.ui.selected.as_deref()) else { return };
+    match view::intent(snapshot, selected, action) {
+        Some(view::Intent::Run(command)) => send(app, command),
+        Some(view::Intent::Confirm { title, text, button, command }) => {
+            app.confirm = Some(command);
+            app.confirm_text = Some((title, text, button));
+        }
+        Some(view::Intent::Notice(text)) => app.message = Some((text, "info")),
+        None => {}
+    }
+}
+
+fn send(app: &mut App, command: view::Command) {
+    app.message = None;
+    if let Some(commands) = &app.commands {
+        let _ = commands.send(command);
+    }
 }
 
 /// Changes the state, then shows it.
@@ -129,14 +190,27 @@ fn render(window: &MainWindow) {
         window.set_banner(v.banner.into());
         window.set_placeholder(v.placeholder.into());
         window.set_hostname(v.hostname.into());
+        let (message, tone) = app.message.clone().unwrap_or_default();
+        window.set_message(message.into());
+        window.set_message_tone(if tone.is_empty() { "info".into() } else { tone.into() });
+        window.set_confirm_open(app.confirm.is_some());
+        if let Some((title, text, button)) = &app.confirm_text {
+            window.set_confirm_title(title.into());
+            window.set_confirm_text(text.into());
+            window.set_confirm_button(button.into());
+        }
         app.row_ids = v.row_ids;
         // Keep a selection that went away (a network out of range) from sticking.
         app.ui.selected = v.selected;
     });
 }
 
-/// Watches NetworkManager on a tokio thread and hands every snapshot to the UI thread.
-fn spawn_network_manager(weak: slint::Weak<MainWindow>) {
+/// Watches NetworkManager on a tokio thread, hands every snapshot to the UI thread, and runs the
+/// UI's commands, reporting their failures back.
+fn spawn_network_manager(
+    weak: slint::Weak<MainWindow>,
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<view::Command>,
+) {
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime");
         runtime.block_on(async move {
@@ -144,8 +218,21 @@ fn spawn_network_manager(weak: slint::Weak<MainWindow>) {
                 let result = async {
                     let client = vinculum_nm::Client::system().await?;
                     let mut snapshots = Box::pin(client.watch().await?);
-                    while let Some(snapshot) = snapshots.next().await {
-                        deliver(&weak, snapshot);
+                    loop {
+                        tokio::select! {
+                            snapshot = snapshots.next() => match snapshot {
+                                Some(snapshot) => deliver(&weak, snapshot),
+                                None => break,
+                            },
+                            Some(command) = commands.recv() => {
+                                let (client, weak) = (client.clone(), weak.clone());
+                                tokio::spawn(async move {
+                                    if let Err(error) = run(&client, &command).await {
+                                        report(&weak, &command, &error);
+                                    }
+                                });
+                            }
+                        }
                     }
                     Ok::<(), vinculum_nm::Error>(())
                 }
@@ -157,6 +244,46 @@ fn spawn_network_manager(weak: slint::Weak<MainWindow>) {
                 tokio::time::sleep(Duration::from_secs(3)).await;
             }
         });
+    });
+}
+
+async fn run(client: &vinculum_nm::Client, command: &view::Command) -> Result<(), vinculum_nm::Error> {
+    use view::Command::*;
+    match command {
+        SetWifi(on) => client.set_wireless_enabled(*on).await,
+        Rescan { device } => client.request_scan(device).await,
+        Activate { connection, device, access_point } => {
+            client.activate(connection, device.as_deref(), access_point.as_deref()).await.map(drop)
+        }
+        ConnectOpen { device, access_point, ssid } => client.connect_open(device, access_point, ssid).await.map(drop),
+        Deactivate { active } => client.deactivate(active).await,
+        Forget { connection } => client.forget(connection).await,
+    }
+}
+
+/// Shows why a command failed, above the list.
+fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &vinculum_nm::Error) {
+    use view::Command::*;
+    let what = match command {
+        SetWifi(true) => "Couldn't turn Wi-Fi on",
+        SetWifi(false) => "Couldn't turn Wi-Fi off",
+        Rescan { .. } => "Couldn't scan",
+        Activate { .. } | ConnectOpen { .. } => "Couldn't connect",
+        Deactivate { .. } => "Couldn't disconnect",
+        Forget { .. } => "Couldn't forget the connection",
+    };
+    let (text, tone) = match error {
+        vinculum_nm::Error::Denied(_) => (
+            format!(
+                "{what}: not allowed. NetworkManager asks polkit first, and no polkit agent answered. Start one (for example hyprpolkitagent) and try again."
+            ),
+            "warn",
+        ),
+        other => (format!("{what}: {other}."), "danger"),
+    };
+    let _ = weak.upgrade_in_event_loop(move |window| {
+        APP.with(|app| app.borrow_mut().message = Some((text, tone)));
+        render(&window);
     });
 }
 

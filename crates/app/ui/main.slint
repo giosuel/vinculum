@@ -92,6 +92,11 @@ component DetailsPane inherits Rectangle {
     callback action(string);
     callback toggle(string);
     background: Theme.surface;
+    // Its content would cap it at the content's width, and Slint shrinks the window to match.
+    max-width: 100000px;
+    // Slint sizes the window to the layout's preferred size when the layout changes; a fixed one
+    // here keeps that at 1040 px (with the sidebar and list) instead of following the content.
+    preferred-width: 460px;
     VerticalLayout {
         padding: 28px;
         padding-bottom: 20px;
@@ -185,6 +190,14 @@ export component MainWindow inherits Window {
     in property <[SourceRow]> sources;
     in property <string> builtin-label;
     in property <string> placeholder;
+    // A message above the list: an error ("danger"), a polkit problem ("warn"), or a note ("info").
+    in property <string> message;
+    in property <string> message-tone: "info";
+    // The confirmation dialog (forgetting a connection).
+    in property <bool> confirm-open;
+    in property <string> confirm-title;
+    in property <string> confirm-text;
+    in property <string> confirm-button;
     // Whether the desktop asks for dark colours, for the "auto" built-in theme.
     out property <bool> prefers-dark: Palette.color-scheme != ColorScheme.light;
 
@@ -196,6 +209,10 @@ export component MainWindow inherits Window {
     callback move-selection(int);
     callback wifi-switched();
     callback rescan();
+    callback activate-selected();
+    callback dismiss-message();
+    callback confirm-accepted();
+    callback confirm-cancelled();
     // Incremented to move the keyboard focus into the search field.
     property <int> search-focus-requests;
 
@@ -215,6 +232,8 @@ export component MainWindow inherits Window {
             if event.text == "/" && root.show-search { root.search-focus-requests += 1; return accept; }
             if event.text == Key.DownArrow { root.move-selection(1); return accept; }
             if event.text == Key.UpArrow { root.move-selection(-1); return accept; }
+            if event.text == Key.Return && !root.confirm-open { root.activate-selected(); return accept; }
+            if event.text == Key.Escape && root.confirm-open { root.confirm-cancelled(); return accept; }
             reject
         }
 
@@ -255,6 +274,9 @@ export component MainWindow inherits Window {
 
             VerticalLayout {
                 horizontal-stretch: 1;
+                // The same minimum in every state (the list and the narrowest details pane), so the
+                // first snapshot doesn't change the window's limits while it's being mapped.
+                min-width: 740px;
                 if root.banner != "": Rectangle {
                     height: 40px;
                     background: Theme.warn-bg;
@@ -269,10 +291,11 @@ export component MainWindow inherits Window {
                     vertical-stretch: 1;
                     // List page
                     if root.page != "settings" && root.placeholder == "": Rectangle {
-                        // A fixed 384 px next to the details pane; otherwise (an empty state) all the room.
+                        // A fixed 384 px next to the details pane; otherwise (loading, or an empty
+                        // state) all the room, and the window's 1040 px preferred width with the sidebar.
                         min-width: root.has-details ? 384px : 0px;
                         max-width: root.has-details ? 384px : 100000px;
-                        preferred-width: 384px;
+                        preferred-width: root.has-details ? 384px : 844px;
                         horizontal-stretch: root.has-details ? 0 : 1;
                         background: Theme.panel;
                         VerticalLayout {
@@ -331,6 +354,47 @@ export component MainWindow inherits Window {
                                         border-color: Theme.ctrl-border;
                                         border-radius: 4px;
                                         Text { text: "/"; color: Theme.faint; font-size: 11px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+                            if root.message != "": Rectangle {
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-border : Theme.ctrl-border;
+                                background: root.message-tone == "warn" ? Theme.warn-bg : transparent;
+                                accessible-role: text;
+                                accessible-label: root.message;
+                                HorizontalLayout {
+                                    padding: 10px;
+                                    padding-right: 6px;
+                                    spacing: 10px;
+                                    Icon {
+                                        name: root.message-tone == "info" ? "error" : root.message-tone == "warn" ? "warning" : "error";
+                                        tint: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-text : Theme.muted;
+                                        y: 2px;
+                                    }
+                                    Text {
+                                        text: root.message;
+                                        color: root.message-tone == "warn" ? Theme.warn-text : Theme.text;
+                                        font-size: 13px;
+                                        wrap: word-wrap;
+                                        horizontal-stretch: 1;
+                                    }
+                                    Rectangle {
+                                        width: 24px;
+                                        height: 24px;
+                                        border-radius: 6px;
+                                        background: close-touch.has-hover ? Theme.sel-bg : transparent;
+                                        accessible-role: button;
+                                        accessible-label: "Dismiss";
+                                        accessible-action-default => { root.dismiss-message(); }
+                                        Path {
+                                            width: 12px; height: 12px;
+                                            viewbox-width: 16; viewbox-height: 16;
+                                            stroke: Theme.faint; stroke-width: 1.6px; fill: transparent;
+                                            commands: "M4 4l8 8M12 4l-8 8";
+                                        }
+                                        close-touch := TouchArea { mouse-cursor: pointer; clicked => { root.dismiss-message(); } }
                                     }
                                 }
                             }
@@ -459,6 +523,40 @@ export component MainWindow inherits Window {
                         // Lets the bar (and so the window) grow wider than its hints.
                         Rectangle { horizontal-stretch: 1; }
                     }
+                }
+            }
+        }
+    }
+
+    // The confirmation dialog, over everything.
+    if root.confirm-open: Rectangle {
+        background: #05060799;
+        TouchArea { clicked => { root.confirm-cancelled(); } }
+        Rectangle {
+            width: 420px;
+            height: dialog.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: Theme.ctrl-border;
+            background: Theme.surface;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000080;
+            accessible-role: groupbox;
+            accessible-label: root.confirm-title;
+            TouchArea {}
+            dialog := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                Text { text: root.confirm-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+                Text { text: root.confirm-text; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                HorizontalLayout {
+                    padding-top: 6px;
+                    spacing: 8px;
+                    alignment: end;
+                    Button { label: "Cancel"; button-height: 36px; clicked => { root.confirm-cancelled(); } }
+                    Button { label: root.confirm-button; kind: "destructive"; button-height: 36px; clicked => { root.confirm-accepted(); } }
                 }
             }
         }
