@@ -56,6 +56,8 @@ pub struct Device {
     pub ip6: Option<IpConfig>,
     pub wifi: Option<WifiDevice>,
     pub wired: Option<WiredDevice>,
+    /// Bytes received and sent, while NetworkManager counts them (see `Client::count_traffic`).
+    pub traffic: Option<(u64, u64)>,
 }
 
 /// NMDeviceType, for the kinds Vinculum treats specially.
@@ -188,6 +190,8 @@ pub struct SavedConnection {
     pub interface: Option<String>,
     /// Whether the connection counts as metered; `None` when NetworkManager decides by itself.
     pub metered: Option<bool>,
+    /// A Wi-Fi connection that runs an access point (the hotspot).
+    pub hotspot: bool,
 }
 
 impl SavedConnection {

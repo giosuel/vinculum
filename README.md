@@ -46,7 +46,7 @@ Wi-Fi with signal, band and security, wired ports and VPNs, all live. Search wit
 <td width="33%" valign="top">
 
 **🛠️ Every setting**<br>
-A full editor for each connection: security, IPv4 and IPv6 addresses, DNS, routes, MAC address, MTU, Ethernet link. Settings it doesn't show are left alone.
+A full editor for each connection: security and 802.1X (eduroam and the like), IPv4 and IPv6, DNS, routes, MAC address, MTU, Ethernet link. Settings it doesn't show are left alone.
 
 </td>
 </tr>
@@ -70,6 +70,26 @@ A normal window with the app ID `ch.giosuel.Vinculum` for your window rules, key
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+**🛡️ WireGuard and OpenVPN**<br>
+Make one, or import a `.conf` or `.ovpn` file: keys, peers, certificates and all. WireGuard connections export back to `.conf`.
+
+</td>
+<td valign="top">
+
+**📱 Hotspot and QR codes**<br>
+Share your connection over Wi-Fi in one switch, and any saved network as a QR code a phone camera joins.
+
+</td>
+<td valign="top">
+
+**📊 What's going on**<br>
+Addresses, gateway, DNS, link speed, channel, and how much has been received and sent.
+
+</td>
+</tr>
 </table>
 
 ## 🚀 Install
@@ -86,7 +106,9 @@ A normal window with the app ID `ch.giosuel.Vinculum` for your window rules, key
 chmod +x Vinculum-*-x86_64.AppImage && ./Vinculum-*-x86_64.AppImage
 ```
 
-Every release also has ARM64 builds. All of them need NetworkManager.
+Every release also has ARM64 builds. All of them need NetworkManager. Optional: NetworkManager's
+OpenVPN plugin (`networkmanager-openvpn` on Arch) for OpenVPN, an XDG desktop portal with a file
+dialog (`xdg-desktop-portal-gtk`, say) for choosing certificates and VPN files, and a keyring.
 
 **From source** – with [Rust](https://rustup.rs) and fontconfig's development files:
 

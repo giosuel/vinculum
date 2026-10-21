@@ -152,6 +152,19 @@ impl SecretRequest {
     pub fn request_new(&self) -> bool {
         self.flags & request::REQUEST_NEW != 0
     }
+
+    /// A request for tests of what answers it, with nobody waiting for the answer.
+    #[doc(hidden)]
+    pub fn for_tests(settings: Settings, setting: &str) -> Self {
+        let (reply, _) = oneshot::channel();
+        Self {
+            connection: AgentConnection::new(settings, "/test".into()),
+            setting: setting.into(),
+            hints: Vec::new(),
+            flags: request::ALLOW_INTERACTION,
+            reply,
+        }
+    }
 }
 
 #[derive(Debug)]

@@ -85,6 +85,22 @@ pub struct View {
     pub banner: String,
     pub placeholder: String,
     pub hostname: String,
+    pub hotspot: Option<HotspotView>,
+}
+
+/// The hotspot page.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HotspotView {
+    /// The hotspot connection, once there is one.
+    pub connection: Option<String>,
+    /// Its active connection, while it's on.
+    pub active: Option<String>,
+    /// The Wi-Fi device it runs on, and that device's interface.
+    pub device: Option<String>,
+    pub interface: String,
+    pub ssid: String,
+    pub status: String,
+    pub warning: String,
 }
 
 /// A row before the selection is known.
@@ -171,6 +187,22 @@ fn matches_search(name: &str, search: &str) -> bool {
 }
 
 /// IP details of a connected device, as label/value pairs.
+/// "18.4 MiB" for a byte count.
+fn bytes_label(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = n as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 { format!("{n} B") } else { format!("{value:.1} {}", UNITS[unit]) }
+}
+
+fn traffic_item(device: &Device) -> Option<DetailItem> {
+    device.traffic.map(|(rx, tx)| item("Received / sent", format!("{} / {}", bytes_label(rx), bytes_label(tx)), false))
+}
+
 fn ip_items(device: &Device) -> Vec<DetailItem> {
     let mut items = Vec::new();
     if let Some(ip4) = &device.ip4 {
@@ -228,7 +260,7 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
         Page::Vpn => vpn_page(snapshot, &mut view),
         Page::Saved => saved_page(snapshot, state, &mut view),
         Page::Hotspot => {
-            view.placeholder = "The hotspot comes in a later version.".into();
+            view.hotspot = Some(hotspot_page(snapshot));
             Vec::new()
         }
         Page::Settings => Vec::new(),
@@ -298,10 +330,8 @@ fn nothing_here(page: Page, searching: bool) -> Empty {
         Page::Vpn => Empty {
             icon: "vpn",
             title: "No VPN connections".into(),
-            text:
-                "Adding them here comes in a later version; WireGuard and VPN connections made with nmcli show up here."
-                    .into(),
-            action: String::new(),
+            text: "Add a WireGuard or OpenVPN connection with +, or bring one in from a .conf or .ovpn file.".into(),
+            action: "Import a file…".into(),
         },
         _ => Empty {
             icon: "wifi-off",
@@ -309,6 +339,58 @@ fn nothing_here(page: Page, searching: bool) -> Empty {
             text: "Try rescanning.".into(),
             action: String::new(),
         },
+    }
+}
+
+/// The hotspot's state, for its page and its switch.
+pub fn hotspot_view(snap: &Snapshot) -> HotspotView {
+    hotspot_page(snap)
+}
+
+fn hotspot_page(snap: &Snapshot) -> HotspotView {
+    let device = wifi_device(snap);
+    let saved = snap.connections.iter().find(|c| c.hotspot);
+    let active = saved.and_then(|c| active_uuid_state(snap, &c.uuid)).filter(|a| a.state != ActiveState::Deactivated);
+    // What it shares: the connection with the default route.
+    let sharing = snap
+        .primary_connection
+        .as_deref()
+        .and_then(|p| snap.active_connection(p))
+        .filter(|a| Some(&a.uuid) != saved.map(|c| &c.uuid))
+        .map(|a| {
+            let iface = a
+                .devices
+                .first()
+                .and_then(|d| snap.device(d))
+                .map(|d| format!(" ({})", d.interface))
+                .unwrap_or_default();
+            format!("{}{iface}", a.id)
+        });
+    let (status, warning) = match (active, &sharing) {
+        (Some(a), _) if a.state == ActiveState::Activating => ("Starting…".to_owned(), String::new()),
+        (Some(_), Some(s)) => (format!("On · sharing {s}"), String::new()),
+        (Some(_), None) => ("On · no internet connection to share".to_owned(), String::new()),
+        (None, _) => {
+            let wifi_up = device.is_some_and(|d| d.active_connection.is_some());
+            let warning = if wifi_up {
+                "Most Wi-Fi cards can't run a hotspot and stay on a network at the same time, so turning it on may disconnect Wi-Fi.".to_owned()
+            } else {
+                String::new()
+            };
+            ("Off".to_owned(), warning)
+        }
+    };
+    HotspotView {
+        connection: saved.map(|c| c.path.clone()),
+        active: active.map(|a| a.path.clone()),
+        device: device.map(|d| d.path.clone()),
+        interface: device.map(|d| d.interface.clone()).unwrap_or_default(),
+        ssid: saved
+            .and_then(|c| c.wifi_ssid())
+            .map(|s| String::from_utf8_lossy(s).into_owned())
+            .unwrap_or_else(|| snap.hostname.clone()),
+        status,
+        warning,
     }
 }
 
@@ -379,7 +461,7 @@ fn nav(snapshot: Option<&Snapshot>, page: Page) -> Vec<NavItem> {
         item(Page::Wifi, "wifi", wifi),
         item(Page::Wired, "wired", wired),
         item(Page::Vpn, "vpn", if vpns.is_empty() { "Off".into() } else { vpns.join(", ") }),
-        item(Page::Hotspot, "hotspot", "Off".into()),
+        item(Page::Hotspot, "hotspot", if hotspot_page(snap).active.is_some() { "On".into() } else { "Off".into() }),
         item(Page::Saved, "saved", saved),
     ]
 }
@@ -710,6 +792,7 @@ fn wifi_details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsDat
     ];
     if n.active {
         items.extend(ip_items(device));
+        items.extend(traffic_item(device));
         items.push(item("BSSID", ap.bssid.as_str(), true));
         items.push(item("Interface", device.interface.as_str(), true));
         if !device.hw_address.is_empty() {
@@ -761,6 +844,7 @@ fn connection_details(snap: &Snapshot, page: Page, uuid: &str) -> Option<Details
     let mut items = Vec::new();
     if let (Some(d), true) = (device, connected) {
         items.extend(ip_items(d));
+        items.extend(traffic_item(d));
         items.push(item("Interface", d.interface.as_str(), true));
         if !d.hw_address.is_empty() {
             items.push(item("MAC address", d.hw_address.as_str(), true));
@@ -835,6 +919,36 @@ pub enum Command {
         value: SettingValue,
     },
     SaveHostname(String),
+    /// The file dialog, for one of the editor's path fields.
+    ChooseFile {
+        field: String,
+    },
+    /// Pick a WireGuard .conf or OpenVPN .ovpn file and open it in the editor as a new connection.
+    ImportFile,
+    /// Save a WireGuard connection as a .conf file.
+    ExportWireGuard {
+        connection: String,
+    },
+    /// Show a Wi-Fi network's QR code, with its password.
+    ShareWifi {
+        connection: String,
+        name: String,
+    },
+    /// Read the hotspot's name, password and band for its page.
+    LoadHotspot {
+        connection: String,
+    },
+    /// Turn the hotspot on with these settings (making its connection, the first time).
+    StartHotspot {
+        connection: Option<String>,
+        device: String,
+        ssid: String,
+        password: String,
+        band: usize,
+    },
+    StopHotspot {
+        active: String,
+    },
     Deactivate {
         active: String,
     },
@@ -895,7 +1009,10 @@ pub fn intent(snap: &Snapshot, selected: &str, action: &str) -> Option<Intent> {
             let path = saved_connection(snap, selected)?.path.clone();
             return Some(Intent::Run(Command::OpenEditor { connection: Some(path), new: None }));
         }
-        "share" => return Some(Intent::Notice("Sharing a network as a QR code comes in a later version.".into())),
+        "share" => {
+            let c = saved_connection(snap, selected)?;
+            return Some(Intent::Run(Command::ShareWifi { connection: c.path.clone(), name: c.id.clone() }));
+        }
         "add-wired" => {
             return Some(Intent::Run(Command::OpenEditor {
                 connection: None,
@@ -1092,6 +1209,7 @@ mod tests {
                 last_scan: None,
             }),
             wired: None,
+            traffic: None,
         };
         let eth = Device {
             path: "/d/eth".into(),
@@ -1106,6 +1224,7 @@ mod tests {
             ip6: None,
             wifi: None,
             wired: Some(WiredDevice { carrier: false, speed: 0 }),
+            traffic: Some((19_293_798, 2_202_009)),
         };
         Snapshot {
             version: "1.48".into(),
@@ -1123,6 +1242,7 @@ mod tests {
                 autoconnect_priority: 0,
                 interface: None,
                 metered: None,
+                hotspot: false,
             }],
             active: vec![ActiveConnection {
                 path: "/a/1".into(),
@@ -1327,5 +1447,23 @@ mod tests {
             toggle_command(&snap, &ids[0], "metered"),
             Some(Command::SetSetting { key: "metered", value: SettingValue::I32(1), .. })
         ));
+    }
+
+    #[test]
+    fn traffic_in_words() {
+        assert_eq!(bytes_label(512), "512 B");
+        assert_eq!(bytes_label(19_293_798), "18.4 MiB");
+        let snap = home();
+        assert_eq!(traffic_item(&snap.devices[1]).unwrap().value, "18.4 MiB / 2.1 MiB");
+    }
+
+    #[test]
+    fn the_hotspot_page() {
+        let snap = home();
+        let h = hotspot_view(&snap);
+        assert!(h.connection.is_none() && h.active.is_none());
+        assert_eq!(h.device.as_deref(), Some("/d/wlan"));
+        assert_eq!(h.status, "Off");
+        assert!(h.warning.contains("disconnect Wi-Fi"), "Wi-Fi is connected: {}", h.warning);
     }
 }

@@ -99,6 +99,12 @@ impl Client {
         reply.ok().and_then(|r| r.body().deserialize::<Vec<String>>().ok()).unwrap_or_default()
     }
 
+    /// The secrets of one setting as NetworkManager sends them, nested values included (a
+    /// WireGuard peer's pre-shared key is inside `wireguard.peers`).
+    pub async fn secrets_raw(&self, connection: &str, setting: &str) -> Result<Settings, Error> {
+        self.call(connection, CONNECTION, "GetSecrets", &(setting,)).await.map_err(Error::from_dbus)
+    }
+
     /// The secrets of one setting of a saved connection, by key (asking the agent for agent-owned
     /// ones). For showing a saved password.
     pub async fn secrets(&self, connection: &str, setting: &str) -> Result<HashMap<String, String>, Error> {

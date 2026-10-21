@@ -10,10 +10,14 @@ publish.workspace = true
 build = "build.rs"
 
 [dependencies]
+base64.workspace = true
 clap.workspace = true
+qrcodegen.workspace = true
+x25519-dalek.workspace = true
 futures-util.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+thiserror.workspace = true
 slint.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 zbus.workspace = true
@@ -39,6 +43,9 @@ It drives NetworkManager: connect to Wi-Fi, wired and WireGuard networks, and ed
 connection setting."""
 # $auto adds the libraries the binary links against; xkbcommon and EGL are loaded at runtime.
 depends = "$auto, network-manager, libxkbcommon0, libegl1"
+# Optional: OpenVPN, file dialogs (certificates, VPN files), and a keyring for "for me only".
+recommends = "xdg-desktop-portal, gnome-keyring | kwalletmanager"
+suggests = "network-manager-openvpn"
 assets = [
     ["target/release/vinculum", "usr/bin/", "755"],
     ["../../packaging/linux/ch.giosuel.Vinculum.desktop", "usr/share/applications/", "644"],

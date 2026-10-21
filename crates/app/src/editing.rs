@@ -6,12 +6,22 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString};
 use vinculum_nm::{ConnectionKind, DeviceKind, Settings, Snapshot};
 
-use crate::editor::{self, Address, Form, IpForm, Kind, Route, Tab};
+use crate::editor::{self, Address, EapForm, Form, IpForm, Kind, PeerForm, Route, Tab, WgForm};
+use crate::openvpn::OvpnForm;
 use crate::view::Command;
 use crate::{
-    APP, AddressRow, App, EditorErrors, EditorForm, EditorOptions, EditorTab, IpFormUi, MainWindow, RouteRow, model,
-    send, update,
+    APP, AddressRow, App, EapFormUi, EditorErrors, EditorForm, EditorOptions, EditorTab, IpFormUi, MainWindow,
+    OvpnFormUi, PeerRow, RouteRow, WgFormUi, model, send, update,
 };
+
+/// What else the editor opens with.
+#[derive(Debug, Default)]
+pub struct Extras {
+    /// The saved WireGuard private key, for its public key and "Show".
+    pub wg_key: Option<String>,
+    /// A note at the top: what an import did.
+    pub banner: String,
+}
 
 /// Settings in a [`Command`]: compared by identity, since only the editor makes them.
 #[derive(Clone, Debug)]
@@ -60,6 +70,9 @@ pub struct EditorState {
     pub failure: Option<String>,
     /// The form goes to the window on the next render.
     reset: bool,
+    wg_key: Option<String>,
+    wg_shown: bool,
+    banner: String,
 }
 
 impl EditorState {
@@ -74,6 +87,18 @@ impl EditorState {
             Some(kind) => {
                 let uuid = crate::secrets::new_uuid();
                 (kind, None, uuid.clone(), editor::new_settings(kind, &uuid))
+            }
+            // Imported from a file: new, but filled in already.
+            None if path.is_none() => {
+                let (kind, form) = editor::read(&settings);
+                let uuid = settings
+                    .get("connection")
+                    .and_then(|c| c.get("uuid"))
+                    .and_then(|v| <&str>::try_from(&**v).ok())
+                    .map(str::to_owned)
+                    .unwrap_or_else(crate::secrets::new_uuid);
+                let state_form = form;
+                return Self::filled(kind, uuid, settings, state_form, zones, snap);
             }
             None => {
                 let (kind, form) = editor::read(&settings);
@@ -93,7 +118,41 @@ impl EditorState {
                 editor::new_form(kind, &name)
             }
         };
-        let mut state = Self {
+        let mut state = Self::blank(path, kind, original, initial, form, uuid, zones);
+        if let Some(snap) = snap {
+            state.fill_from(snap);
+        }
+        state
+    }
+
+    /// A new connection whose form comes from an imported file.
+    fn filled(
+        kind: Kind,
+        uuid: String,
+        settings: Settings,
+        form: Form,
+        zones: Vec<String>,
+        snap: Option<&Snapshot>,
+    ) -> Self {
+        let mut state = Self::blank(None, kind, settings, None, form, uuid, zones);
+        state.tab = kind.tabs().get(1).copied().unwrap_or(Tab::General);
+        if let Some(snap) = snap {
+            state.fill_from(snap);
+        }
+        state
+    }
+
+    fn blank(
+        path: Option<String>,
+        kind: Kind,
+        original: Settings,
+        initial: Option<Form>,
+        form: Form,
+        uuid: String,
+        zones: Vec<String>,
+    ) -> Self {
+        let new = if initial.is_none() && path.is_none() { Some(kind) } else { None };
+        Self {
             path,
             kind,
             original,
@@ -117,11 +176,10 @@ impl EditorState {
             note: None,
             failure: None,
             reset: true,
-        };
-        if let Some(snap) = snap {
-            state.fill_from(snap);
+            wg_key: None,
+            wg_shown: false,
+            banner: String::new(),
         }
-        state
     }
 
     /// The choices that come from the snapshot: VPNs, access points, wired devices, and what's
@@ -219,7 +277,11 @@ impl EditorState {
     }
 
     fn name(&self) -> String {
-        if self.form.name.trim().is_empty() { self.form.ssid.clone() } else { self.form.name.trim().to_owned() }
+        match (self.form.name.trim(), self.kind) {
+            ("", Kind::Wifi) => self.form.ssid.clone(),
+            ("", Kind::WireGuard) => self.form.wg.interface.clone(),
+            (name, _) => name.to_owned(),
+        }
     }
 }
 
@@ -327,6 +389,142 @@ fn to_ui(state: &EditorState, dns_inputs: (SharedString, SharedString)) -> Edito
         wol_broadcast: f.wol_broadcast,
         ip4: ip_ui(&f.ip4, dns_inputs.0),
         ip6: ip_ui(&f.ip6, dns_inputs.1),
+        eap: eap_ui(&f.eap),
+        wg: wg_ui(&f.wg),
+        ovpn: ovpn_ui(&f.ovpn),
+    }
+}
+
+fn eap_ui(e: &EapForm) -> EapFormUi {
+    EapFormUi {
+        enabled: e.enabled,
+        method: e.method as i32,
+        phase2: e.phase2 as i32,
+        identity: s(&e.identity),
+        anonymous: s(&e.anonymous),
+        password: s(&e.password),
+        storage: e.storage as i32,
+        system_ca: e.system_ca,
+        ca_cert: s(&e.ca_cert),
+        client_cert: s(&e.client_cert),
+        private_key: s(&e.private_key),
+        key_password: s(&e.key_password),
+        domain: s(&e.domain),
+    }
+}
+
+fn eap_form(u: &EapFormUi) -> EapForm {
+    EapForm {
+        enabled: u.enabled,
+        method: u.method.max(0) as usize,
+        phase2: u.phase2.max(0) as usize,
+        identity: u.identity.trim().to_owned(),
+        anonymous: u.anonymous.trim().to_owned(),
+        password: u.password.to_string(),
+        storage: u.storage.max(0) as usize,
+        system_ca: u.system_ca,
+        ca_cert: u.ca_cert.trim().to_owned(),
+        client_cert: u.client_cert.trim().to_owned(),
+        private_key: u.private_key.trim().to_owned(),
+        key_password: u.key_password.to_string(),
+        domain: u.domain.trim().to_owned(),
+    }
+}
+
+fn wg_ui(w: &WgForm) -> WgFormUi {
+    WgFormUi {
+        interface: s(&w.interface),
+        private_key: s(&w.private_key),
+        listen_port: s(&w.listen_port),
+        fwmark: s(&w.fwmark),
+        peer_routes: w.peer_routes,
+        peers: model(
+            w.peers
+                .iter()
+                .map(|p| PeerRow {
+                    public_key: s(&p.public_key),
+                    endpoint: s(&p.endpoint),
+                    allowed_ips: model(p.allowed_ips.iter().map(s).collect()),
+                    allowed_input: "".into(),
+                    keepalive: s(&p.keepalive),
+                    has_psk: p.has_psk,
+                })
+                .collect(),
+        ),
+    }
+}
+
+fn wg_form(u: &WgFormUi) -> WgForm {
+    WgForm {
+        interface: u.interface.trim().to_owned(),
+        private_key: u.private_key.trim().to_owned(),
+        public_key: String::new(),
+        listen_port: u.listen_port.trim().to_owned(),
+        fwmark: u.fwmark.trim().to_owned(),
+        peer_routes: u.peer_routes,
+        peers: u
+            .peers
+            .iter()
+            .map(|p| PeerForm {
+                public_key: p.public_key.trim().to_owned(),
+                endpoint: p.endpoint.trim().to_owned(),
+                allowed_ips: p.allowed_ips.iter().map(|a| a.to_string()).collect(),
+                keepalive: p.keepalive.trim().to_owned(),
+                has_psk: p.has_psk,
+            })
+            .collect(),
+    }
+}
+
+const DIRECTIONS: [&str; 3] = ["", "0", "1"];
+
+fn ovpn_ui(o: &OvpnForm) -> OvpnFormUi {
+    OvpnFormUi {
+        gateway: s(&o.gateway),
+        tcp: o.tcp,
+        auth: o.auth as i32,
+        username: s(&o.username),
+        password: s(&o.password),
+        key_password: s(&o.key_password),
+        storage: o.storage as i32,
+        ca: s(&o.ca),
+        cert: s(&o.cert),
+        key: s(&o.key),
+        static_key: s(&o.static_key),
+        tls_key: s(&o.tls_key),
+        tls_key_mode: o.tls_key_mode as i32,
+        tls_key_direction: index_of(&DIRECTIONS, |d| *d == o.tls_key_direction),
+        cipher: s(&o.cipher),
+        compression: o.compression as i32,
+        mtu: s(&o.mtu),
+        fragment: s(&o.fragment),
+        reneg: s(&o.reneg),
+        tap: o.tap,
+    }
+}
+
+fn ovpn_form(u: &OvpnFormUi) -> OvpnForm {
+    OvpnForm {
+        gateway: u.gateway.trim().to_owned(),
+        tcp: u.tcp,
+        auth: u.auth.max(0) as usize,
+        username: u.username.trim().to_owned(),
+        password: u.password.to_string(),
+        key_password: u.key_password.to_string(),
+        storage: u.storage.max(0) as usize,
+        ca: u.ca.trim().to_owned(),
+        cert: u.cert.trim().to_owned(),
+        key: u.key.trim().to_owned(),
+        static_key: u.static_key.trim().to_owned(),
+        tls_key: u.tls_key.trim().to_owned(),
+        tls_key_mode: u.tls_key_mode.max(0) as usize,
+        tls_key_direction: DIRECTIONS.get(u.tls_key_direction.max(0) as usize).copied().unwrap_or("").to_owned(),
+        cipher: u.cipher.trim().to_owned(),
+        compression: u.compression.max(0) as usize,
+        mtu: u.mtu.trim().to_owned(),
+        fragment: u.fragment.trim().to_owned(),
+        reneg: u.reneg.trim().to_owned(),
+        tap: u.tap,
     }
 }
 
@@ -360,6 +558,9 @@ fn from_ui(state: &EditorState, ui: &EditorForm) -> Form {
         wol_broadcast: ui.wol_broadcast,
         ip4: ip_form(&ui.ip4),
         ip6: ip_form(&ui.ip6),
+        eap: eap_form(&ui.eap),
+        wg: wg_form(&ui.wg),
+        ovpn: ovpn_form(&ui.ovpn),
     }
 }
 
@@ -383,12 +584,23 @@ fn errors_ui(e: &editor::Errors) -> EditorErrors {
         ip6_addresses: s(&e.ip6.addresses),
         ip6_dns: s(&e.ip6.dns),
         ip6_routes: s(&e.ip6.routes),
+        eap_identity: s(&e.eap_identity),
+        eap_secret: s(&e.eap_secret),
+        eap_certs: s(&e.eap_certs),
+        wg_interface: s(&e.wg_interface),
+        wg_key: s(&e.wg_key),
+        wg_port: s(&e.wg_port),
+        peers: s(&e.peers),
+        ovpn_user: s(&e.ovpn_user),
+        ovpn_secret: s(&e.ovpn_secret),
+        ovpn_files: s(&e.ovpn_files),
     }
 }
 
 /// Shows the editor's state in the window.
 pub fn render(window: &MainWindow, app: &mut App) {
     window.set_editor_open(app.editor.is_some());
+    let keyring = app.keyring;
     let Some(state) = app.editor.as_mut() else { return };
     let errors = state.errors();
     if std::mem::take(&mut state.reset) {
@@ -411,11 +623,34 @@ pub fn render(window: &MainWindow, app: &mut App) {
             current_ip6: strings(state.current_ip6.iter().cloned()),
             link: s(&state.link),
             has_zones: state.zones.len() > 1,
+            eap_methods: strings(editor::EAP_METHODS.iter().map(|(_, l)| *l)),
+            phase2: strings(editor::PHASE2.iter().map(|(_, l)| *l)),
+            wg_public_key: "".into(),
+            wg_shown_key: "".into(),
+            ovpn_auth: strings(crate::openvpn::AUTH.iter().map(|(_, l)| *l)),
+            ovpn_tls_modes: strings(crate::openvpn::TLS_KEY_MODES.iter().map(|(_, l)| *l)),
+            ovpn_compression: strings(crate::openvpn::COMPRESSION.iter().map(|(_, l)| *l)),
+            banner: s(&state.banner),
+            keyring: "".into(),
         });
     }
+    // The parts of the options that change as you type.
+    let mut options = window.get_editor_options();
+    let typed = crate::wireguard::public_key(&state.form.wg.private_key);
+    let public = typed.or_else(|| state.wg_key.as_deref().and_then(crate::wireguard::public_key)).unwrap_or_default();
+    options.wg_public_key = public.into();
+    options.wg_shown_key = if state.wg_shown { state.wg_key.clone().unwrap_or_default().into() } else { "".into() };
+    options.keyring = match keyring {
+        Some("KWallet") => "KWallet".into(),
+        Some(_) => "your keyring".into(),
+        None => "".into(),
+    };
+    window.set_editor_options(options);
     let kind_label = match state.kind {
         Kind::Wifi => "Wi-Fi connection",
         Kind::Ethernet => "Ethernet connection",
+        Kind::WireGuard => "WireGuard VPN",
+        Kind::OpenVpn => "OpenVPN",
         Kind::Other => "Connection",
     };
     let device = state
@@ -542,6 +777,7 @@ pub fn connect(window: &MainWindow) {
                 "ip6-address" => f.ip6.addresses.push(Address { address: String::new(), prefix: "64".into() }),
                 "ip4-route" => f.ip4.routes.push(Route { prefix: "24".into(), ..Route::default() }),
                 "ip6-route" => f.ip6.routes.push(Route { prefix: "64".into(), ..Route::default() }),
+                "peer" => f.wg.peers.push(PeerForm::default()),
                 _ => {}
             }
         })
@@ -563,7 +799,14 @@ pub fn connect(window: &MainWindow) {
                 "ip6-route" => remove(&mut f.ip6.routes, i),
                 "ip4-dns" => remove(&mut f.ip4.dns, i),
                 "ip6-dns" => remove(&mut f.ip6.dns, i),
-                _ => {}
+                "peer" => remove(&mut f.wg.peers, i),
+                other => {
+                    if let Some(peer) = other.strip_prefix("peer-ip:").and_then(|p| p.parse::<usize>().ok())
+                        && let Some(peer) = f.wg.peers.get_mut(peer)
+                    {
+                        remove(&mut peer.allowed_ips, i);
+                    }
+                }
             }
         })
     });
@@ -638,6 +881,59 @@ pub fn connect(window: &MainWindow) {
         });
     });
     let weak = window.as_weak();
+    window.on_editor_add_allowed(move |peer| {
+        let Some(window) = weak.upgrade() else { return };
+        let ui = window.get_editor_form();
+        let input =
+            ui.wg.peers.row_data(peer.max(0) as usize).map(|p| p.allowed_input.trim().to_owned()).unwrap_or_default();
+        if input.is_empty() {
+            return;
+        }
+        edit_rows(&weak, |state| {
+            if let Some(p) = state.form.wg.peers.get_mut(peer.max(0) as usize)
+                && !p.allowed_ips.contains(&input)
+            {
+                // A bare address is one host.
+                let range = if input.contains('/') {
+                    input.clone()
+                } else if input.contains(':') {
+                    format!("{input}/128")
+                } else {
+                    format!("{input}/32")
+                };
+                p.allowed_ips.push(range);
+            }
+        });
+    });
+    let weak = window.as_weak();
+    window.on_editor_wg_generate(move || {
+        edit_rows(&weak, |state| state.form.wg.private_key = crate::wireguard::generate());
+    });
+    let weak = window.as_weak();
+    window.on_editor_wg_show_key(move || {
+        update(&weak, |app| {
+            if let Some(state) = app.editor.as_mut() {
+                state.wg_shown = true;
+            }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_editor_wg_export(move || {
+        update(&weak, |app| {
+            if let Some(path) = app.editor.as_ref().and_then(|s| s.path.clone()) {
+                send(app, Command::ExportWireGuard { connection: path });
+            }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_editor_choose_file(move |field| {
+        let Some(window) = weak.upgrade() else { return };
+        update(&weak, |app| {
+            read_form(&window, app);
+            send(app, Command::ChooseFile { field: field.to_string() });
+        })
+    });
+    let weak = window.as_weak();
     window.on_editor_apply(move || {
         let Some(window) = weak.upgrade() else { return };
         update(&weak, |app| {
@@ -672,8 +968,12 @@ fn apply(app: &mut App) {
         return;
     }
     let mut form = state.form.clone();
-    if state.kind == Kind::Wifi && form.name.trim().is_empty() {
-        form.name = form.ssid.clone();
+    if form.name.trim().is_empty() {
+        form.name = match state.kind {
+            Kind::Wifi => form.ssid.clone(),
+            Kind::WireGuard => form.wg.interface.clone(),
+            _ => form.name.clone(),
+        };
     }
     let settings = editor::write(state.kind, &state.original, state.initial.as_ref(), &form, &owner);
     // A new "for me only" password goes to the keyring first, where NetworkManager will ask for it.
@@ -703,8 +1003,11 @@ pub fn saved(app: &mut App, result: Result<(String, Settings), String>, zones: V
     match result {
         Ok((path, settings)) => {
             let tab = state.tab;
+            // A key typed or generated is the saved one now.
+            let wg_key = Some(state.form.wg.private_key.clone()).filter(|k| !k.is_empty()).or(state.wg_key.clone());
             let mut fresh = EditorState::new(Some(path), settings, zones, snap.as_ref(), None);
             fresh.tab = tab;
+            fresh.wg_key = wg_key;
             fresh.note = Some(("Saved.".into(), "accent"));
             *state = fresh;
         }
@@ -713,7 +1016,43 @@ pub fn saved(app: &mut App, result: Result<(String, Settings), String>, zones: V
 }
 
 /// Opens the editor for a saved connection's settings, or a new one of a kind.
-pub fn open(app: &mut App, path: Option<String>, settings: Settings, zones: Vec<String>, new: Option<Kind>) {
-    let state = EditorState::new(path, settings, zones, app.snapshot.as_ref(), new);
+pub fn open(
+    app: &mut App,
+    path: Option<String>,
+    settings: Settings,
+    zones: Vec<String>,
+    new: Option<Kind>,
+    extras: Extras,
+) {
+    let mut state = EditorState::new(path, settings, zones, app.snapshot.as_ref(), new);
+    state.wg_key = extras.wg_key;
+    state.banner = extras.banner;
     app.editor = Some(state);
+}
+
+/// A file was chosen for one of the editor's path fields ("eap.ca-cert", "ovpn.key", …).
+pub fn file_chosen(app: &mut App, field: &str, path: Result<Option<String>, String>) {
+    let Some(state) = app.editor.as_mut() else { return };
+    let path = match path {
+        Ok(Some(path)) => path,
+        Ok(None) => return,
+        Err(error) => {
+            state.failure = Some(format!("{error}. You can type the path instead."));
+            return;
+        }
+    };
+    let f = &mut state.form;
+    let target = match field {
+        "eap.ca-cert" => &mut f.eap.ca_cert,
+        "eap.client-cert" => &mut f.eap.client_cert,
+        "eap.private-key" => &mut f.eap.private_key,
+        "ovpn.ca" => &mut f.ovpn.ca,
+        "ovpn.cert" => &mut f.ovpn.cert,
+        "ovpn.key" => &mut f.ovpn.key,
+        "ovpn.static-key" => &mut f.ovpn.static_key,
+        "ovpn.tls-key" => &mut f.ovpn.tls_key,
+        _ => return,
+    };
+    *target = path;
+    state.reset = true;
 }

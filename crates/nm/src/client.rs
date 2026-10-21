@@ -148,6 +148,21 @@ impl Client {
         Ok(())
     }
 
+    /// Makes NetworkManager count a device's traffic, updated every `refresh_ms`.
+    pub async fn count_traffic(&self, device: &str, refresh_ms: u32) -> Result<(), Error> {
+        self.conn
+            .call_method(
+                Some(BUS_NAME),
+                device,
+                Some("org.freedesktop.DBus.Properties"),
+                "Set",
+                &("org.freedesktop.NetworkManager.Device.Statistics", "RefreshRateMs", Value::from(refresh_ms)),
+            )
+            .await
+            .map_err(Error::from_dbus)?;
+        Ok(())
+    }
+
     /// Airplane mode: Wi-Fi and mobile broadband off (or back on).
     pub async fn set_airplane(&self, on: bool) -> Result<(), Error> {
         for property in ["WirelessEnabled", "WwanEnabled"] {
@@ -288,7 +303,15 @@ impl Client {
             Some(p) => skip_vanished(self.ip_config(&p, "org.freedesktop.NetworkManager.IP6Config")).await?,
             None => None,
         };
+        // Counted only after count_traffic switched it on; older versions have no such interface.
+        let traffic = match Props::get_all(&self.conn, path, "org.freedesktop.NetworkManager.Device.Statistics").await {
+            Ok(stats) if stats.u32("RefreshRateMs").unwrap_or(0) > 0 => {
+                Some((stats.u64("RxBytes").unwrap_or(0), stats.u64("TxBytes").unwrap_or(0)))
+            }
+            _ => None,
+        };
         Ok(Device {
+            traffic,
             path: path.to_owned(),
             interface: props.string("Interface").unwrap_or_default(),
             kind,
@@ -381,6 +404,7 @@ impl Client {
                 .and_then(|v| i32::try_from(&**v).ok())
                 .unwrap_or(0),
             interface: string("connection", "interface-name").filter(|i| !i.is_empty()),
+            hotspot: string("802-11-wireless", "mode").as_deref() == Some("ap"),
             // NMMetered: 1 yes, 2 no, 3 guessed yes, 4 guessed no; 0 (unknown) means automatic.
             metered: match get("connection", "metered").and_then(|v| i32::try_from(&**v).ok()) {
                 Some(1 | 3) => Some(true),

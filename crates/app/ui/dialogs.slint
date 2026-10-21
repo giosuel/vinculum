@@ -36,6 +36,8 @@ export component TextField inherits Rectangle {
         spacing: 6px;
         Rectangle {
             horizontal-stretch: 1;
+            // A long path scrolls inside the field instead of running past its edge.
+            clip: true;
             input := TextInput {
                 text <=> root.text;
                 width: parent.width;
