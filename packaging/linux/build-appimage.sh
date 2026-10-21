@@ -39,6 +39,7 @@ install -Dm755 "$target_dir/release/vinculum" "$appdir/usr/bin/vinculum"
 install -Dm644 packaging/linux/ch.giosuel.Vinculum.desktop -t "$appdir/usr/share/applications"
 install -Dm644 packaging/linux/ch.giosuel.Vinculum.metainfo.xml -t "$appdir/usr/share/metainfo"
 install -Dm644 packaging/linux/icons/ch.giosuel.Vinculum.svg -t "$appdir/usr/share/icons/hicolor/scalable/apps"
+install -Dm644 crates/app/ui/fonts/*-LICENSE.txt -t "$appdir/usr/share/licenses/vinculum"
 
 mkdir -p target/dist
 out="$PWD/target/dist/Vinculum-$version-$arch.AppImage"

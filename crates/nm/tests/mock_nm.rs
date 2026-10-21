@@ -480,3 +480,61 @@ async fn a_failed_attempt_says_why() {
     let outcome = tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap().unwrap();
     assert_eq!(outcome, Outcome::Failed("The network rejected the password.".into()));
 }
+
+/// The editor's round trip: read the settings, write them back changed, add a new connection,
+/// flip one key, set the hostname. The mock has only the older Update and AddConnection, so this
+/// also covers the fallbacks.
+#[tokio::test(flavor = "multi_thread")]
+async fn settings_round_trip() {
+    use zbus::zvariant::{OwnedValue, Value};
+    let Some(bus) = Bus::start(true).await else { return };
+    let (_wifi, _) = home_setup(&bus).await;
+    let client = Client::new(bus.connect().await);
+    let snap = client.snapshot().await.unwrap();
+    let home = snap.connections[0].path.clone();
+
+    let mut settings = client.settings(&home).await.unwrap();
+    assert_eq!(<&str>::try_from(&*settings["connection"]["id"]).unwrap(), "Lumen Home");
+    settings
+        .get_mut("connection")
+        .unwrap()
+        .insert("autoconnect-priority".into(), OwnedValue::try_from(Value::from(20i32)).unwrap());
+    client.update(&home, &settings).await.unwrap();
+    let saved = client.settings(&home).await.unwrap();
+    assert_eq!(i32::try_from(&*saved["connection"]["autoconnect-priority"]).unwrap(), 20);
+    // What the editor didn't touch is still there.
+    assert_eq!(saved["802-11-wireless"]["seen-bssids"], settings["802-11-wireless"]["seen-bssids"]);
+
+    client.set_setting(&home, "connection", "autoconnect", Value::from(false)).await.unwrap();
+    assert!(!client.snapshot().await.unwrap().connections[0].autoconnect);
+
+    let mut new: vinculum_nm::Settings = std::collections::HashMap::new();
+    for (setting, key, value) in [
+        ("connection", "id", Value::from("Office dock")),
+        ("connection", "type", Value::from("802-3-ethernet")),
+        ("connection", "uuid", Value::from("3e7f1c2a-0b4d-4e5f-8a9b-0c1d2e3f4a5b")),
+        ("ipv4", "method", Value::from("auto")),
+    ] {
+        new.entry(setting.into()).or_default().insert(key.into(), OwnedValue::try_from(value).unwrap());
+    }
+    let path = client.add(&new).await.unwrap();
+    let snap = client.snapshot().await.unwrap();
+    assert!(snap.connections.iter().any(|c| c.path == path && c.id == "Office dock"));
+
+    // The mock has no SaveHostname; give it one that sets the property.
+    let _: () = bus
+        .mock_at(
+            "/org/freedesktop/NetworkManager/Settings",
+            "AddMethod",
+            &(
+                "org.freedesktop.NetworkManager.Settings",
+                "SaveHostname",
+                "s",
+                "",
+                "self.Set('org.freedesktop.NetworkManager.Settings', 'Hostname', args[0])",
+            ),
+        )
+        .await;
+    client.save_hostname("thinkpad-x1").await.unwrap();
+    assert_eq!(client.snapshot().await.unwrap().hostname, "thinkpad-x1");
+}

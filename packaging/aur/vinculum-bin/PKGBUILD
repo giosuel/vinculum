@@ -6,7 +6,7 @@ pkgrel=1
 pkgdesc='Manage Wi-Fi, wired and VPN connections (NetworkManager GUI, prebuilt binary)'
 arch=('x86_64' 'aarch64')
 url='https://github.com/giosuel/vinculum'
-license=('AGPL-3.0-or-later')
+license=('AGPL-3.0-or-later' 'OFL-1.1')
 # The libraries for X11, Wayland and OpenGL are loaded at runtime (winit, glutin).
 depends=('fontconfig' 'glibc' 'hicolor-icon-theme' 'libgcc' 'libglvnd' 'libx11' 'libxcursor' 'libxi'
          'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'networkmanager' 'wayland')
@@ -28,4 +28,6 @@ package() {
   install -Dm644 packaging/linux/ch.giosuel.Vinculum.metainfo.xml -t "$pkgdir/usr/share/metainfo"
   install -Dm644 packaging/linux/icons/ch.giosuel.Vinculum.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
   install -Dm644 README.md -t "$pkgdir/usr/share/doc/$_pkgname"
+  # The fonts built into the binary.
+  install -Dm644 crates/app/ui/fonts/*-LICENSE.txt -t "$pkgdir/usr/share/licenses/$_pkgname"
 }

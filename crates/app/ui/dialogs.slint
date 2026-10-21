@@ -15,29 +15,51 @@ export component TextField inherits Rectangle {
     in property <bool> password;
     in property <string> label;
     in property <bool> autofocus;
+    in property <string> placeholder;
+    in property <bool> mono;
+    in property <bool> invalid;
+    in property <bool> enabled: true;
     property <bool> shown;
     callback accepted();
-    init => { if root.autofocus { input.focus(); } }
+    callback edited();
+    init => { if root.autofocus { input.focus(); input.select-all(); } }
     height: 38px;
     border-radius: 8px;
     border-width: 1px;
-    border-color: input.has-focus ? Theme.accent : Theme.border2;
+    border-color: root.invalid ? Theme.danger : input.has-focus ? Theme.accent : Theme.border2;
+    opacity: root.enabled ? 1 : 0.5;
     background: Theme.input-bg;
     forward-focus: input;
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 6px;
         spacing: 6px;
-        input := TextInput {
-            text <=> root.text;
+        Rectangle {
             horizontal-stretch: 1;
-            input-type: root.password && !root.shown ? InputType.password : InputType.text;
-            color: Theme.text;
-            font-size: 14px;
-            vertical-alignment: center;
-            single-line: true;
-            accessible-label: root.label;
-            accepted => { root.accepted(); }
+            input := TextInput {
+                text <=> root.text;
+                width: parent.width;
+                height: parent.height;
+                input-type: root.password && !root.shown ? InputType.password : InputType.text;
+                color: Theme.text;
+                font-size: root.mono ? 13px : 14px;
+                font-family: root.mono ? "JetBrains Mono" : "Inter";
+                vertical-alignment: center;
+                single-line: true;
+                enabled: root.enabled;
+                accessible-label: root.label;
+                accepted => { root.accepted(); }
+                edited => { root.edited(); }
+            }
+            if input.text == "" && root.placeholder != "": Text {
+                text: root.placeholder;
+                color: Theme.faint;
+                font-size: input.font-size;
+                font-family: input.font-family;
+                vertical-alignment: center;
+                x: 0;
+                height: parent.height;
+            }
         }
         if root.password: Rectangle {
             width: 28px;
@@ -59,6 +81,8 @@ export component Segmented inherits Rectangle {
     in property <[string]> options;
     in property <string> label;
     in-out property <int> selected;
+    /// Also called when the user picks one (for a choice that isn't bound two-way).
+    callback changed(int);
     height: 40px;
     border-radius: 9px;
     border-width: 1px;
@@ -70,6 +94,7 @@ export component Segmented inherits Rectangle {
         spacing: 3px;
         for option[i] in root.options: Rectangle {
             horizontal-stretch: 1;
+            min-width: label.preferred-width + 24px;
             border-radius: 7px;
             border-width: i == root.selected ? 1px : 0;
             border-color: Theme.accent-soft-border;
@@ -77,8 +102,8 @@ export component Segmented inherits Rectangle {
             accessible-role: tab;
             accessible-label: option;
             accessible-item-selected: i == root.selected;
-            accessible-action-default => { root.selected = i; }
-            Text {
+            accessible-action-default => { root.selected = i; root.changed(i); }
+            label := Text {
                 text: option;
                 color: i == root.selected ? Theme.text : Theme.muted;
                 font-size: 13px;
@@ -87,7 +112,7 @@ export component Segmented inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
             }
-            touch := TouchArea { mouse-cursor: pointer; clicked => { root.selected = i; } }
+            touch := TouchArea { mouse-cursor: pointer; clicked => { root.selected = i; root.changed(i); } }
         }
     }
 }
@@ -95,11 +120,12 @@ export component Segmented inherits Rectangle {
 export component CheckBox inherits Rectangle {
     in-out property <bool> checked;
     in property <string> text;
+    callback toggled(bool);
     height: 24px;
     accessible-role: checkbox;
     accessible-label: text;
     accessible-checked: checked;
-    accessible-action-default => { checked = !checked; }
+    accessible-action-default => { checked = !checked; toggled(checked); }
     HorizontalLayout {
         spacing: 10px;
         alignment: start;
@@ -115,12 +141,14 @@ export component CheckBox inherits Rectangle {
         }
         Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; }
     }
-    TouchArea { mouse-cursor: pointer; clicked => { root.checked = !root.checked; } }
+    TouchArea { mouse-cursor: pointer; clicked => { root.checked = !root.checked; root.toggled(root.checked); } }
 }
 
 /// A drop-down list.
 export component Select inherits Rectangle {
     in property <[string]> options;
+    /// A second, smaller line under each option, if given.
+    in property <[string]> details;
     in property <string> label;
     in-out property <int> selected;
     height: 38px;
@@ -153,10 +181,15 @@ export component Select inherits Rectangle {
             VerticalLayout {
                 padding: 4px;
                 for option[i] in root.options: Rectangle {
-                    height: 32px;
+                    height: root.details.length > i ? 44px : 32px;
                     border-radius: 6px;
-                    background: item.has-hover ? Theme.sel-bg : transparent;
-                    Text { x: 10px; text: option; color: i == root.selected ? Theme.accent : Theme.text; font-size: 13px; vertical-alignment: center; }
+                    background: item.has-hover ? Theme.sel-bg : i == root.selected ? Theme.accent-soft-bg : transparent;
+                    VerticalLayout {
+                        padding-left: 10px;
+                        alignment: center;
+                        Text { text: option; color: Theme.text; font-size: 13px; }
+                        if root.details.length > i: Text { text: root.details[i]; color: Theme.muted; font-size: 11px; }
+                    }
                     item := TouchArea { mouse-cursor: pointer; clicked => { root.selected = i; } }
                 }
             }

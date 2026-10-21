@@ -7,6 +7,8 @@ use futures_util::StreamExt;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 mod config;
+mod editing;
+mod editor;
 mod instance;
 mod secrets;
 mod theme;
@@ -91,6 +93,11 @@ struct App {
     retry: Option<view::Command>,
     /// The message's bold first line.
     message_title: String,
+    /// The connection editor, when it's open.
+    editor: Option<editing::EditorState>,
+    add_open: bool,
+    hostname_open: bool,
+    hostname_error: String,
 }
 
 thread_local! {
@@ -179,11 +186,53 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_activate_selected(move || update(&weak, |app| act(app, "connect")));
     let weak = window.as_weak();
-    window.on_toggle(move |_| {
+    window.on_toggle(move |id| {
         update(&weak, |app| {
-            app.message_title.clear();
-            app.message = Some(("Changing this comes with the connection editor, in a later version.".into(), "info"));
+            let command = match (&app.snapshot, &app.ui.selected) {
+                (Some(snap), Some(selected)) => view::toggle_command(snap, selected, &id),
+                _ => None,
+            };
+            if let Some(command) = command {
+                send(app, command);
+            }
         })
+    });
+    editing::connect(window);
+    let weak = window.as_weak();
+    window.on_add_clicked(move || update(&weak, |app| app.add_open = true));
+    let weak = window.as_weak();
+    window.on_add_cancelled(move || update(&weak, |app| app.add_open = false));
+    let weak = window.as_weak();
+    window.on_add_chosen(move |kind| {
+        update(&weak, |app| {
+            app.add_open = false;
+            let kind = if kind == "wifi" { editor::Kind::Wifi } else { editor::Kind::Ethernet };
+            send(app, view::Command::OpenEditor { connection: None, new: Some(kind) });
+        })
+    });
+    let weak = window.as_weak();
+    window.on_hostname_clicked(move || {
+        let Some(window) = weak.upgrade() else { return };
+        let hostname = APP.with(|app| app.borrow().snapshot.as_ref().map(|s| s.hostname.clone()).unwrap_or_default());
+        window.set_hostname_input(hostname.into());
+        update(&weak, |app| {
+            app.hostname_open = true;
+            app.hostname_error.clear();
+        });
+    });
+    let weak = window.as_weak();
+    window.on_hostname_cancelled(move || update(&weak, |app| app.hostname_open = false));
+    let weak = window.as_weak();
+    window.on_hostname_save(move || {
+        let Some(window) = weak.upgrade() else { return };
+        let name = window.get_hostname_input().trim().to_owned();
+        update(&weak, |app| match hostname_problem(&name) {
+            Some(problem) => app.hostname_error = problem.into(),
+            None => {
+                app.hostname_open = false;
+                send(app, view::Command::SaveHostname(name));
+            }
+        });
     });
     let weak = window.as_weak();
     window.on_wifi_switched(move || {
@@ -229,6 +278,9 @@ fn connect_callbacks(window: &MainWindow) {
                 && let Some(device) = app.snapshot.as_ref().and_then(view::hidden_network_device)
             {
                 open_dialog(app, Dialog::Hidden { device });
+            } else if app.ui.page != view::Page::Wifi {
+                app.message_title.clear();
+                app.message = Some(("Importing connection files comes in the next version.".into(), "info"));
             }
         })
     });
@@ -269,6 +321,20 @@ fn connect_callbacks(window: &MainWindow) {
             next_prompt(app);
         })
     });
+}
+
+/// What's wrong with a hostname: letters, digits and hyphens, in dot-separated labels.
+fn hostname_problem(name: &str) -> Option<&'static str> {
+    if name.is_empty() || name.len() > 64 {
+        return Some("From 1 to 64 characters.");
+    }
+    let label_ok = |l: &str| {
+        !l.is_empty()
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    };
+    if name.split('.').all(label_ok) { None } else { Some("Letters, digits and hyphens only, such as thinkpad-x1.") }
 }
 
 fn open_dialog(app: &mut App, dialog: Dialog) {
@@ -429,6 +495,10 @@ fn render(window: &MainWindow) {
             .into(),
         );
         render_dialog(window, &mut app);
+        editing::render(window, &mut app);
+        window.set_add_open(app.add_open);
+        window.set_hostname_open(app.hostname_open);
+        window.set_hostname_error(app.hostname_error.as_str().into());
         app.row_ids = v.row_ids;
         // Keep a selection that went away (a network out of range) from sticking.
         app.ui.selected = v.selected;
@@ -514,7 +584,7 @@ fn spawn_network_manager(
                             Some(command) = commands.recv() => {
                                 let (client, weak, keyrings) = (client.clone(), weak.clone(), keyrings.clone());
                                 tokio::spawn(async move {
-                                    match run(&client, &keyrings, &command).await {
+                                    match run(&client, &keyrings, &weak, &command).await {
                                         Ok(Some((reason, retry))) => failed(&weak, reason, retry),
                                         Ok(None) => {}
                                         Err(error) => report(&weak, &command, &error),
@@ -588,10 +658,43 @@ impl secrets::Ui for AgentUi {
 async fn run(
     client: &vinculum_nm::Client,
     keyrings: &secrets::Keyrings,
+    weak: &slint::Weak<MainWindow>,
     command: &view::Command,
 ) -> Result<Option<(String, Option<view::Command>)>, vinculum_nm::Error> {
     use view::Command::*;
     let (active, device, retry) = match command {
+        OpenEditor { connection, new } => {
+            let settings = match connection {
+                Some(path) => client.settings(path).await?,
+                None => Default::default(),
+            };
+            let zones = client.firewall_zones().await;
+            let (path, new) = (connection.clone(), *new);
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                APP.with(|app| editing::open(&mut app.borrow_mut(), path, settings, zones, new));
+                render(&window);
+            });
+            return Ok(None);
+        }
+        SaveConnection { path, settings, secret, reapply } => {
+            let result =
+                save_connection(client, keyrings, path.as_deref(), &settings.0, secret.as_ref(), reapply.as_ref())
+                    .await;
+            let zones = client.firewall_zones().await;
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                APP.with(|app| editing::saved(&mut app.borrow_mut(), result, zones));
+                render(&window);
+            });
+            return Ok(None);
+        }
+        SetSetting { connection, setting, key, value } => {
+            let value = match value {
+                view::SettingValue::Bool(b) => zbus::zvariant::Value::from(*b),
+                view::SettingValue::I32(i) => zbus::zvariant::Value::from(*i),
+            };
+            return client.set_setting(connection, setting, key, value).await.map(|()| None);
+        }
+        SaveHostname(name) => return client.save_hostname(name).await.map(|()| None),
         SetWifi(on) => return client.set_wireless_enabled(*on).await.map(|()| None),
         SetAirplane(on) => return client.set_airplane(*on).await.map(|()| None),
         Rescan { device } => return client.request_scan(device).await.map(|()| None),
@@ -641,6 +744,54 @@ async fn run(
     })
 }
 
+/// Saves the editor's settings and gives the saved connection's path and settings back, or why
+/// it didn't work.
+async fn save_connection(
+    client: &vinculum_nm::Client,
+    keyrings: &secrets::Keyrings,
+    path: Option<&str>,
+    settings: &vinculum_nm::Settings,
+    secret: Option<&editing::KeyringSecret>,
+    reapply: Option<&(String, Option<String>)>,
+) -> Result<(String, vinculum_nm::Settings), String> {
+    let explain = |e: vinculum_nm::Error| {
+        match e {
+        vinculum_nm::Error::Denied(_) => {
+            "Not allowed: NetworkManager asks polkit first, and no polkit agent answered. Start one (for example hyprpolkitagent)."
+                .to_owned()
+        }
+        other => format!("Couldn't save: {other}."),
+    }
+    };
+    if let Some((uuid, key, name, password)) = secret {
+        match keyrings.get().await {
+            Some(keyring) => {
+                let entry = vinculum_keyring::Entry { uuid, setting: secrets::WIFI_SECURITY, key };
+                keyring
+                    .store(entry, name, password)
+                    .await
+                    .map_err(|e| format!("The keyring didn't take the password ({e})."))?;
+            }
+            None => return Err("No keyring is running for \"for me only\". Pick \"All users\" or start one.".into()),
+        }
+    }
+    let path = match path {
+        Some(path) => {
+            client.update(path, settings).await.map_err(explain)?;
+            path.to_owned()
+        }
+        None => client.add(settings).await.map_err(explain)?,
+    };
+    // Up already: apply it there too, or reconnect when that isn't possible.
+    if let Some((_, Some(device))) = reapply
+        && client.reapply(device).await.is_err()
+    {
+        client.activate(&path, Some(device), None).await.map_err(explain)?;
+    }
+    let saved = client.settings(&path).await.map_err(explain)?;
+    Ok((path, saved))
+}
+
 /// A connection attempt failed: mark its row, and offer "Try again".
 fn failed(weak: &slint::Weak<MainWindow>, reason: String, retry: Option<view::Command>) {
     let _ = weak.upgrade_in_event_loop(move |window| {
@@ -667,6 +818,10 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &vincu
         SetAirplane(false) => "Couldn't turn airplane mode off",
         Rescan { .. } => "Couldn't scan",
         Activate { .. } | ConnectOpen { .. } | Join { .. } => "Couldn't connect",
+        OpenEditor { .. } => "Couldn't read the connection",
+        SaveConnection { .. } => "Couldn't save the connection",
+        SetSetting { .. } => "Couldn't change the connection",
+        SaveHostname(_) => "Couldn't change the hostname",
         Deactivate { .. } => "Couldn't disconnect",
         Forget { .. } => "Couldn't forget the connection",
     };

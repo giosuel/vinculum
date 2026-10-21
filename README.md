@@ -5,7 +5,9 @@ A network manager for Linux desktops that don't come with one, such as Hyprland 
 [Slint](https://slint.dev). It drives NetworkManager over D-Bus.
 
 **Status:** in development. It connects to Wi-Fi (open, password-protected and hidden networks),
-wired and VPN connections, and keeps passwords in your keyring; editing connections comes next.
+wired and VPN connections, keeps passwords in your keyring, and edits connections: general
+settings, Wi-Fi, security, IPv4 and IPv6 (addresses, DNS, routes) and Ethernet. Enterprise
+(802.1X), WireGuard, OpenVPN and hotspots come next.
 
 ## Building
 
