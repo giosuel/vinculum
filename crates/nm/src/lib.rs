@@ -9,9 +9,10 @@ mod client;
 mod join;
 mod model;
 mod props;
+mod settings;
 mod wifi;
 
-pub use agent::{AgentConnection, AgentEvent, Refusal, SecretRequest};
+pub use agent::{AgentConnection, AgentEvent, Refusal, SecretRequest, Settings};
 pub use client::{Client, Error};
 pub use join::{KeyMgmt, Outcome, Storage, WifiJoin};
 pub use model::{
