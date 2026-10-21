@@ -162,7 +162,9 @@ pub fn spawn(quick: Quick, sink: impl Fn(Event) + Send + Sync + 'static) -> Opti
     let (updates, received) = std::sync::mpsc::channel::<Quick>();
     std::thread::spawn(move || {
         let tray = Tray { quick, sink: Arc::new(sink), pixmap: pixmap() };
-        let handle = match tray.spawn() {
+        // Registered by its unique bus name rather than org.kde.StatusNotifierItem-<pid>-<n>:
+        // a Flatpak sandbox doesn't let it own that name, and hosts take either.
+        let handle = match tray.disable_dbus_name(true).spawn() {
             Ok(handle) => handle,
             Err(error) => {
                 eprintln!("vinculum: no tray icon: {error}");
