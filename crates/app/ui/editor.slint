@@ -24,6 +24,59 @@ export struct IpFormUi {
     privacy: int,
     stable-privacy: bool,
 }
+export struct EapFormUi {
+    enabled: bool,
+    method: int,
+    phase2: int,
+    identity: string,
+    anonymous: string,
+    password: string,
+    storage: int,
+    system-ca: bool,
+    ca-cert: string,
+    client-cert: string,
+    private-key: string,
+    key-password: string,
+    domain: string,
+}
+export struct PeerRow {
+    public-key: string,
+    endpoint: string,
+    allowed-ips: [string],
+    allowed-input: string,
+    keepalive: string,
+    has-psk: bool,
+}
+export struct WgFormUi {
+    interface: string,
+    private-key: string,
+    listen-port: string,
+    fwmark: string,
+    peer-routes: bool,
+    peers: [PeerRow],
+}
+export struct OvpnFormUi {
+    gateway: string,
+    tcp: bool,
+    auth: int,
+    username: string,
+    password: string,
+    key-password: string,
+    storage: int,
+    ca: string,
+    cert: string,
+    key: string,
+    static-key: string,
+    tls-key: string,
+    tls-key-mode: int,
+    tls-key-direction: int,
+    cipher: string,
+    compression: int,
+    mtu: string,
+    fragment: string,
+    reneg: string,
+    tap: bool,
+}
 export struct EditorForm {
     name: string,
     autoconnect: bool,
@@ -52,6 +105,9 @@ export struct EditorForm {
     wol-broadcast: bool,
     ip4: IpFormUi,
     ip6: IpFormUi,
+    eap: EapFormUi,
+    wg: WgFormUi,
+    ovpn: OvpnFormUi,
 }
 export struct EditorErrors {
     name: string,
@@ -68,6 +124,16 @@ export struct EditorErrors {
     ip6-addresses: string,
     ip6-dns: string,
     ip6-routes: string,
+    eap-identity: string,
+    eap-secret: string,
+    eap-certs: string,
+    wg-interface: string,
+    wg-key: string,
+    wg-port: string,
+    peers: string,
+    ovpn-user: string,
+    ovpn-secret: string,
+    ovpn-files: string,
 }
 export struct EditorTab { id: string, label: string, errors: int }
 /// The choices that depend on the connection and the computer.
@@ -87,6 +153,19 @@ export struct EditorOptions {
     /// "Negotiated: 1000 Mb/s, full duplex".
     link: string,
     has-zones: bool,
+    eap-methods: [string],
+    phase2: [string],
+    /// WireGuard: the public key of the private key, and the saved private key once "Show" was
+    /// pressed.
+    wg-public-key: string,
+    wg-shown-key: string,
+    ovpn-auth: [string],
+    ovpn-tls-modes: [string],
+    ovpn-compression: [string],
+    /// A note at the top of the editor: what an import did.
+    banner: string,
+    /// Where passwords "for me only" go ("your keyring", "KWallet"), or "" without one.
+    keyring: string,
 }
 
 component Label inherits Text {
@@ -179,6 +258,158 @@ component RouteRows inherits VerticalLayout {
         HorizontalLayout { alignment: start; TextField { text <=> r.gateway; mono: true; width: 180px; label: "Gateway"; placeholder: "On-link"; edited => { root.edited(); } } }
         TextField { text <=> r.metric; mono: true; width: 80px; label: "Metric"; placeholder: "Auto"; edited => { root.edited(); } }
         Remove { y: (parent.height - self.height) / 2; label: "Remove the route"; clicked => { root.remove(i); } }
+    }
+}
+
+/// A file path: "Choose file…" (the desktop's file dialog), the path (which can be typed too),
+/// and a button to clear it.
+component FileRow inherits HorizontalLayout {
+    in-out property <string> path;
+    in property <string> label;
+    in property <bool> invalid;
+    callback choose();
+    spacing: 8px;
+    alignment: start;
+    Button { label: "Choose file…"; button-height: 36px; horizontal-stretch: 0; clicked => { root.choose(); } }
+    TextField { text <=> root.path; mono: true; width: 400px; label: root.label; placeholder: "or type the path"; invalid: root.invalid; }
+    if root.path != "": Remove { y: (parent.height - self.height) / 2; label: "Clear " + root.label; clicked => { root.path = ""; } }
+}
+
+/// Where a password is kept, with what that means.
+component Storage inherits VerticalLayout {
+    in-out property <int> storage;
+    in property <string> keyring;
+    spacing: 6px;
+    HorizontalLayout { alignment: start; Segmented { options: ["For me only", "All users", "Ask each time"]; selected <=> root.storage; label: "Remember the password"; } }
+    Hint {
+        text: root.storage == 0
+            ? (root.keyring != "" ? "Kept in " + root.keyring + ". No admin password needed." : "No keyring is running, so NetworkManager keeps it; only you can use the connection.")
+            : root.storage == 1 ? "NetworkManager keeps it for everyone on this computer. Needs an admin password." : "Not saved: you're asked each time you connect.";
+    }
+}
+
+/// 802.1X sign-in: Enterprise Wi-Fi, or the wired 802.1X tab.
+component EapPage inherits VerticalLayout {
+    in-out property <EapFormUi> eap;
+    in property <EditorOptions> options;
+    in property <EditorErrors> errors;
+    in property <bool> new;
+    callback choose-file(string);
+    property <bool> tls: root.eap.method == 2;
+    property <bool> tunnelled: root.eap.method <= 1;
+    spacing: 18px;
+    Row {
+        label: "Authentication";
+        label-top: 12px;
+        HorizontalLayout { alignment: start; Segmented { options: root.options.eap-methods; selected <=> root.eap.method; label: "Authentication"; } }
+    }
+    if root.tunnelled: Row {
+        label: "Inner authentication";
+        HorizontalLayout { alignment: start; Select { options: root.options.phase2; selected <=> root.eap.phase2; label: "Inner authentication"; width: 240px; } }
+    }
+    Row {
+        label: root.tls ? "Identity" : "Username";
+        HorizontalLayout { alignment: start; TextField { text <=> root.eap.identity; width: 360px; label: "Username"; invalid: root.errors.eap-identity != ""; } }
+        if root.errors.eap-identity != "": Error { text: root.errors.eap-identity; }
+    }
+    if !root.tls: Row {
+        label: "Password";
+        HorizontalLayout { alignment: start; TextField { text <=> root.eap.password; password: true; width: 360px; label: "Password"; placeholder: root.new ? "" : "Saved; type to change it"; invalid: root.errors.eap-secret != ""; } }
+        if root.errors.eap-secret != "": Error { text: root.errors.eap-secret; }
+        Storage { storage <=> root.eap.storage; keyring: root.options.keyring; }
+    }
+    if root.tunnelled: Row {
+        label: "Anonymous identity";
+        HorizontalLayout { alignment: start; TextField { text <=> root.eap.anonymous; width: 360px; label: "Anonymous identity"; placeholder: "anonymous@example.org"; } }
+    }
+    if root.tls: Row {
+        label: "User certificate";
+        FileRow { path <=> root.eap.client-cert; label: "User certificate"; invalid: root.errors.eap-certs != ""; choose => { root.choose-file("eap.client-cert"); } }
+    }
+    if root.tls: Row {
+        label: "Private key";
+        FileRow { path <=> root.eap.private-key; label: "Private key"; invalid: root.errors.eap-certs != ""; choose => { root.choose-file("eap.private-key"); } }
+        if root.errors.eap-certs != "": Error { text: root.errors.eap-certs; }
+    }
+    if root.tls: Row {
+        label: "Private key password";
+        HorizontalLayout { alignment: start; TextField { text <=> root.eap.key-password; password: true; width: 360px; label: "Private key password"; placeholder: "None, or saved"; } }
+        Storage { storage <=> root.eap.storage; keyring: root.options.keyring; }
+    }
+    Row {
+        label: "CA certificate";
+        label-top: 2px;
+        CheckBox { checked <=> root.eap.system-ca; text: "Use the system's certificates"; }
+        FileRow { path <=> root.eap.ca-cert; label: "CA certificate"; choose => { root.choose-file("eap.ca-cert"); } }
+        if !root.eap.system-ca && root.eap.ca-cert == "": Hint { text: "Without a CA certificate, any server is believed. Choose one, or the system's."; color: Theme.warn-text; }
+    }
+    Row {
+        label: "Server domain";
+        HorizontalLayout { alignment: start; TextField { text <=> root.eap.domain; mono: true; width: 360px; label: "Server domain"; placeholder: "radius.example.org"; } }
+        Hint { text: "Checked against the server's certificate, so a fake access point can't take your password."; }
+    }
+}
+
+/// One WireGuard peer, as a card.
+component PeerCard inherits Rectangle {
+    in-out property <PeerRow> peer;
+    in property <int> index;
+    callback remove();
+    callback edited();
+    callback add-allowed();
+    callback remove-allowed(int);
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.border2;
+    height: card.preferred-height;
+    card := VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        HorizontalLayout {
+            Text {
+                text: root.peer.endpoint != "" ? root.peer.endpoint : "Peer " + (root.index + 1);
+                color: Theme.text;
+                font-weight: 600;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Text {
+                text: "Remove peer";
+                color: Theme.danger;
+                font-size: 13px;
+                horizontal-stretch: 0;
+                TouchArea { mouse-cursor: pointer; clicked => { root.remove(); } }
+            }
+        }
+        for row[r] in [
+            { label: "Public key" }, { label: "Endpoint" }, { label: "Allowed IPs" }, { label: "Keepalive" },
+        ]: HorizontalLayout {
+            spacing: 0px;
+            Text { text: row.label; color: Theme.text; font-size: 13px; width: 180px; vertical-alignment: center; }
+            if r == 0: HorizontalLayout { alignment: start; TextField { text <=> root.peer.public-key; mono: true; width: 440px; label: "Public key"; edited => { root.edited(); } } }
+            if r == 1: HorizontalLayout { alignment: start; TextField { text <=> root.peer.endpoint; mono: true; width: 300px; label: "Endpoint"; placeholder: "None (the peer connects to you)"; edited => { root.edited(); } } }
+            if r == 2: HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                for ip[j] in root.peer.allowed-ips: Rectangle {
+                    height: 34px;
+                    width: t.preferred-width + 40px;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.ctrl-border;
+                    background: Theme.ctrl-bg;
+                    t := Text { x: 10px; text: ip; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; height: parent.height; }
+                    Remove { x: parent.width - 30px; y: 3px; label: "Remove " + ip; clicked => { root.remove-allowed(j); } }
+                }
+                TextField { text <=> root.peer.allowed-input; mono: true; width: 140px; height: 34px; label: "Add an allowed range"; placeholder: "Add range"; accepted => { root.add-allowed(); } }
+            }
+            if r == 3: HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                TextField { text <=> root.peer.keepalive; mono: true; width: 80px; label: "Keepalive"; placeholder: "Off"; edited => { root.edited(); } }
+                Hint { text: "seconds · pre-shared key: " + (root.peer.has-psk ? "set" : "none"); vertical-alignment: center; }
+            }
+        }
     }
 }
 
@@ -336,6 +567,11 @@ export component Editor inherits Rectangle {
     callback add-dns(string);
     callback edit-routes(string);
     callback routes-done(bool);
+    callback choose-file(string);
+    callback wg-generate();
+    callback wg-show-key();
+    callback wg-export();
+    callback add-allowed(int);
 
     changed form => { root.form-edited(); }
 
@@ -435,6 +671,14 @@ export component Editor inherits Rectangle {
                 padding-top: 22px;
                 spacing: 18px;
                 alignment: start;
+                if root.options.banner != "": Rectangle {
+                    height: banner-text.preferred-height + 20px;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.accent-soft-border;
+                    background: Theme.accent-soft-bg;
+                    banner-text := Text { x: 12px; width: parent.width - 24px; text: root.options.banner; color: Theme.text; font-size: 13px; wrap: word-wrap; vertical-alignment: center; }
+                }
                 if root.tab == "general": VerticalLayout {
                     spacing: 18px;
                     Row {
@@ -544,8 +788,12 @@ export component Editor inherits Rectangle {
                         label-top: 12px;
                         HorizontalLayout { alignment: start; Segmented { options: ["For me only", "All users", "Ask each time"]; selected <=> root.form.storage; label: "Remember the password"; width: 400px; } }
                     }
-                    if root.form.security >= 5: Hint {
-                        text: "Enterprise (802.1X) settings get their own editor in the next version. Until then they stay as they are.";
+                    if root.form.security >= 5: EapPage {
+                        eap <=> root.form.eap;
+                        options: root.options;
+                        errors: root.errors;
+                        new: root.new;
+                        choose-file(field) => { root.choose-file(field); }
                     }
                 }
                 if root.tab == "ethernet": VerticalLayout {
@@ -599,6 +847,207 @@ export component Editor inherits Rectangle {
                             CheckBox { checked <=> root.form.wol-broadcast; text: "Broadcast"; }
                         }
                     }
+                }
+                if root.tab == "8021x": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "802.1X";
+                        label-top: 2px;
+                        CheckBox { checked <=> root.form.eap.enabled; text: "Sign in to the network with 802.1X"; }
+                        Hint { text: "For office and university networks that ask for a username or certificate on the cable."; }
+                    }
+                    if root.form.eap.enabled: EapPage {
+                        eap <=> root.form.eap;
+                        options: root.options;
+                        errors: root.errors;
+                        new: root.new;
+                        choose-file(field) => { root.choose-file(field); }
+                    }
+                }
+                if root.tab == "wireguard": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "Interface name";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.wg.interface; mono: true; width: 240px; label: "Interface name"; invalid: root.errors.wg-interface != ""; } }
+                        if root.errors.wg-interface != "": Error { text: root.errors.wg-interface; }
+                    }
+                    Row {
+                        label: "Private key";
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+                            TextField {
+                                text <=> root.form.wg.private-key;
+                                password: root.options.wg-shown-key == "";
+                                mono: true;
+                                width: 400px;
+                                label: "Private key";
+                                placeholder: root.options.wg-shown-key != "" ? root.options.wg-shown-key : root.new ? "" : "Saved; generate or paste to change it";
+                                invalid: root.errors.wg-key != "";
+                            }
+                            if !root.new && root.options.wg-shown-key == "": Button { label: "Show"; button-height: 36px; horizontal-stretch: 0; clicked => { root.wg-show-key(); } }
+                            Button { label: "Generate"; button-height: 36px; horizontal-stretch: 0; clicked => { root.wg-generate(); } }
+                        }
+                        if root.errors.wg-key != "": Error { text: root.errors.wg-key; }
+                    }
+                    if root.options.wg-public-key != "": Row {
+                        label: "Public key";
+                        label-top: 10px;
+                        HorizontalLayout {
+                            alignment: start;
+                            Rectangle {
+                                width: 440px;
+                                height: 36px;
+                                pub := TextInput {
+                                    text: root.options.wg-public-key;
+                                    read-only: true;
+                                    color: Theme.text;
+                                    font-family: "JetBrains Mono";
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                }
+                            }
+                        }
+                        Hint { text: "Give this to the other side; select it to copy."; }
+                    }
+                    Row {
+                        label: "Listen port";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.wg.listen-port; mono: true; width: 120px; label: "Listen port"; placeholder: "Any"; invalid: root.errors.wg-port != ""; } }
+                        if root.errors.wg-port != "": Error { text: root.errors.wg-port; }
+                    }
+                    Row {
+                        label: "MTU";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.mtu; mono: true; width: 120px; label: "MTU"; placeholder: "Automatic"; invalid: root.errors.mtu != ""; } }
+                        if root.errors.mtu != "": Error { text: root.errors.mtu; }
+                    }
+                    Row {
+                        label: "Firewall mark";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.wg.fwmark; mono: true; width: 120px; label: "Firewall mark"; placeholder: "None"; } }
+                    }
+                    Row {
+                        label: "Routes";
+                        label-top: 2px;
+                        CheckBox { checked <=> root.form.wg.peer-routes; text: "Add routes for each peer's allowed IPs"; }
+                    }
+                    if !root.new: Row {
+                        label: "Configuration file";
+                        label-top: 8px;
+                        HorizontalLayout { alignment: start; Button { label: "Export .conf…"; button-height: 34px; horizontal-stretch: 0; clicked => { root.wg-export(); } } }
+                    }
+                }
+                if root.tab == "peers": VerticalLayout {
+                    spacing: 12px;
+                    for p[i] in root.form.wg.peers: PeerCard {
+                        peer <=> p;
+                        index: i;
+                        remove => { root.remove-row("peer", i); }
+                        edited => { root.form-edited(); }
+                        add-allowed => { root.add-allowed(i); }
+                        remove-allowed(j) => { root.remove-row("peer-ip:" + i, j); }
+                    }
+                    if root.errors.peers != "": Error { text: root.errors.peers; }
+                    if root.form.wg.peers.length == 0: Hint { text: "No peers yet: add the server (or the other computer) you connect to."; }
+                    HorizontalLayout { alignment: start; AddButton { label: "Add peer"; clicked => { root.add-row("peer"); } } }
+                }
+                if root.tab == "openvpn": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "Gateway";
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            TextField { text <=> root.form.ovpn.gateway; mono: true; width: 300px; label: "Gateway"; placeholder: "vpn.example.org:1194"; invalid: root.errors.ovpn-files != "" && root.form.ovpn.gateway == ""; }
+                            Segmented { options: ["UDP", "TCP"]; selected: root.form.ovpn.tcp ? 1 : 0; label: "Protocol"; changed(i) => { root.form.ovpn.tcp = i == 1; } }
+                        }
+                        Hint { text: "Host and port. Several, separated by commas, are tried in turn."; }
+                    }
+                    Row {
+                        label: "Authentication";
+                        label-top: 12px;
+                        HorizontalLayout { alignment: start; Segmented { options: root.options.ovpn-auth; selected <=> root.form.ovpn.auth; label: "Authentication"; } }
+                    }
+                    if root.form.ovpn.auth == 0 || root.form.ovpn.auth == 2: Row {
+                        label: "Username";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.ovpn.username; width: 360px; label: "Username"; invalid: root.errors.ovpn-user != ""; } }
+                        if root.errors.ovpn-user != "": Error { text: root.errors.ovpn-user; }
+                    }
+                    if root.form.ovpn.auth == 0 || root.form.ovpn.auth == 2: Row {
+                        label: "Password";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.ovpn.password; password: true; width: 360px; label: "Password"; placeholder: root.new ? "Asked when you connect" : "Saved, or asked; type to change it"; } }
+                        Storage { storage <=> root.form.ovpn.storage; keyring: root.options.keyring; }
+                    }
+                    if root.form.ovpn.auth == 1 || root.form.ovpn.auth == 2: Row {
+                        label: "User certificate";
+                        FileRow { path <=> root.form.ovpn.cert; label: "User certificate"; invalid: root.errors.ovpn-files != ""; choose => { root.choose-file("ovpn.cert"); } }
+                    }
+                    if root.form.ovpn.auth == 1 || root.form.ovpn.auth == 2: Row {
+                        label: "Private key";
+                        FileRow { path <=> root.form.ovpn.key; label: "Private key"; invalid: root.errors.ovpn-files != ""; choose => { root.choose-file("ovpn.key"); } }
+                    }
+                    if root.form.ovpn.auth == 1: Row {
+                        label: "Private key password";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.ovpn.key-password; password: true; width: 360px; label: "Private key password"; placeholder: "None, or saved"; } }
+                        Storage { storage <=> root.form.ovpn.storage; keyring: root.options.keyring; }
+                    }
+                    if root.form.ovpn.auth == 3: Row {
+                        label: "Static key";
+                        FileRow { path <=> root.form.ovpn.static-key; label: "Static key"; invalid: root.errors.ovpn-files != ""; choose => { root.choose-file("ovpn.static-key"); } }
+                    }
+                    if root.form.ovpn.auth != 3: Row {
+                        label: "CA certificate";
+                        FileRow { path <=> root.form.ovpn.ca; label: "CA certificate"; choose => { root.choose-file("ovpn.ca"); } }
+                        Hint { text: "The certificate the server's is checked against (.crt, .pem)."; }
+                    }
+                    if root.errors.ovpn-files != "": Error { text: root.errors.ovpn-files; }
+                    Hint { text: "These are NetworkManager-openvpn's own settings, so connections made with nmcli or nm-connection-editor show up here unchanged."; }
+                }
+                if root.tab == "advanced": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "TLS key";
+                        FileRow { path <=> root.form.ovpn.tls-key; label: "TLS key"; choose => { root.choose-file("ovpn.tls-key"); } }
+                        if root.form.ovpn.tls-key != "": HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            Segmented { options: root.options.ovpn-tls-modes; selected <=> root.form.ovpn.tls-key-mode; label: "How the TLS key is used"; }
+                            if root.form.ovpn.tls-key-mode == 0: Segmented { options: ["No direction", "0", "1"]; selected <=> root.form.ovpn.tls-key-direction; label: "Key direction"; }
+                        }
+                    }
+                    Row {
+                        label: "Cipher";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.ovpn.cipher; mono: true; width: 240px; label: "Cipher"; placeholder: "Automatic"; } }
+                    }
+                    Row {
+                        label: "Compression";
+                        label-top: 12px;
+                        HorizontalLayout { alignment: start; Segmented { options: root.options.ovpn-compression; selected <=> root.form.ovpn.compression; label: "Compression"; } }
+                        if root.form.ovpn.compression != 0: Hint { text: "Compression over a VPN can leak what you send (VORACLE); use it only when the server needs it."; color: Theme.warn-text; }
+                    }
+                    Row {
+                        label: "MTU and fragments";
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            TextField { text <=> root.form.ovpn.mtu; mono: true; width: 110px; label: "Tunnel MTU"; placeholder: "1500"; }
+                            TextField { text <=> root.form.ovpn.fragment; mono: true; width: 110px; label: "Fragment size"; placeholder: "No"; }
+                        }
+                    }
+                    Row {
+                        label: "Renegotiate keys every";
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            TextField { text <=> root.form.ovpn.reneg; mono: true; width: 110px; label: "Renegotiation"; placeholder: "3600"; }
+                            Hint { text: "seconds"; vertical-alignment: center; }
+                        }
+                    }
+                    Row {
+                        label: "Device";
+                        label-top: 2px;
+                        CheckBox { checked <=> root.form.ovpn.tap; text: "Use a TAP device (layer 2) instead of TUN"; }
+                    }
+                    Hint { text: "To send only the VPN's own network through it, see \"Use this connection only for resources on its network\" under IPv4 and IPv6 → Edit routes."; }
                 }
                 if root.tab == "ipv4": IpPage {
                     v6: false;
