@@ -106,7 +106,15 @@ Addresses, gateway, DNS, link speed, channel, and how much has been received and
 chmod +x Vinculum-*-x86_64.AppImage && ./Vinculum-*-x86_64.AppImage
 ```
 
-Every release also has ARM64 builds. All of them need NetworkManager. Optional: NetworkManager's
+**Flatpak** – `Vinculum-*-linux-x64.flatpak` from the same release (the runtime comes from Flathub):
+
+```sh
+flatpak install --user ./Vinculum-*-linux-x64.flatpak && flatpak run ch.giosuel.Vinculum
+```
+
+What the sandbox allows, and what works differently in it, is in [`packaging/flatpak/`](packaging/flatpak/README.md).
+
+Every release also has ARM64 builds (except the Flatpak). All of them need NetworkManager. Optional: NetworkManager's
 OpenVPN plugin (`networkmanager-openvpn` on Arch) for OpenVPN, an XDG desktop portal with a file
 dialog (`xdg-desktop-portal-gtk`, say) for choosing certificates and VPN files, and a keyring.
 

@@ -1,0 +1,51 @@
+id: ch.giosuel.Vinculum
+# Slint draws everything itself, so the plain freedesktop runtime is enough (no GTK, no Qt).
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: vinculum
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # NetworkManager, on the system bus: everything the app shows and changes.
+  - --system-talk-name=org.freedesktop.NetworkManager
+  # Passwords kept "for me only": GNOME Keyring (Secret Service), or KWallet.
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.kde.kwalletd6
+  - --talk-name=org.kde.kwalletd5
+  # Connected / disconnected / failed notifications.
+  - --talk-name=org.freedesktop.Notifications
+  # The tray icon (StatusNotifierItem), registered with the bar's tray.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # The colours ML4W's matugen writes, and your own colours file. Read-only.
+  - --filesystem=xdg-config/ml4w/colors:ro
+  - --filesystem=xdg-config/vinculum:ro
+  # Certificates and keys from imported VPN files, where NetworkManager can read them.
+  - --filesystem=xdg-data/vinculum:create
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+modules:
+  - name: vinculum
+    buildsystem: simple
+    build-options:
+      env:
+        CARGO_HOME: /run/build/vinculum/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release --locked -p vinculum
+      - install -Dm755 target/release/vinculum -t /app/bin
+      - install -Dm644 packaging/linux/ch.giosuel.Vinculum.desktop -t /app/share/applications
+      - install -Dm644 packaging/linux/ch.giosuel.Vinculum.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 packaging/linux/icons/ch.giosuel.Vinculum.svg -t /app/share/icons/hicolor/scalable/apps
+      # The fonts built into the binary come with their licence (SIL Open Font License).
+      - install -Dm644 crates/app/ui/fonts/*-LICENSE.txt -t /app/share/licenses/ch.giosuel.Vinculum
+    sources:
+      # flathub-manifest.sh swaps this for the git tag of a release.
+      - type: dir
+        path: ../..
+        skip: [target, dist, .flatpak-builder, .git, website/node_modules, website/dist]
+      - cargo-sources.json

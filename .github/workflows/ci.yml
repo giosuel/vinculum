@@ -79,6 +79,9 @@ jobs:
         run: rustup toolchain install
       - name: Every crate version in Cargo.lock is at least 14 days old
         run: cargo xtask dep-age
+      # The Flatpak builds offline from this list; its build only runs on packaging changes.
+      - name: The Flatpak's crate list matches Cargo.lock
+        run: python3 -I packaging/flatpak/check-cargo-sources.py
 
   metadata:
     name: metadata (desktop file, AppStream)
