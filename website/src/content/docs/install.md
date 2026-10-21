@@ -7,6 +7,15 @@ Every release has packages for x86-64 and ARM64 Linux on its
 [GitHub release page](https://github.com/giosuel/vinculum/releases). They're built on Debian 12,
 so they run on Debian 12, Ubuntu 22.04, and anything newer.
 
+Besides NetworkManager, some features use packages you may want:
+
+- **OpenVPN** needs NetworkManager's OpenVPN plugin: `networkmanager-openvpn` (Arch),
+  `network-manager-openvpn` (Debian, Ubuntu), `NetworkManager-openvpn` (Fedora).
+- **Choosing files** (certificates, `.conf` and `.ovpn` files) opens your desktop's file dialog
+  through the XDG desktop portal. On Hyprland that's `xdg-desktop-portal-gtk` (or `-kde`) next to
+  `xdg-desktop-portal-hyprland`. Without one, type the path instead.
+- **Passwords "for me only"** go to GNOME Keyring, KWallet or another Secret Service keyring.
+
 ## Arch Linux (AUR)
 
 ```sh
