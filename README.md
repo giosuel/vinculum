@@ -21,6 +21,26 @@ The app ID is `ch.giosuel.Vinculum`, so Hyprland window rules can match it:
 windowrule = float, class:^(ch\.giosuel\.Vinculum)$
 ```
 
+## Testing
+
+```sh
+scripts/test.sh
+```
+
+runs every test, including the ones against a mock NetworkManager (python-dbusmock on a private
+bus, so the real one is never touched). It needs `dbus-daemon` and python-dbusmock
+(`apt install python3-dbusmock`, or `pip install python-dbusmock` in a venv with
+`VINCULUM_PYTHON` pointing at its `python`), and fails rather than skipping them when they're
+missing.
+
+`scripts/mock-nm.sh COMMAND` runs any command against the same mock, filled with the networks from
+the mockups, for example the debug tool that prints what Vinculum reads from NetworkManager:
+
+```sh
+cargo build -p vinculum-cli
+scripts/mock-nm.sh target/debug/vinculum-cli list   # or: target/debug/vinculum-cli list, for the real one
+```
+
 ## Versions
 
 The version comes from the git tags (`scripts/version.sh`): `Cargo.toml` always says `0.0.0-dev`,
