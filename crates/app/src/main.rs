@@ -20,6 +20,7 @@ mod secrets;
 mod theme;
 mod tray;
 mod view;
+mod virt;
 mod wireguard;
 
 slint::include_modules!();
@@ -601,7 +602,14 @@ fn connect_callbacks(window: &MainWindow) {
                 "wifi" => editor::Kind::Wifi,
                 "wireguard" => editor::Kind::WireGuard,
                 "openvpn" => editor::Kind::OpenVpn,
+                "vlan" => editor::Kind::Vlan,
+                "bridge" => editor::Kind::Bridge,
+                "bond" => editor::Kind::Bond,
                 "import" => return send(app, view::Command::ImportFile),
+                "hotspot" => {
+                    app.ui = view::UiState { page: view::Page::Hotspot, ..view::UiState::default() };
+                    return open_hotspot(app);
+                }
                 _ => editor::Kind::Ethernet,
             };
             send(app, view::Command::OpenEditor { connection: None, new: Some(kind) });
@@ -1218,10 +1226,17 @@ async fn run(
             }
             return Ok(None);
         }
-        SaveConnection { path, settings, secret, reapply } => {
+        SaveConnection { path, settings, secret, reapply, ports } => {
             let result =
                 save_connection(client, keyrings, path.as_deref(), &settings.0, secret.as_ref(), reapply.as_ref())
                     .await;
+            let result = match (result, ports) {
+                (Ok((path, saved)), Some(plan)) => {
+                    save_ports(client, &saved, plan).await.map(|added| (path, saved, added))
+                }
+                (Ok((path, saved)), None) => Ok((path, saved, Vec::new())),
+                (Err(e), _) => Err(e),
+            };
             let zones = client.firewall_zones().await;
             let _ = weak.upgrade_in_event_loop(move |window| {
                 APP.with(|app| editing::saved(&mut app.borrow_mut(), result, zones));
@@ -1475,6 +1490,34 @@ async fn import_file(client: &vinculum_nm::Client, weak: &slint::Weak<MainWindow
 
 /// Saves the editor's settings and gives the saved connection's path and settings back, or why
 /// it didn't work.
+/// Adds a bridge's or bond's new ports and deletes the ones let go; the new ports' (interface,
+/// connection) come back.
+async fn save_ports(
+    client: &vinculum_nm::Client,
+    controller: &vinculum_nm::Settings,
+    plan: &virt::PortPlan,
+) -> Result<Vec<(String, String)>, String> {
+    let uuid = controller
+        .get("connection")
+        .and_then(|c| c.get("uuid"))
+        .and_then(|u| <&str>::try_from(&**u).ok())
+        .unwrap_or_default()
+        .to_owned();
+    for path in &plan.remove {
+        client.forget(path).await.map_err(|e| format!("Saved, but a port couldn't be let go: {e}."))?;
+    }
+    let mut added = Vec::new();
+    for interface in &plan.add {
+        let settings = virt::port_settings(plan, &uuid, interface, &secrets::new_uuid());
+        let path = client
+            .add(&settings)
+            .await
+            .map_err(|e| format!("Saved, but {interface} couldn't be added as a port: {e}."))?;
+        added.push((interface.clone(), path));
+    }
+    Ok(added)
+}
+
 async fn save_connection(
     client: &vinculum_nm::Client,
     keyrings: &secrets::Keyrings,

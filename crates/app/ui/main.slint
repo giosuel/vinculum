@@ -12,13 +12,14 @@ import { Icon, SignalBars, Logo } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel, Kbd } from "controls.slint";
 import { JoinDialog, TextField, Segmented } from "dialogs.slint";
 import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
-import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi } from "editor.slint";
+import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi }
+export { Theme, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool }
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
-export struct Row { id: string, name: string, meta: string, tone: string, icon: string, bars: int, secure: bool, selected: bool }
+/// indent: a port under its bridge or bond, or a VLAN under its device.
+export struct Row { id: string, name: string, meta: string, tone: string, icon: string, bars: int, secure: bool, selected: bool, indent: bool }
 export struct Section { title: string, rows: [Row] }
 /// kind: "primary", "secondary", "danger".
 export struct Action { id: string, label: string, kind: string, enabled: bool }
@@ -74,7 +75,7 @@ component ListRow inherits Rectangle {
     accessible-item-selected: entry.selected;
     accessible-action-default => { clicked(); }
     HorizontalLayout {
-        padding-left: 10px;
+        padding-left: root.entry.indent ? 34px : 10px;
         padding-right: 10px;
         spacing: 12px;
         if root.entry.icon == "bars": SignalBars { bars: root.entry.bars; y: (parent.height - 14px) / 2; }
@@ -239,6 +240,8 @@ export component MainWindow inherits Window {
     in property <string> editor-footer;
     in property <string> editor-footer-tone: "muted";
     in property <string> editor-routes;
+    in property <bool> editor-ports-open;
+    callback editor-port-chosen(string);
     // "Add a connection", and the hostname dialog.
     in property <bool> add-open;
     in property <bool> hostname-open;
@@ -866,6 +869,8 @@ export component MainWindow inherits Window {
         footer: root.editor-footer;
         footer-tone: root.editor-footer-tone;
         routes-open: root.editor-routes;
+        ports-open: root.editor-ports-open;
+        port-chosen(interface) => { root.editor-port-chosen(interface); }
         back => { root.editor-back(); keys.focus(); }
         apply => { root.editor-apply(); }
         revert => { root.editor-revert(); }
@@ -886,7 +891,7 @@ export component MainWindow inherits Window {
         background: #05060799;
         TouchArea { clicked => { root.add-cancelled(); } }
         Rectangle {
-            width: 620px;
+            width: 660px;
             height: add-form.preferred-height;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
@@ -903,16 +908,26 @@ export component MainWindow inherits Window {
                 Text { text: "Add a connection"; color: Theme.text; font-size: 17px; font-weight: 600; }
                 GridLayout {
                     spacing: 10px;
+                    for group[g] in ["NETWORKS", "VPN", "VIRTUAL INTERFACES"]: SectionLabel {
+                        text: group;
+                        col: 0;
+                        colspan: 3;
+                        row: g * 2;
+                    }
                     for kind[i] in [
-                        { id: "wifi", icon: "wifi", title: "Wi-Fi", text: "A network to join, including hidden ones", ready: true },
-                        { id: "wired", icon: "wired", title: "Wired", text: "Ethernet with DHCP or static addresses", ready: true },
-                        { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Built into NetworkManager. Start empty, or import a .conf file", ready: true },
-                        { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "From an .ovpn file or by hand (NetworkManager-openvpn)", ready: true },
-                        { id: "hotspot", icon: "hotspot", title: "Hotspot", text: "Comes in the next version", ready: false },
-                        { id: "import", icon: "saved", title: "Import from file…", text: "A WireGuard .conf or an OpenVPN .ovpn", ready: true },
+                        { id: "wifi", icon: "wifi", title: "Wi-Fi", text: "Hidden and Enterprise (802.1X) too", ready: true },
+                        { id: "wired", icon: "wired", title: "Wired", text: "Ethernet, DHCP or static", ready: true },
+                        { id: "hotspot", icon: "hotspot", title: "Hotspot", text: "Share a connection over Wi-Fi", ready: true },
+                        { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Built in. Empty or from a .conf", ready: true },
+                        { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "By hand or from an .ovpn", ready: true },
+                        { id: "import", icon: "saved", title: "Import from file…", text: "A .conf or an .ovpn", ready: true },
+                        { id: "vlan", icon: "vlan", title: "VLAN", text: "A tagged network on a wired device", ready: true },
+                        { id: "bridge", icon: "bridge", title: "Bridge", text: "Join devices into one network, e.g. for VMs", ready: true },
+                        { id: "bond", icon: "bond", title: "Bond", text: "Combine devices for failover or speed", ready: true },
                     ]: Rectangle {
-                        col: mod(i, 2);
-                        row: floor(i / 2);
+                        col: mod(i, 3);
+                        row: floor(i / 3) * 2 + 1;
+                        width: 196px;
                         height: 76px;
                         border-radius: 10px;
                         border-width: 1px;

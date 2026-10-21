@@ -11,8 +11,8 @@ use zbus::{Connection, DBusError, MatchRule, MessageStream};
 
 use crate::BUS_NAME;
 use crate::model::{
-    AccessPoint, ActiveConnection, ConnectionKind, Device, DeviceKind, IpConfig, SavedConnection, Snapshot, WifiDevice,
-    WiredDevice,
+    AccessPoint, ActiveConnection, ConnectionKind, Device, DeviceKind, IpConfig, Port, SavedConnection, Snapshot,
+    WifiDevice, WiredDevice,
 };
 use crate::props::{Props, bytes};
 use crate::wifi::Security;
@@ -391,7 +391,30 @@ impl Client {
             "802-3-ethernet" => ConnectionKind::Ethernet,
             "wireguard" => ConnectionKind::WireGuard,
             "vpn" => ConnectionKind::Vpn { service: string("vpn", "service-type").unwrap_or_default() },
+            // NetworkManager turns spanning tree on unless told otherwise.
+            "bridge" => ConnectionKind::Bridge {
+                stp: get("bridge", "stp").and_then(|v| bool::try_from(&**v).ok()).unwrap_or(true),
+            },
+            "bond" => ConnectionKind::Bond {
+                mode: get("bond", "options")
+                    .and_then(|v| <HashMap<String, String>>::try_from(v.clone()).ok())
+                    .and_then(|o| o.get("mode").cloned())
+                    .unwrap_or_else(|| "balance-rr".into()),
+            },
+            "vlan" => ConnectionKind::Vlan {
+                parent: string("vlan", "parent").unwrap_or_default(),
+                id: get("vlan", "id").and_then(|v| u32::try_from(&**v).ok()).unwrap_or(0),
+            },
             other => ConnectionKind::Other(other.to_owned()),
+        };
+        // Newer NetworkManager says controller and port-type; both are kept in step.
+        let controller = string("connection", "controller").or_else(|| string("connection", "master"));
+        let port_type = string("connection", "port-type").or_else(|| string("connection", "slave-type"));
+        let port = match (controller, port_type) {
+            (Some(controller), Some(kind)) if !controller.is_empty() && !kind.is_empty() => {
+                Some(Port { controller, kind })
+            }
+            _ => None,
         };
         Ok(SavedConnection {
             path: path.to_owned(),
@@ -405,6 +428,7 @@ impl Client {
                 .unwrap_or(0),
             interface: string("connection", "interface-name").filter(|i| !i.is_empty()),
             hotspot: string("802-11-wireless", "mode").as_deref() == Some("ap"),
+            port,
             // NMMetered: 1 yes, 2 no, 3 guessed yes, 4 guessed no; 0 (unknown) means automatic.
             metered: match get("connection", "metered").and_then(|v| i32::try_from(&**v).ok()) {
                 Some(1 | 3) => Some(true),
