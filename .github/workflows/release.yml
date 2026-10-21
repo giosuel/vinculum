@@ -1,7 +1,7 @@
 name: Release
 
-# Pushing a tag like v0.1.0 builds the Linux packages for x86-64 and ARM64 and publishes them as a
-# GitHub release. The version is the tag; nothing in the repository is bumped by hand.
+# Pushing a tag like v0.1.0 builds the Linux packages (tarball, .deb, .rpm) for x86-64 and ARM64
+# and publishes them as a GitHub release. The version is the tag; nothing in the repository is bumped by hand.
 # Running it by hand (Actions › Release › Run workflow) is a dry run: everything is built and
 # uploaded as workflow artifacts, and nothing is published. PRs that change the packaging run the
 # same dry run.
@@ -76,6 +76,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: debian:12
     timeout-minutes: 60
+    # In a container, steps run with sh unless told otherwise.
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Build tools and system libraries
         run: |
@@ -105,6 +109,18 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           ARCH: ${{ matrix.arch }}
         run: scripts/package-tarball.sh "$VERSION" "$ARCH"
+      # Packaging tools at fixed versions, at least two weeks old like every dependency.
+      - name: .deb and .rpm
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.0
+          cargo deb --no-build --locked -p vinculum
+          # RPM versions can't contain '-': a pre-release uses '~', which also sorts it before the
+          # release (cargo-deb does the same for the .deb).
+          cargo generate-rpm -p crates/app --set-metadata "version = \"${VERSION//-/\~}\"" \
+            --set-metadata "requires = $(packaging/linux/rpm-requires.sh target/release/vinculum)"
+          cp target/debian/*.deb target/generate-rpm/*.rpm target/dist/
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: linux-${{ matrix.arch }}
