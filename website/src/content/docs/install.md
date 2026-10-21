@@ -7,10 +7,6 @@ Every release has packages for x86-64 and ARM64 Linux on its
 [GitHub release page](https://github.com/giosuel/vinculum/releases). They're built on Debian 12,
 so they run on Debian 12, Ubuntu 22.04, and anything newer.
 
-:::note
-There's no release yet. Until there is, [build it from source](#from-source).
-:::
-
 ## Arch Linux (AUR)
 
 ```sh
