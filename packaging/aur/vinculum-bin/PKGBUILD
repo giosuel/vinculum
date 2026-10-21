@@ -1,0 +1,31 @@
+# Maintainer: giosuel <me@giosuel.ch>
+pkgname=vinculum-bin
+_pkgname=vinculum
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Manage Wi-Fi, wired and VPN connections (NetworkManager GUI, prebuilt binary)'
+arch=('x86_64' 'aarch64')
+url='https://github.com/giosuel/vinculum'
+license=('AGPL-3.0-or-later')
+# The libraries for X11, Wayland and OpenGL are loaded at runtime (winit, glutin).
+depends=('fontconfig' 'glibc' 'hicolor-icon-theme' 'libgcc' 'libglvnd' 'libx11' 'libxcursor' 'libxi'
+         'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'networkmanager' 'wayland')
+provides=("$_pkgname=$pkgver")
+conflicts=("$_pkgname")
+options=('!debug') # the release binary is already stripped
+source_x86_64=("$url/releases/download/v$pkgver/Vinculum-$pkgver-linux-x64.tar.gz")
+source_aarch64=("$url/releases/download/v$pkgver/Vinculum-$pkgver-linux-arm64.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+  case "$CARCH" in
+    x86_64) cd "Vinculum-$pkgver-linux-x64" ;;
+    aarch64) cd "Vinculum-$pkgver-linux-arm64" ;;
+  esac
+  install -Dm755 vinculum -t "$pkgdir/usr/bin"
+  install -Dm644 packaging/linux/ch.giosuel.Vinculum.desktop -t "$pkgdir/usr/share/applications"
+  install -Dm644 packaging/linux/ch.giosuel.Vinculum.metainfo.xml -t "$pkgdir/usr/share/metainfo"
+  install -Dm644 packaging/linux/icons/ch.giosuel.Vinculum.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+  install -Dm644 README.md -t "$pkgdir/usr/share/doc/$_pkgname"
+}

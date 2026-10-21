@@ -1,7 +1,7 @@
 name: Release
 
 # Pushing a tag like v0.1.0 builds the Linux packages (tarball, .deb, .rpm, AppImage) for x86-64 and ARM64
-# and publishes them as a GitHub release. The version is the tag; nothing in the repository is bumped by hand.
+# and publishes them as a GitHub release, then pushes the AUR packages (stable tags only). The version is the tag; nothing in the repository is bumped by hand.
 # Running it by hand (Actions › Release › Run workflow) is a dry run: everything is built and
 # uploaded as workflow artifacts, and nothing is published. PRs that change the packaging run the
 # same dry run.
@@ -155,3 +155,36 @@ jobs:
           printf '%s\n' "$NOTES" > notes.md
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
             --title "Vinculum $VERSION" --notes-file notes.md --generate-notes $prerelease
+
+  aur:
+    name: AUR (${{ matrix.pkg }})
+    # Stable releases only, after the GitHub release (and its tarballs) exists.
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: [vinculum, vinculum-bin]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set pkgver
+        env:
+          PKG: ${{ matrix.pkg }}
+        run: |
+          sed -i -e "s/^pkgver=.*/pkgver=${GITHUB_REF_NAME#v}/" -e "s/^pkgrel=.*/pkgrel=1/" \
+            "packaging/aur/$PKG/PKGBUILD"
+      # Builds the package (checksums refreshed, dependencies installed), then pushes PKGBUILD
+      # and a fresh .SRCINFO to the AUR.
+      - uses: KSXGitHub/github-actions-deploy-aur@084b0d9b15415bf9cdb65d44dad1efe37a354050 # v4.2.0
+        with:
+          pkgname: ${{ matrix.pkg }}
+          pkgbuild: packaging/aur/${{ matrix.pkg }}/PKGBUILD
+          updpkgsums: true
+          test: true
+          test_flags: --clean --cleanbuild --syncdeps --noconfirm
+          commit_username: giosuel
+          commit_email: me@giosuel.ch
+          commit_message: Update to ${{ github.ref_name }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
