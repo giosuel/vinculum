@@ -1,51 +1,152 @@
+<div align="center">
+
+<img src="docs/assets/hero.svg" alt="The Vinculum logo, a cube of linked nodes, beside a Vinculum window where a Wi-Fi network connects" width="760">
+
 # Vinculum
 
-A network manager for Linux desktops that don't come with one, such as Hyprland and Sway: everything
-`nmtui` does, plus the settings depth of KDE's network panel, in a native app written in Rust with
-[Slint](https://slint.dev). It drives NetworkManager over D-Bus.
+**A network manager for Linux desktops that don't come with one.**<br>
+<sub>🦀 Powered by Rust · drives NetworkManager</sub>
 
-**Status:** in development. It connects to Wi-Fi (open, password-protected and hidden networks),
-wired and VPN connections, keeps passwords in your keyring, and edits connections: general
-settings, Wi-Fi, security, IPv4 and IPv6 (addresses, DNS, routes) and Ethernet. Enterprise
-(802.1X), WireGuard, OpenVPN and hotspots come next.
+[![CI](https://img.shields.io/github/actions/workflow/status/giosuel/vinculum/ci.yml?branch=main&style=flat-square&label=CI&logo=githubactions&logoColor=white)](https://github.com/giosuel/vinculum/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/giosuel/vinculum?style=flat-square&color=8e4ec6&include_prereleases)](https://github.com/giosuel/vinculum/releases)
+[![License: AGPL-3.0](https://img.shields.io/github/license/giosuel/vinculum?style=flat-square&color=3e63dd)](LICENSE)
+[![Powered by Rust](https://img.shields.io/badge/powered_by-Rust-dea584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Slint](https://img.shields.io/badge/UI-Slint-2379f4?style=flat-square)](https://slint.dev)
+[![NetworkManager](https://img.shields.io/badge/NetworkManager-D--Bus-5cc8b0?style=flat-square)](https://networkmanager.dev)
+[![Wayland native](https://img.shields.io/badge/Wayland-native-e5484d?style=flat-square&logo=wayland&logoColor=white)](#)
+[![Hyprland ready](https://img.shields.io/badge/Hyprland-ready-58e1ff?style=flat-square&logo=hyprland&logoColor=white)](#-hyprland)
 
-## Building
+[**Website**](https://vinculum.giosuel.ch/) · [**Install**](#-install) · [**Hyprland setup**](#-hyprland) · [**Shortcuts**](#%EF%B8%8F-shortcuts)
 
-Needs Rust (the version in `rust-toolchain.toml`) and fontconfig's development files.
+</div>
+
+---
+
+Running Hyprland or Sway, and reaching for `nmtui` every time the Wi-Fi changes? Vinculum is the
+network window those desktops are missing: everything `nmtui` does, the settings depth of KDE's
+network panel, and a look that follows your wallpaper. It drives the NetworkManager you already
+have, so `nmcli` and everything else keep working alongside it.
+
+## ✨ What you get
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+**📶 Every network at a glance**<br>
+Wi-Fi with signal, band and security, wired ports and VPNs, all live. Search with <kbd>/</kbd>, connect with <kbd>Enter</kbd>.
+
+</td>
+<td width="33%" valign="top">
+
+**🔑 Passwords in your keyring**<br>
+"For me only" passwords go to GNOME Keyring or KWallet, so joining a network needs no admin password. nm-applet's saved passwords are found too.
+
+</td>
+<td width="33%" valign="top">
+
+**🛠️ Every setting**<br>
+A full editor for each connection: security, IPv4 and IPv6 addresses, DNS, routes, MAC address, MTU, Ethernet link. Settings it doesn't show are left alone.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**🎨 Follows your wallpaper**<br>
+Picks up the colours matugen writes for ML4W (or any `colors.json`) and recolours itself live. A dark and a light theme otherwise.
+
+</td>
+<td valign="top">
+
+**🪟 Made for tiling desktops**<br>
+A normal window with the app ID `ch.giosuel.Vinculum` for your window rules, keyboard first, and a background mode that answers NetworkManager at login.
+
+</td>
+<td valign="top">
+
+**🔍 Says what went wrong**<br>
+"The network rejected the password", "no polkit agent answered": failures come with the reason and a <b>Try again</b>.
+
+</td>
+</tr>
+</table>
+
+## 🚀 Install
+
+**Arch Linux** – from the AUR: `paru -S vinculum-bin` (prebuilt) or `paru -S vinculum` (from source).
+
+**Debian, Ubuntu** – the `.deb` from the [latest release](https://github.com/giosuel/vinculum/releases): `sudo apt install ./vinculum_*_amd64.deb`.
+
+**Fedora, openSUSE** – the `.rpm` from the same release: `sudo dnf install ./vinculum-*.x86_64.rpm`.
+
+**AppImage (any distro)** – `Vinculum-*-x86_64.AppImage` from the same release, then:
 
 ```sh
+chmod +x Vinculum-*-x86_64.AppImage && ./Vinculum-*-x86_64.AppImage
+```
+
+Every release also has ARM64 builds. All of them need NetworkManager.
+
+**From source** – with [Rust](https://rustup.rs) and fontconfig's development files:
+
+```sh
+git clone https://github.com/giosuel/vinculum && cd vinculum
 cargo build --release
 ./target/release/vinculum
 ```
 
-The app ID is `ch.giosuel.Vinculum`, so Hyprland window rules can match it:
+## 🌊 Hyprland
 
-```
-windowrule = float, class:^(ch\.giosuel\.Vinculum)$
+Add the rules from [`extras/hyprland.lua`](extras/hyprland.lua) to `~/.config/hypr/hyprland.lua`:
+
+```lua
+hl.window_rule({ match = { class = [[^(ch\.giosuel\.Vinculum)$]] }, float = true, size = "1040 680", center = true })
+
+hl.on("hyprland.start", function() hl.exec_cmd("vinculum --background") end)
+hl.bind("SUPER + N", hl.dsp.exec_cmd("vinculum"))   -- open the window
 ```
 
-## Passwords and the background mode
+> [!TIP]
+> Still on `hyprland.conf` (Hyprland 0.54 or older, or not migrated yet)? Use [`extras/hyprland.conf`](extras/hyprland.conf) instead. It also has the rule syntax for Hyprland older than 0.53.
+
+**Why the background mode?** Passwords you keep "for me only" live in your keyring, and
+NetworkManager asks Vinculum for them whenever it connects, including right after you log in.
+`vinculum --background` runs without a window until then; `vinculum` opens the window of the one
+that's already running, and closing the window leaves it running.
 
 When you join a network, Vinculum asks where to keep its password:
 
 - **For me only** (the default): in your keyring (GNOME Keyring, KeePassXC or anything else that
   speaks the Secret Service, or KWallet), and the connection is yours alone. No admin password
   needed. Without a keyring, NetworkManager keeps the password instead.
-- **All users**: NetworkManager keeps it for everyone; changing it needs an admin password (polkit).
+- **All users**: NetworkManager keeps it for everyone; changing it needs an admin password. On
+  Hyprland that needs a polkit agent, such as `hyprpolkitagent`.
 - **Ask each time**: not saved at all.
 
-"For me only" passwords live in your keyring, so NetworkManager asks Vinculum for them whenever it
-connects, including at login. Start Vinculum in the background so it's there to answer:
+## ⌨️ Shortcuts
 
-```
-exec-once = vinculum --background
-```
+<details>
+<summary><b>Keyboard shortcuts and CLI commands</b></summary>
+<br>
 
-It runs without a window until NetworkManager needs a password; `vinculum` (from a keybind, say)
-then opens the window of the running one, and closing the window leaves it running. Passwords that
-nm-applet or GNOME Settings put in the keyring are found too.
+| Key | Action |
+|---|---|
+| <kbd>/</kbd> | Search |
+| <kbd>↑</kbd> <kbd>↓</kbd> | Select a network or connection |
+| <kbd>Enter</kbd> | Connect |
+| <kbd>E</kbd> | Edit the selected connection |
+| <kbd>Esc</kbd> | Clear the search · close a dialog · leave the editor |
 
-## Colours
+| Command | |
+|---|---|
+| `vinculum` | Open the window (of the running one, if there is one) |
+| `vinculum --background` | Start without a window, for login |
+| `vinculum --version` | The version |
+
+</details>
+
+## 🎨 Colours
 
 Vinculum takes its colours from the first usable source in `~/.config/vinculum/config.toml`, and
 recolours itself when that file changes, so it follows your wallpaper. Without a config file it
@@ -65,7 +166,7 @@ path = "~/.config/ml4w/colors/colors.json"   # ML4W writes matugen's colours her
 A source is a matugen-style `colors.json` (Material colour roles such as `primary` and `surface` as
 hex strings). One with missing roles, or text too faint to read, is skipped.
 
-## Testing
+## 🛠️ Development
 
 ```sh
 scripts/test.sh
@@ -86,18 +187,18 @@ cargo build -p vinculum-cli
 scripts/mock-nm.sh target/debug/vinculum-cli list   # or: target/debug/vinculum-cli list, for the real one
 ```
 
-## Versions
+### Versions
 
 The version comes from the git tags (`scripts/version.sh`): `Cargo.toml` always says `0.0.0-dev`,
 and release builds write the tag's version in with `scripts/set-version.sh`.
 
-## Dependency versions
+### Dependency versions
 
 Every crate version in `Cargo.lock` must have been public for at least 14 days, so a freshly
 published (possibly compromised) release can't slip in. `cargo xtask dep-age` checks this, and CI
 runs it. Security fixes and explicit exceptions go in `xtask/dep-age-exceptions.txt`, each with its
 reason.
 
-## License
+## 📜 License
 
-[AGPL-3.0-or-later](LICENSE)
+[AGPL-3.0-or-later](LICENSE). The bundled fonts, Inter and JetBrains Mono, are under the [SIL Open Font License](crates/app/ui/fonts).
