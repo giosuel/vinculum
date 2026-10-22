@@ -231,6 +231,7 @@ mod tests {
             interface: None,
             metered: None,
             hotspot: false,
+            port: None,
         }
     }
 

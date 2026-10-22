@@ -192,6 +192,16 @@ pub struct SavedConnection {
     pub metered: Option<bool>,
     /// A Wi-Fi connection that runs an access point (the hotspot).
     pub hotspot: bool,
+    /// A port of a bridge or bond: it's part of that connection rather than one of its own.
+    pub port: Option<Port>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Port {
+    /// The bridge's or bond's interface name, or its connection's UUID (`connection.master`).
+    pub controller: String,
+    /// "bridge" or "bond".
+    pub kind: String,
 }
 
 impl SavedConnection {
@@ -214,6 +224,18 @@ pub enum ConnectionKind {
     /// A NetworkManager VPN plugin, e.g. `org.freedesktop.NetworkManager.openvpn`.
     Vpn {
         service: String,
+    },
+    Bridge {
+        stp: bool,
+    },
+    Bond {
+        /// `bond.options` mode, such as "active-backup" or "802.3ad".
+        mode: String,
+    },
+    Vlan {
+        /// The parent interface name, or its connection's UUID.
+        parent: String,
+        id: u32,
     },
     Other(String),
 }

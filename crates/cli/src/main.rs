@@ -103,7 +103,14 @@ fn render(s: &Snapshot) -> String {
             ConnectionKind::Ethernet => "ethernet".to_owned(),
             ConnectionKind::WireGuard => "wireguard".to_owned(),
             ConnectionKind::Vpn { service } => format!("vpn ({})", service.rsplit('.').next().unwrap_or(service)),
+            ConnectionKind::Bridge { .. } => "bridge".to_owned(),
+            ConnectionKind::Bond { mode } => format!("bond ({mode})"),
+            ConnectionKind::Vlan { parent, id } => format!("vlan {id} on {parent}"),
             ConnectionKind::Other(t) => t.clone(),
+        };
+        let kind = match &c.port {
+            Some(port) => format!("{kind}, {} port", port.kind),
+            None => kind,
         };
         let auto = if c.autoconnect { format!("autoconnect {}", c.autoconnect_priority) } else { "manual".into() };
         out += &format!("  {:<24} {:<16} {:<16} {}\n", c.id, kind, auto, c.uuid);

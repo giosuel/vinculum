@@ -22,6 +22,9 @@ slint.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 zbus.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
+ksni.workspace = true
+resvg.workspace = true
 vinculum-keyring.workspace = true
 vinculum-nm.workspace = true
 

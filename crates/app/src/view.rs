@@ -104,6 +104,7 @@ pub struct HotspotView {
 }
 
 /// A row before the selection is known.
+#[derive(Default)]
 struct RowData {
     id: String,
     name: String,
@@ -112,6 +113,8 @@ struct RowData {
     icon: &'static str,
     bars: u8,
     secure: bool,
+    /// Under the row before it: a port, or a VLAN.
+    indent: bool,
 }
 
 fn s(text: impl Into<SharedString>) -> SharedString {
@@ -126,7 +129,7 @@ fn action(id: &str, label: &str, kind: &str) -> Action {
     Action { id: s(id), label: s(label), kind: s(kind), enabled: true }
 }
 
-fn toggle(id: &str, label: &str, sub: &str, on: bool) -> Toggle {
+pub(crate) fn toggle(id: &str, label: &str, sub: &str, on: bool) -> Toggle {
     Toggle { id: s(id), label: s(label), sub: s(sub), on }
 }
 
@@ -285,6 +288,7 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
                         icon: s(r.icon),
                         bars: i32::from(r.bars),
                         secure: r.secure,
+                        indent: r.indent,
                     })
                     .collect(),
             ),
@@ -394,7 +398,7 @@ fn hotspot_page(snap: &Snapshot) -> HotspotView {
     }
 }
 
-fn wifi_device(snapshot: &Snapshot) -> Option<&Device> {
+pub(crate) fn wifi_device(snapshot: &Snapshot) -> Option<&Device> {
     snapshot.devices.iter().find(|d| d.kind == DeviceKind::Wifi)
 }
 
@@ -466,7 +470,7 @@ fn nav(snapshot: Option<&Snapshot>, page: Page) -> Vec<NavItem> {
     ]
 }
 
-fn network_id(n: &Network) -> String {
+pub(crate) fn network_id(n: &Network) -> String {
     format!("wifi:{}:{}", hex(&n.ssid), n.security.label())
 }
 
@@ -533,6 +537,7 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
             icon: "bars",
             bars: bars(n.strength()),
             secure: n.security.needs_secrets(),
+            indent: false,
         };
         if n.active { connected.push(row) } else { available.push(row) }
     }
@@ -545,6 +550,9 @@ fn connection_kind_label(c: &SavedConnection) -> String {
         ConnectionKind::Ethernet => "Wired".into(),
         ConnectionKind::WireGuard => "WireGuard".into(),
         ConnectionKind::Vpn { service } => vpn_service_label(service),
+        ConnectionKind::Bridge { .. } => "Bridge".into(),
+        ConnectionKind::Bond { .. } => "Bond".into(),
+        ConnectionKind::Vlan { id, .. } => format!("VLAN {id}"),
         ConnectionKind::Other(t) => t.clone(),
     }
 }
@@ -567,6 +575,10 @@ fn icon_for(c: &SavedConnection) -> &'static str {
         ConnectionKind::Wifi { .. } => "wifi",
         ConnectionKind::Ethernet => "wired",
         ConnectionKind::WireGuard | ConnectionKind::Vpn { .. } => "vpn",
+        ConnectionKind::Bridge { .. } => "bridge",
+        ConnectionKind::Bond { .. } => "bond",
+        ConnectionKind::Vlan { .. } => "vlan",
+        _ if c.port.is_some() => "port",
         ConnectionKind::Other(_) => "saved",
     }
 }
@@ -575,15 +587,61 @@ fn wired_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
     view.show_add = true;
     view.show_search = false;
     let mut sections = Vec::new();
+    // Bridges and bonds, each with its ports under it.
+    let mut virtual_rows = Vec::new();
+    for c in snap
+        .connections
+        .iter()
+        .filter(|c| matches!(c.kind, ConnectionKind::Bridge { .. } | ConnectionKind::Bond { .. }))
+    {
+        let ports = ports_of(snap, c);
+        virtual_rows.push(virtual_row(snap, c, ports.len()));
+        for p in ports {
+            let interface = p.interface.clone().unwrap_or_else(|| p.id.clone());
+            let device = snap.devices.iter().find(|d| d.interface == interface);
+            let carrier = device.and_then(|d| d.wired.as_ref()).map(|w| w.carrier);
+            let up = active_uuid_state(snap, &p.uuid).is_some_and(|a| a.state == ActiveState::Activated);
+            let (meta, tone) = match (device, carrier) {
+                (None, _) => (format!("Port of {} · not plugged in", controller_name(c)), "faint"),
+                (_, Some(false)) => (format!("Port of {} · cable unplugged", controller_name(c)), "faint"),
+                (Some(d), _) => {
+                    (format!("Port of {}{}", controller_name(c), speed(d)), if up { "muted" } else { "faint" })
+                }
+            };
+            virtual_rows.push(RowData {
+                id: format!("conn:{}", p.uuid),
+                name: interface,
+                meta,
+                tone,
+                icon: "port",
+                indent: true,
+                ..RowData::default()
+            });
+        }
+    }
+    if !virtual_rows.is_empty() {
+        sections.push(("Bridges and bonds".to_owned(), virtual_rows));
+    }
+    let mut shown_vlans = Vec::new();
     for device in snap.devices.iter().filter(|d| d.kind == DeviceKind::Ethernet) {
         let carrier = device.wired.as_ref().is_some_and(|w| w.carrier);
-        let active_uuid =
-            device.active_connection.as_deref().and_then(|a| snap.active_connection(a)).map(|a| a.uuid.as_str());
+        let active = device.active_connection.as_deref().and_then(|a| snap.active_connection(a));
+        // A port of a bridge or bond is shown there.
+        if snap
+            .connections
+            .iter()
+            .any(|c| c.port.is_some() && c.interface.as_deref() == Some(device.interface.as_str()))
+        {
+            continue;
+        }
+        let active_uuid = active.map(|a| a.uuid.as_str());
         let mut rows: Vec<RowData> = snap
             .connections
             .iter()
             .filter(|c| {
-                c.kind == ConnectionKind::Ethernet && c.interface.as_deref().is_none_or(|i| i == device.interface)
+                c.kind == ConnectionKind::Ethernet
+                    && c.port.is_none()
+                    && c.interface.as_deref().is_none_or(|i| i == device.interface)
             })
             .map(|c| {
                 let active = active_uuid == Some(c.uuid.as_str());
@@ -600,8 +658,7 @@ fn wired_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
                     meta,
                     tone,
                     icon: "wired",
-                    bars: 0,
-                    secure: false,
+                    ..RowData::default()
                 }
             })
             .collect();
@@ -612,13 +669,102 @@ fn wired_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
                 meta: if carrier { "No saved connection".into() } else { "Plug in a cable to connect".into() },
                 tone: "faint",
                 icon: "wired",
-                bars: 0,
-                secure: false,
+                ..RowData::default()
             });
+        }
+        for v in vlans_on(snap, &device.interface) {
+            shown_vlans.push(v.uuid.clone());
+            rows.push(RowData { indent: true, ..virtual_row(snap, v, 0) });
         }
         sections.push((device_title(device), rows));
     }
+    // VLANs on a bond or bridge, or on a device that isn't there.
+    let others: Vec<RowData> = snap
+        .connections
+        .iter()
+        .filter(|c| matches!(c.kind, ConnectionKind::Vlan { .. }) && !shown_vlans.contains(&c.uuid))
+        .map(|c| virtual_row(snap, c, 0))
+        .collect();
+    if !others.is_empty() {
+        sections.push(("VLANs".to_owned(), others));
+    }
     sections
+}
+
+/// The ports of a bridge or bond: connections whose controller is its UUID or interface.
+fn ports_of<'a>(snap: &'a Snapshot, c: &SavedConnection) -> Vec<&'a SavedConnection> {
+    snap.connections
+        .iter()
+        .filter(|p| {
+            p.port.as_ref().is_some_and(|port| {
+                port.controller == c.uuid || c.interface.as_deref().is_some_and(|i| port.controller == i)
+            })
+        })
+        .collect()
+}
+
+/// The VLANs on an interface (by its name, or by the UUID of a connection on it).
+fn vlans_on<'a>(snap: &'a Snapshot, interface: &str) -> Vec<&'a SavedConnection> {
+    snap.connections
+        .iter()
+        .filter(|c| match &c.kind {
+            ConnectionKind::Vlan { parent, .. } => {
+                parent == interface
+                    || snap.connections.iter().any(|p| p.uuid == *parent && p.interface.as_deref() == Some(interface))
+            }
+            _ => false,
+        })
+        .collect()
+}
+
+fn controller_name(c: &SavedConnection) -> String {
+    c.interface.clone().unwrap_or_else(|| c.id.clone())
+}
+
+/// A bridge, bond or VLAN row: "Connected · bridge · 2 ports · 192.168.1.57/24".
+fn virtual_row(snap: &Snapshot, c: &SavedConnection, ports: usize) -> RowData {
+    let active = active_uuid_state(snap, &c.uuid);
+    let device = active.and_then(|a| a.devices.first()).and_then(|p| snap.device(p));
+    let what = match &c.kind {
+        ConnectionKind::Bridge { .. } => "bridge".to_owned(),
+        ConnectionKind::Bond { mode } => mode.clone(),
+        ConnectionKind::Vlan { id, .. } => format!("VLAN {id}"),
+        _ => connection_kind_label(c),
+    };
+    let mut parts = Vec::new();
+    let tone = match active.map(|a| a.state) {
+        Some(ActiveState::Activated) => {
+            parts.push("Connected".to_owned());
+            "accent"
+        }
+        Some(ActiveState::Activating) => {
+            parts.push("Connecting…".to_owned());
+            "accent"
+        }
+        _ => {
+            parts.push("Saved".to_owned());
+            "muted"
+        }
+    };
+    parts.push(what);
+    if matches!(c.kind, ConnectionKind::Bridge { .. } | ConnectionKind::Bond { .. }) {
+        parts.push(match ports {
+            0 => "no ports".to_owned(),
+            1 => "1 port".to_owned(),
+            n => format!("{n} ports"),
+        });
+    }
+    if let Some((address, prefix)) = device.and_then(|d| d.ip4.as_ref()).and_then(|ip| ip.addresses.first()) {
+        parts.push(format!("{address}/{prefix}"));
+    }
+    RowData {
+        id: format!("conn:{}", c.uuid),
+        name: c.id.clone(),
+        meta: parts.join(" · "),
+        tone,
+        icon: icon_for(c),
+        ..RowData::default()
+    }
 }
 
 fn speed(device: &Device) -> String {
@@ -660,6 +806,7 @@ fn vpn_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
             icon: "vpn",
             bars: 0,
             secure: false,
+            indent: false,
         };
         if c.kind == ConnectionKind::WireGuard { wireguard.push(row) } else { others.push(row) }
     }
@@ -675,7 +822,15 @@ fn saved_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String,
     view.bottom_label = "Import a connection file…".into();
     let groups: [(&str, KindFilter); 4] = [
         ("Wi-Fi", |k| matches!(k, ConnectionKind::Wifi { .. })),
-        ("Wired", |k| matches!(k, ConnectionKind::Ethernet)),
+        ("Wired", |k| {
+            matches!(
+                k,
+                ConnectionKind::Ethernet
+                    | ConnectionKind::Bridge { .. }
+                    | ConnectionKind::Bond { .. }
+                    | ConnectionKind::Vlan { .. }
+            )
+        }),
         ("VPN", |k| matches!(k, ConnectionKind::WireGuard | ConnectionKind::Vpn { .. })),
         ("Other", |k| matches!(k, ConnectionKind::Other(_))),
     ];
@@ -700,6 +855,7 @@ fn saved_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String,
                         icon: icon_for(c),
                         bars: 0,
                         secure: false,
+                        indent: false,
                     }
                 })
                 .collect();
@@ -850,6 +1006,33 @@ fn connection_details(snap: &Snapshot, page: Page, uuid: &str) -> Option<Details
             items.push(item("MAC address", d.hw_address.as_str(), true));
         }
     }
+    match &c.kind {
+        ConnectionKind::Bridge { stp } => {
+            let ports: Vec<String> = ports_of(snap, c).iter().map(|p| controller_name(p)).collect();
+            items.push(item("Ports", if ports.is_empty() { "None".to_owned() } else { ports.join(", ") }, true));
+            items.push(item("Spanning tree", if *stp { "On" } else { "Off" }, false));
+        }
+        ConnectionKind::Bond { mode } => {
+            let ports: Vec<String> = ports_of(snap, c).iter().map(|p| controller_name(p)).collect();
+            items.push(item("Ports", if ports.is_empty() { "None".to_owned() } else { ports.join(", ") }, true));
+            let label = crate::virt::BOND_MODES.iter().find(|(m, _)| m == mode).map_or(mode.as_str(), |(_, l)| *l);
+            items.push(item("Mode", label, false));
+        }
+        ConnectionKind::Vlan { parent, id } => {
+            let parent = snap.connections.iter().find(|p| p.uuid == *parent).map_or(parent.clone(), controller_name);
+            items.push(item("VLAN ID", id.to_string(), true));
+            items.push(item("Runs on", parent, true));
+        }
+        _ => {}
+    }
+    if let Some(port) = &c.port {
+        let controller = snap
+            .connections
+            .iter()
+            .find(|x| x.uuid == port.controller)
+            .map_or(port.controller.clone(), controller_name);
+        items.push(item("Port of", controller, true));
+    }
     items.push(item("Type", connection_kind_label(c), false));
     items.push(item("Priority", c.autoconnect_priority.to_string(), true));
     if let Some(i) = &c.interface {
@@ -903,6 +1086,12 @@ pub enum Command {
         connection: Option<String>,
         new: Option<crate::editor::Kind>,
     },
+    /// Open the editor on a new connection to an Enterprise (802.1X) network.
+    NewEnterprise {
+        ssid: Vec<u8>,
+        /// WPA3 Enterprise 192-bit.
+        suite_b: bool,
+    },
     /// Save the editor's settings: update (or add, without a path), keyring secret first, then
     /// reapply to the active connection.
     SaveConnection {
@@ -910,6 +1099,8 @@ pub enum Command {
         settings: crate::editing::Shared,
         secret: Option<crate::editing::KeyringSecret>,
         reapply: Option<(String, Option<String>)>,
+        /// A bridge's or bond's ports to add or let go.
+        ports: Option<crate::virt::PortPlan>,
     },
     /// One key of a saved connection, from the details pane's switches.
     SetSetting {
@@ -976,8 +1167,6 @@ pub enum Intent {
     },
     /// Ask for the password (and where to keep it) first.
     Join(JoinTarget),
-    /// Not possible (yet): say why.
-    Notice(String),
 }
 
 /// A secured network to join, for the password dialog.
@@ -1053,10 +1242,11 @@ pub fn intent(snap: &Snapshot, selected: &str, action: &str) -> Option<Intent> {
                         key_mgmt,
                         strength: network.strongest().strength,
                     }),
-                    None => Intent::Notice(format!(
-                        "Enterprise (802.1X) networks need the connection editor, which comes in a later version. Until then: nmcli --ask device wifi connect '{}'",
-                        network.name()
-                    )),
+                    // An Enterprise network needs more than a password: the editor, filled in.
+                    None => Intent::Run(Command::NewEnterprise {
+                        ssid: network.ssid.clone(),
+                        suite_b: network.security == Security::Wpa3Enterprise,
+                    }),
                 },
             }),
             "disconnect" => Some(Intent::Run(Command::Deactivate { active: device.active_connection.clone()? })),
@@ -1160,7 +1350,7 @@ pub fn rescan(snap: &Snapshot) -> Option<Command> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use slint::Model;
     use vinculum_nm::{AccessPoint, ActiveConnection, DeviceState, IpConfig, WifiDevice, WiredDevice};
@@ -1178,7 +1368,7 @@ mod tests {
     }
 
     /// Connected to "Lumen Home", two more networks in range, an unplugged Ethernet port.
-    fn home() -> Snapshot {
+    pub(crate) fn home() -> Snapshot {
         let wifi = Device {
             path: "/d/wlan".into(),
             interface: "wlp2s0".into(),
@@ -1243,6 +1433,7 @@ mod tests {
                 interface: None,
                 metered: None,
                 hotspot: false,
+                port: None,
             }],
             active: vec![ActiveConnection {
                 path: "/a/1".into(),
@@ -1308,6 +1499,67 @@ mod tests {
         let actions: Vec<String> = d.actions.iter().map(|a| a.label.to_string()).collect();
         assert_eq!(actions, ["Connect"]);
         assert_eq!(d.toggles.row_count(), 0);
+    }
+
+    fn saved(uuid: &str, id: &str, kind: ConnectionKind, interface: &str, port: Option<&str>) -> SavedConnection {
+        SavedConnection {
+            path: format!("/c/{uuid}"),
+            uuid: uuid.into(),
+            id: id.into(),
+            kind,
+            autoconnect: true,
+            autoconnect_priority: 0,
+            interface: Some(interface.into()),
+            metered: None,
+            hotspot: false,
+            port: port.map(|c| vinculum_nm::Port { controller: c.into(), kind: "bridge".into() }),
+        }
+    }
+
+    #[test]
+    fn bridges_list_their_ports_and_vlans_sit_under_their_device() {
+        let mut snap = home();
+        snap.connections.push(saved("u-br", "br0", ConnectionKind::Bridge { stp: true }, "br0", None));
+        snap.connections.push(saved("u-p1", "br0 port enp4s0", ConnectionKind::Ethernet, "enp4s0", Some("u-br")));
+        snap.connections.push(saved(
+            "u-v20",
+            "VLAN 20 · Lab",
+            ConnectionKind::Vlan { parent: "enp3s0".into(), id: 20 },
+            "enp3s0.20",
+            None,
+        ));
+        let state = UiState { page: Page::Wired, ..UiState::default() };
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(
+            rows(&view),
+            [
+                ("BRIDGES AND BONDS".into(), vec!["br0".into(), "enp4s0".into()]),
+                ("ENP3S0 · E1000E".into(), vec!["Cable unplugged".into(), "VLAN 20 · Lab".into()]),
+            ]
+        );
+        let bridge = &view.sections[0].rows;
+        assert_eq!(bridge.row_data(0).unwrap().meta, "Saved · bridge · 1 port");
+        let port = bridge.row_data(1).unwrap();
+        assert!(port.indent);
+        assert_eq!((port.meta.as_str(), port.icon.as_str()), ("Port of br0 · not plugged in", "port"));
+        assert!(view.sections[1].rows.row_data(1).unwrap().indent);
+        let state = UiState { page: Page::Wired, selected: Some("conn:u-br".into()), ..UiState::default() };
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(detail(&view, "Ports").as_deref(), Some("enp4s0"));
+        assert_eq!(detail(&view, "Spanning tree").as_deref(), Some("On"));
+    }
+
+    #[test]
+    fn an_enterprise_network_opens_the_editor() {
+        let mut snap = home();
+        let wifi = snap.devices[0].wifi.as_mut().unwrap();
+        wifi.access_points.push(ap("/ap/9", "eduroam", 5500, 70, Security::Enterprise));
+        let view = build(Some(&snap), None, &UiState::default());
+        let id = view.row_ids.iter().find(|id| id.contains(&hex(b"eduroam"))).unwrap();
+        assert_eq!(
+            intent(&snap, id, "connect"),
+            Some(Intent::Run(Command::NewEnterprise { ssid: b"eduroam".to_vec(), suite_b: false }))
+        );
     }
 
     #[test]

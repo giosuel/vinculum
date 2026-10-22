@@ -46,7 +46,7 @@ Wi-Fi with signal, band and security, wired ports and VPNs, all live. Search wit
 <td width="33%" valign="top">
 
 **🛠️ Every setting**<br>
-A full editor for each connection: security and 802.1X (eduroam and the like), IPv4 and IPv6, DNS, routes, MAC address, MTU, Ethernet link. Settings it doesn't show are left alone.
+A full editor for each connection: security and 802.1X (eduroam and the like), IPv4 and IPv6, DNS, routes, MAC address, MTU, Ethernet link, and VLANs, bridges and bonds with their ports. Settings it doesn't show are left alone.
 
 </td>
 </tr>
@@ -60,7 +60,7 @@ Picks up the colours matugen writes for ML4W (or any `colors.json`) and recolour
 <td valign="top">
 
 **🪟 Made for tiling desktops**<br>
-A normal window with the app ID `ch.giosuel.Vinculum` for your window rules, keyboard first, and a background mode that answers NetworkManager at login.
+A normal window with the app ID `ch.giosuel.Vinculum` for your window rules, keyboard first, a tray icon with a quick popup for Waybar, and a background mode that answers NetworkManager at login.
 
 </td>
 <td valign="top">
@@ -106,9 +106,17 @@ Addresses, gateway, DNS, link speed, channel, and how much has been received and
 chmod +x Vinculum-*-x86_64.AppImage && ./Vinculum-*-x86_64.AppImage
 ```
 
+**Flatpak** – `Vinculum-*-linux-x64.flatpak` from the same release (the runtime comes from Flathub):
+
+```sh
+flatpak install --user ./Vinculum-*-linux-x64.flatpak && flatpak run ch.giosuel.Vinculum
+```
+
+What the sandbox allows, and what works differently in it, is in [`packaging/flatpak/`](packaging/flatpak/README.md).
+
 **Nix** – `nix run github:giosuel/vinculum`, or the flake as an input ([`packaging/nix/`](packaging/nix/README.md)).
 
-Every release also has ARM64 builds. All of them need NetworkManager. Optional: NetworkManager's
+Every release also has ARM64 builds (except the Flatpak). All of them need NetworkManager. Optional: NetworkManager's
 OpenVPN plugin (`networkmanager-openvpn` on Arch) for OpenVPN, an XDG desktop portal with a file
 dialog (`xdg-desktop-portal-gtk`, say) for choosing certificates and VPN files, and a keyring.
 
@@ -125,11 +133,20 @@ cargo build --release
 Add the rules from [`extras/hyprland.lua`](extras/hyprland.lua) to `~/.config/hypr/hyprland.lua`:
 
 ```lua
-hl.window_rule({ match = { class = [[^(ch\.giosuel\.Vinculum)$]] }, float = true, size = "1040 680", center = true })
+local vinculum = [[^(ch\.giosuel\.Vinculum)$]]
+hl.window_rule({ match = { class = vinculum, title = "^(Vinculum)$" }, float = true, size = "1040 680", center = true })
+hl.window_rule({ match = { class = vinculum, title = "^(Vinculum quick)$" }, float = true, pin = true,
+    size = { 380, 560 }, move = { "monitor_w-window_w-12", "52" } })   -- the quick popup, top right
 
 hl.on("hyprland.start", function() hl.exec_cmd("vinculum --background") end)
-hl.bind("SUPER + N", hl.dsp.exec_cmd("vinculum"))   -- open the window
+hl.bind("SUPER + N", hl.dsp.exec_cmd("vinculum"))                     -- open the window
+hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("vinculum --quick"))     -- the quick popup
+hl.bind("XF86WLAN", hl.dsp.exec_cmd("vinculum --toggle-wifi"))        -- the Wi-Fi key
 ```
+
+**The tray icon** shows up in Waybar's `tray` module (and any other StatusNotifierItem tray) while
+Vinculum runs: right-click for the menu, left-click for the quick popup. With a tray, closing the
+window keeps Vinculum running there; both can be turned off in Settings.
 
 > [!TIP]
 > Still on `hyprland.conf` (Hyprland 0.54 or older, or not migrated yet)? Use [`extras/hyprland.conf`](extras/hyprland.conf) instead. It also has the rule syntax for Hyprland older than 0.53.
@@ -166,6 +183,8 @@ When you join a network, Vinculum asks where to keep its password:
 |---|---|
 | `vinculum` | Open the window (of the running one, if there is one) |
 | `vinculum --background` | Start without a window, for login |
+| `vinculum --quick` | Show the quick popup, or hide it (for a bar's `on-click` or a keybind) |
+| `vinculum --toggle-wifi` | Turn Wi-Fi on or off |
 | `vinculum --version` | The version |
 
 </details>
@@ -189,6 +208,17 @@ path = "~/.config/ml4w/colors/colors.json"   # ML4W writes matugen's colours her
 
 A source is a matugen-style `colors.json` (Material colour roles such as `primary` and `surface` as
 hex strings). One with missing roles, or text too faint to read, is skipped.
+
+The Settings page writes the rest of the file (and keeps your comments in it):
+
+```toml
+[tray]
+enabled = true        # the tray icon
+keep_running = true   # closing the window keeps Vinculum in the tray
+
+[notifications]
+enabled = true        # connected, disconnected and failed, while the window is closed
+```
 
 ## 🛠️ Development
 

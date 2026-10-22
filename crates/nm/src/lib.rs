@@ -16,7 +16,7 @@ pub use agent::{AgentConnection, AgentEvent, Refusal, SecretRequest, Settings};
 pub use client::{Client, Error};
 pub use join::{KeyMgmt, Outcome, Storage, WifiJoin};
 pub use model::{
-    AccessPoint, ActiveConnection, ActiveState, ConnectionKind, Device, DeviceKind, DeviceState, IpConfig,
+    AccessPoint, ActiveConnection, ActiveState, ConnectionKind, Device, DeviceKind, DeviceState, IpConfig, Port,
     SavedConnection, Snapshot, WifiDevice, WiredDevice,
 };
 pub use wifi::{Band, Network, Security, bars, channel, networks};
