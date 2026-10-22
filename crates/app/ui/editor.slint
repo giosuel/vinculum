@@ -77,6 +77,33 @@ export struct OvpnFormUi {
     reneg: string,
     tap: bool,
 }
+export struct VirtFormUi {
+    interface: string,
+    parent: int,
+    vlan-id: string,
+    reorder-headers: bool,
+    gvrp: bool,
+    mvrp: bool,
+    loose-binding: bool,
+    stp: bool,
+    stp-priority: string,
+    forward-delay: string,
+    hello-time: string,
+    max-age: string,
+    ageing-time: string,
+    vlan-filtering: bool,
+    mode: int,
+    /// 0 none, then the ports in order.
+    primary: int,
+    arp: bool,
+    miimon: string,
+    arp-interval: string,
+    arp-targets: string,
+    lacp-rate: int,
+    hash: int,
+}
+export struct PortRowUi { interface: string, meta: string, new: bool }
+export struct PortCandidateUi { interface: string, meta: string, blocked: string, warning: string, icon: string }
 export struct EditorForm {
     name: string,
     autoconnect: bool,
@@ -108,6 +135,7 @@ export struct EditorForm {
     eap: EapFormUi,
     wg: WgFormUi,
     ovpn: OvpnFormUi,
+    virt: VirtFormUi,
 }
 export struct EditorErrors {
     name: string,
@@ -134,6 +162,9 @@ export struct EditorErrors {
     ovpn-user: string,
     ovpn-secret: string,
     ovpn-files: string,
+    virt-interface: string,
+    virt-settings: string,
+    virt-monitor: string,
 }
 export struct EditorTab { id: string, label: string, errors: int }
 /// The choices that depend on the connection and the computer.
@@ -166,7 +197,16 @@ export struct EditorOptions {
     banner: string,
     /// Where passwords "for me only" go ("your keyring", "KWallet"), or "" without one.
     keyring: string,
+    /// VLAN parents, bond choices, and a bridge's or bond's ports.
+    parents: [string],
+    bond-modes: [string],
+    lacp-rates: [string],
+    hash-policies: [string],
+    ports: [PortRowUi],
+    primaries: [string],
+    candidates: [PortCandidateUi],
 }
+
 
 component Label inherits Text {
     color: Theme.text;
@@ -242,6 +282,43 @@ component AddButton inherits Rectangle {
     accessible-action-default => { clicked(); }
     text := Text { text: root.label; color: Theme.icon-soft; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
     touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+/// A bridge's or bond's ports, with Remove, and "Add port…".
+component PortList inherits VerticalLayout {
+    in property <[PortRowUi]> ports;
+    callback add();
+    callback remove(int);
+    spacing: 8px;
+    alignment: start;
+    if root.ports.length == 0: Hint { text: "No ports yet: add the devices it's made of."; }
+    if root.ports.length > 0: Rectangle {
+        border-width: 1px;
+        border-color: Theme.border2;
+        border-radius: 10px;
+        width: 520px;
+        VerticalLayout {
+            for p[i] in root.ports: Rectangle {
+                height: 49px;
+                Rectangle { y: 0; height: 1px; background: i == 0 ? transparent : Theme.border2; }
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 10px;
+                    spacing: 12px;
+                    Icon { name: "wired"; tint: Theme.muted; y: (parent.height - 16px) / 2; width: 16px; }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 1px;
+                        horizontal-stretch: 1;
+                        Text { text: p.interface; color: Theme.text; font-size: 13px; font-weight: 500; font-family: "JetBrains Mono"; }
+                        Text { text: p.meta; color: p.new ? Theme.accent : Theme.muted; font-size: 12px; overflow: elide; }
+                    }
+                    Button { label: "Remove"; button-height: 28px; width: 76px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.remove(i); } }
+                }
+            }
+        }
+    }
+    HorizontalLayout { alignment: start; AddButton { label: "Add port…"; clicked => { root.add(); } } }
 }
 
 /// The routes dialog's rows.
@@ -558,6 +635,8 @@ export component Editor inherits Rectangle {
     in property <bool> new: false;
     // "", "ipv4" or "ipv6": the routes dialog.
     in property <string> routes-open;
+    in property <bool> ports-open;
+    callback port-chosen(string);
     callback back();
     callback apply();
     callback revert();
@@ -582,6 +661,7 @@ export component Editor inherits Rectangle {
     FocusScope {
         key-pressed(event) => {
             if event.text == Key.Escape && root.routes-open != "" { root.routes-done(false); return accept; }
+            if event.text == Key.Escape && root.ports-open { root.port-chosen(""); return accept; }
             if event.text == Key.Escape { root.back(); return accept; }
             reject
         }
@@ -1049,6 +1129,158 @@ export component Editor inherits Rectangle {
                     }
                     Hint { text: "To send only the VPN's own network through it, see \"Use this connection only for resources on its network\" under IPv4 and IPv6 → Edit routes."; }
                 }
+                if root.tab == "vlan": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "Parent device";
+                        HorizontalLayout { alignment: start; Select { options: root.options.parents; selected <=> root.form.virt.parent; label: "Parent device"; width: 360px; } }
+                        Hint { text: "The wired device (or bond) the VLAN's tagged frames go out on."; }
+                    }
+                    Row {
+                        label: "VLAN ID";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.virt.vlan-id; mono: true; width: 120px; label: "VLAN ID"; placeholder: "20"; invalid: root.errors.virt-settings != ""; } }
+                        if root.errors.virt-settings != "": Error { text: root.errors.virt-settings; }
+                    }
+                    Row {
+                        label: "Interface name";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.virt.interface; mono: true; width: 220px; label: "Interface name"; invalid: root.errors.virt-interface != ""; } }
+                        if root.errors.virt-interface != "": Error { text: root.errors.virt-interface; }
+                        if root.errors.virt-interface == "": Hint { text: "Named after the parent and the ID until you change it."; }
+                    }
+                    Row {
+                        label: "MTU";
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            HorizontalLayout { alignment: start; TextField { text <=> root.form.mtu; mono: true; width: 120px; label: "MTU"; placeholder: "Automatic"; invalid: root.errors.mtu != ""; } }
+                            Hint { text: "bytes"; vertical-alignment: center; }
+                        }
+                        if root.errors.mtu != "": Error { text: root.errors.mtu; }
+                    }
+                    Row {
+                        label: "Advanced";
+                        label-top: 2px;
+                        CheckBox { checked <=> root.form.virt.reorder-headers; text: "Reorder headers (looks like plain Ethernet to the system)"; }
+                        CheckBox { checked <=> root.form.virt.gvrp; text: "Register with GVRP"; }
+                        CheckBox { checked <=> root.form.virt.mvrp; text: "Register with MVRP"; }
+                        CheckBox { checked <=> root.form.virt.loose-binding; text: "Loose binding (stay up when the parent goes down)"; }
+                    }
+                }
+                if root.tab == "bridge": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "Interface name";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.virt.interface; mono: true; width: 220px; label: "Interface name"; invalid: root.errors.virt-interface != ""; } }
+                        if root.errors.virt-interface != "": Error { text: root.errors.virt-interface; }
+                    }
+                    Row {
+                        label: "Ports";
+                        PortList { ports: root.options.ports; add => { root.add-row("port"); } remove(i) => { root.remove-row("port", i); } }
+                    }
+                    Row {
+                        label: "Spanning tree (STP)";
+                        label-top: 2px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            Switch { on: root.form.virt.stp; label: "Spanning tree"; toggled => { root.form.virt.stp = !root.form.virt.stp; } }
+                            Hint { text: "Stops loops when the bridge has more than one way to the same network."; vertical-alignment: center; }
+                        }
+                    }
+                    if root.form.virt.stp: Row {
+                        label: "STP timers";
+                        HorizontalLayout {
+                            spacing: 14px;
+                            alignment: start;
+                            VerticalLayout { spacing: 4px; Hint { text: "Priority"; } TextField { text <=> root.form.virt.stp-priority; mono: true; width: 96px; label: "Priority"; placeholder: "32768"; } }
+                            VerticalLayout { spacing: 4px; Hint { text: "Forward delay"; } TextField { text <=> root.form.virt.forward-delay; mono: true; width: 96px; label: "Forward delay"; placeholder: "15"; } }
+                            VerticalLayout { spacing: 4px; Hint { text: "Hello time"; } TextField { text <=> root.form.virt.hello-time; mono: true; width: 96px; label: "Hello time"; placeholder: "2"; } }
+                            VerticalLayout { spacing: 4px; Hint { text: "Max age"; } TextField { text <=> root.form.virt.max-age; mono: true; width: 96px; label: "Max age"; placeholder: "20"; } }
+                        }
+                        Hint { text: "Times in seconds; empty fields keep the kernel's defaults."; }
+                        if root.errors.virt-settings != "": Error { text: root.errors.virt-settings; }
+                    }
+                    Row {
+                        label: "MAC ageing time";
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            HorizontalLayout { alignment: start; TextField { text <=> root.form.virt.ageing-time; mono: true; width: 120px; label: "MAC ageing time"; placeholder: "300"; } }
+                            Hint { text: "seconds"; vertical-alignment: center; }
+                        }
+                    }
+                    Row {
+                        label: "VLAN filtering";
+                        label-top: 2px;
+                        CheckBox { checked <=> root.form.virt.vlan-filtering; text: "Only pass frames for the VLANs set on each port"; }
+                    }
+                }
+                if root.tab == "bond": VerticalLayout {
+                    property <bool> lacp: root.form.virt.mode == 4;
+                    property <bool> arp-possible: root.form.virt.mode != 4 && root.form.virt.mode != 5 && root.form.virt.mode != 6;
+                    spacing: 18px;
+                    Row {
+                        label: "Interface name";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.virt.interface; mono: true; width: 220px; label: "Interface name"; invalid: root.errors.virt-interface != ""; } }
+                        if root.errors.virt-interface != "": Error { text: root.errors.virt-interface; }
+                    }
+                    Row {
+                        label: "Mode";
+                        HorizontalLayout { alignment: start; Select { options: root.options.bond-modes; selected <=> root.form.virt.mode; label: "Mode"; width: 360px; } }
+                        if root.form.virt.mode == 1: Hint { text: "One port carries the traffic; another takes over when its link goes down. Works with any switch."; }
+                        if root.form.virt.mode == 4: Hint { text: "Needs a switch with LACP set up on the same ports."; }
+                    }
+                    Row {
+                        label: "Ports";
+                        PortList { ports: root.options.ports; add => { root.add-row("port"); } remove(i) => { root.remove-row("port", i); } }
+                    }
+                    if root.form.virt.mode == 1: Row {
+                        label: "Primary port";
+                        HorizontalLayout { alignment: start; Select { options: root.options.primaries; selected <=> root.form.virt.primary; label: "Primary port"; width: 360px; } }
+                        Hint { text: "Used whenever its link is up; the others take over when it isn't."; }
+                    }
+                    if lacp: Row {
+                        label: "LACP rate";
+                        HorizontalLayout { alignment: start; Select { options: root.options.lacp-rates; selected <=> root.form.virt.lacp-rate; label: "LACP rate"; width: 360px; } }
+                    }
+                    if root.form.virt.mode == 2 || root.form.virt.mode == 4 || root.form.virt.mode == 5: Row {
+                        label: "Transmit hash";
+                        HorizontalLayout { alignment: start; Select { options: root.options.hash-policies; selected <=> root.form.virt.hash; label: "Transmit hash"; width: 360px; } }
+                        Hint { text: "Which port each connection goes out on."; }
+                    }
+                    Row {
+                        label: "Link monitoring";
+                        label-top: arp-possible ? 12px : 10px;
+                        if arp-possible: HorizontalLayout {
+                            alignment: start;
+                            Segmented {
+                                options: ["MII (carrier)", "ARP"];
+                                selected: root.form.virt.arp ? 1 : 0;
+                                label: "Link monitoring";
+                                width: 220px;
+                                changed(i) => { root.form.virt.arp = i == 1; }
+                            }
+                        }
+                        if !root.form.virt.arp || !arp-possible: HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            HorizontalLayout { alignment: start; TextField { text <=> root.form.virt.miimon; mono: true; width: 110px; label: "MII interval"; placeholder: "100"; invalid: root.errors.virt-monitor != ""; } }
+                            Hint { text: "ms between checks"; vertical-alignment: center; }
+                        }
+                        if root.form.virt.arp && arp-possible: HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            HorizontalLayout { alignment: start; TextField { text <=> root.form.virt.arp-interval; mono: true; width: 110px; label: "ARP interval"; placeholder: "200"; invalid: root.errors.virt-monitor != ""; } }
+                            Hint { text: "ms between checks"; vertical-alignment: center; }
+                        }
+                        if root.form.virt.arp && arp-possible: VerticalLayout {
+                            spacing: 4px;
+                            Hint { text: "ARP targets: addresses that answer while the link works, such as the gateway"; }
+                            HorizontalLayout { alignment: start; TextField { text <=> root.form.virt.arp-targets; mono: true; width: 360px; label: "ARP targets"; placeholder: "192.168.1.1, 192.168.1.2"; invalid: root.errors.virt-monitor != ""; } }
+                        }
+                        if root.errors.virt-monitor != "": Error { text: root.errors.virt-monitor; }
+                    }
+                }
                 if root.tab == "ipv4": IpPage {
                     v6: false;
                     ip <=> root.form.ip4;
@@ -1102,6 +1334,67 @@ export component Editor inherits Rectangle {
         }
     }
 
+    }
+
+    // Add-port dialog
+    if root.ports-open: Rectangle {
+        background: #05060799;
+        TouchArea { clicked => { root.port-chosen(""); } }
+        Rectangle {
+            width: min(560px, parent.width - 48px);
+            height: port-dialog.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: Theme.ctrl-border;
+            background: Theme.surface;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000080;
+            TouchArea {}
+            port-dialog := VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                Text { text: "Add a port to " + (root.form.virt.interface == "" ? root.form.name : root.form.virt.interface); color: Theme.text; font-size: 17px; font-weight: 600; }
+                Text { text: "The device becomes part of it, with a small connection of its own."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                if root.options.candidates.length == 0: Text { text: "No other wired devices to add."; color: Theme.faint; font-size: 13px; }
+                for c in root.options.candidates: Rectangle {
+                    height: c.warning != "" ? 68px : 52px;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.border2;
+                    background: pick.has-hover && c.blocked == "" ? Theme.sel-bg : transparent;
+                    opacity: c.blocked == "" ? 1 : 0.55;
+                    accessible-role: button;
+                    accessible-label: c.interface + ", " + c.meta;
+                    accessible-enabled: c.blocked == "";
+                    accessible-action-default => { if c.blocked == "" { root.port-chosen(c.interface); } }
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 12px;
+                        Icon { name: c.icon; tint: Theme.muted; y: (parent.height - 16px) / 2; width: 16px; }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text { text: c.interface; color: Theme.text; font-size: 13px; font-weight: 500; font-family: "JetBrains Mono"; }
+                            Text { text: c.blocked != "" ? c.blocked : c.meta; color: Theme.muted; font-size: 12px; overflow: elide; }
+                            if c.warning != "": Text { text: c.warning; color: Theme.warn-text; font-size: 12px; overflow: elide; }
+                        }
+                    }
+                    pick := TouchArea {
+                        enabled: c.blocked == "";
+                        mouse-cursor: c.blocked == "" ? pointer : default;
+                        clicked => { root.port-chosen(c.interface); }
+                    }
+                }
+                HorizontalLayout {
+                    padding-top: 6px;
+                    alignment: end;
+                    Button { label: "Cancel"; button-height: 36px; clicked => { root.port-chosen(""); } }
+                }
+            }
+        }
     }
 
     // Routes dialog

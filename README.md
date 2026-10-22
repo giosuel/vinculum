@@ -46,7 +46,7 @@ Wi-Fi with signal, band and security, wired ports and VPNs, all live. Search wit
 <td width="33%" valign="top">
 
 **🛠️ Every setting**<br>
-A full editor for each connection: security and 802.1X (eduroam and the like), IPv4 and IPv6, DNS, routes, MAC address, MTU, Ethernet link. Settings it doesn't show are left alone.
+A full editor for each connection: security and 802.1X (eduroam and the like), IPv4 and IPv6, DNS, routes, MAC address, MTU, Ethernet link, and VLANs, bridges and bonds with their ports. Settings it doesn't show are left alone.
 
 </td>
 </tr>
