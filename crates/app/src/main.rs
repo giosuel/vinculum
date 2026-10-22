@@ -866,10 +866,6 @@ fn act(app: &mut App, action: &str) {
             app.confirm = Some(command);
             app.confirm_text = Some((title, text, button));
         }
-        Some(view::Intent::Notice(text)) => {
-            app.message_title.clear();
-            app.message = Some((text, "info"));
-        }
         None => {}
     }
 }
@@ -1176,6 +1172,18 @@ async fn run(
             let (path, new) = (connection.clone(), *new);
             let _ = weak.upgrade_in_event_loop(move |window| {
                 APP.with(|app| editing::open(&mut app.borrow_mut(), path, settings, zones, new, extras));
+                render(&window);
+            });
+            return Ok(None);
+        }
+        NewEnterprise { ssid, suite_b } => {
+            let settings = editor::enterprise_settings(ssid, *suite_b, &secrets::new_uuid());
+            let zones = client.firewall_zones().await;
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                // Like an imported file: new, but filled in already.
+                APP.with(|app| {
+                    editing::open(&mut app.borrow_mut(), None, settings, zones, None, editing::Extras::default())
+                });
                 render(&window);
             });
             return Ok(None);
@@ -1603,7 +1611,7 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &vincu
         SetAirplane(false) => "Couldn't turn airplane mode off",
         Rescan { .. } => "Couldn't scan",
         Activate { .. } | ConnectOpen { .. } | Join { .. } => "Couldn't connect",
-        OpenEditor { .. } => "Couldn't read the connection",
+        OpenEditor { .. } | NewEnterprise { .. } => "Couldn't read the connection",
         SaveConnection { .. } => "Couldn't save the connection",
         SetSetting { .. } => "Couldn't change the connection",
         SaveHostname(_) => "Couldn't change the hostname",
