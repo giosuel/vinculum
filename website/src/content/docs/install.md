@@ -1,6 +1,6 @@
 ---
 title: Installing
-description: Packages for Arch (AUR), Debian and Ubuntu, Fedora and openSUSE, the AppImage, and building from source.
+description: Packages for Arch (AUR), Debian and Ubuntu, Fedora and openSUSE, the AppImage, the Flatpak, and building from source.
 ---
 
 Every release has packages for x86-64 and ARM64 Linux on its
@@ -43,6 +43,30 @@ Runs on most distributions without installing anything:
 chmod +x Vinculum-<version>-x86_64.AppImage
 ./Vinculum-<version>-x86_64.AppImage
 ```
+
+## Flatpak
+
+A bundle for x86-64. The freedesktop runtime it needs comes from Flathub, so add Flathub first if
+you haven't (`flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo`):
+
+```sh
+flatpak install --user ./Vinculum-<version>-linux-x64.flatpak
+flatpak run ch.giosuel.Vinculum
+```
+
+In the sandbox, Vinculum may talk to NetworkManager, your keyring, the notification daemon and
+the tray, and read your colour files; nothing else of your home folder. A few things work
+differently there:
+
+- The settings are in `~/.var/app/ch.giosuel.Vinculum/config/vinculum/config.toml`.
+- The hotspot can't list the devices connected to it.
+- Vinculum can't see whether NetworkManager's OpenVPN plugin is installed; without it, OpenVPN
+  connections fail when they're saved or started. WireGuard needs no plugin.
+- Certificates you pick in the editor should be in `~/.local/share/vinculum/certificates`, where
+  NetworkManager can read them.
+- With Hyprland, start it with `exec-once = flatpak run ch.giosuel.Vinculum --background`.
+
+The full list is in [`packaging/flatpak/`](https://github.com/giosuel/vinculum/tree/main/packaging/flatpak).
 
 ## Tarball
 
