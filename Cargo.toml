@@ -26,6 +26,10 @@ vinculum-nm = { path = "crates/nm" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 slint-build = "1.18.1"
 toml = "1.1.6"
+toml_edit = { version = "0.25.15", default-features = false, features = ["parse", "display"] }
+# The same runtime as Slint's own tray (async-io): ksni can't have both.
+ksni = { version = "0.3.6", default-features = false, features = ["async-io", "blocking"] }
+resvg = { version = "0.48.1", default-features = false }
 
 [workspace.lints.rust]
 # deny, not forbid: Slint's generated code allows it locally.

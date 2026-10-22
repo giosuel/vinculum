@@ -11,11 +11,14 @@ mod editing;
 mod editor;
 mod hotspot;
 mod instance;
+mod notify;
 mod openvpn;
 mod portal;
 mod qr;
+mod quick;
 mod secrets;
 mod theme;
+mod tray;
 mod view;
 mod wireguard;
 
@@ -35,6 +38,12 @@ struct Cli {
     /// Hyprland). Starting `vinculum` again shows the window.
     #[arg(long)]
     background: bool,
+    /// Show the quick popup, or hide it if it's open (for a bar's on-click or a keybind).
+    #[arg(long, conflicts_with_all = ["background", "toggle_wifi"])]
+    quick: bool,
+    /// Turn Wi-Fi on or off.
+    #[arg(long, conflicts_with = "background")]
+    toggle_wifi: bool,
 }
 
 /// The security choices of the hidden-network dialog, by index; the others use them too.
@@ -109,10 +118,37 @@ struct App {
     share: Option<(String, String, String)>,
     hostname_open: bool,
     hostname_error: String,
+    /// config.toml's `[tray]` and `[notifications]`.
+    settings: Settings,
+    /// The tray icon, while a tray host shows it, and what it and the popup show.
+    tray: Option<tray::Handle>,
+    quick: quick::Quick,
+    /// The popup was just made, and needs everything once.
+    quick_new: bool,
+    notifier: Option<notify::Notifier>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Settings {
+    tray: bool,
+    keep_running: bool,
+    notifications: bool,
+}
+
+impl Settings {
+    fn from(config: &config::Config) -> Self {
+        Self {
+            tray: config.tray.enabled,
+            keep_running: config.tray.keep_running,
+            notifications: config.notifications.enabled,
+        }
+    }
 }
 
 thread_local! {
     static APP: RefCell<App> = RefCell::new(App::default());
+    /// The quick popup, made the first time it's opened.
+    static QUICK: RefCell<Option<QuickWindow>> = const { RefCell::new(None) };
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -121,15 +157,31 @@ fn main() -> Result<(), slint::PlatformError> {
     // Needs the platform, which creating the first window sets up; takes effect when it's shown.
     slint::set_xdg_app_id(APP_ID)?;
     let weak = window.as_weak();
-    let shown = instance::claim(APP_ID, !cli.background, move || {
-        let _ = weak.upgrade_in_event_loop(|window| {
-            let _ = window.show();
-        });
+    let request = match (cli.background, cli.quick, cli.toggle_wifi) {
+        (true, ..) => None,
+        (_, true, _) => Some(instance::Request::Quick),
+        (_, _, true) => Some(instance::Request::ToggleWifi),
+        _ => Some(instance::Request::Show),
+    };
+    let claim = instance::claim(APP_ID, request, move |request| {
+        let _ = weak.upgrade_in_event_loop(move |window| handle_request(&window, request));
     });
-    if matches!(shown, instance::Claim::Shown) {
+    if matches!(claim, instance::Claim::Passed) {
         return Ok(());
     }
-    let background = cli.background;
+    if cli.toggle_wifi {
+        toggle_wifi_once();
+        return Ok(());
+    }
+    let settings = Settings::from(&config::load(&config::path()));
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        app.settings = settings;
+        app.notifier = Some(notify::Notifier::spawn());
+    });
+    apply_settings(&window, settings);
+    // Started from the bar for the popup: the window stays hidden, as in the background.
+    let background = cli.background || cli.quick;
     window.window().on_close_requested(move || {
         // Closing the window answers its questions with "cancel": nobody sees them any more.
         APP.with(|app| {
@@ -142,8 +194,12 @@ fn main() -> Result<(), slint::PlatformError> {
                 let _ = prompt.reply.send(None);
             }
         });
-        // In the background the agent keeps running; otherwise closing the window quits.
-        if !background {
+        // In the background or the tray the agent keeps running; otherwise closing the window quits.
+        let in_tray = APP.with(|app| {
+            let app = app.borrow();
+            app.tray.is_some() && app.settings.keep_running
+        });
+        if !background && !in_tray {
             let _ = slint::quit_event_loop();
         }
         slint::CloseRequestResponse::HideWindow
@@ -156,10 +212,244 @@ fn main() -> Result<(), slint::PlatformError> {
     APP.with(|app| app.borrow_mut().commands = Some(commands));
     spawn_network_manager(window.as_weak(), receiver);
     spawn_theme_watcher(window.as_weak());
-    if !background {
+    if cli.quick {
+        toggle_quick(&window);
+    } else if !background {
         window.show()?;
     }
     slint::run_event_loop_until_quit()
+}
+
+/// What another start asked for (see instance.rs).
+fn handle_request(window: &MainWindow, request: instance::Request) {
+    match request {
+        instance::Request::Show => {
+            let _ = window.show();
+        }
+        instance::Request::Quick => toggle_quick(window),
+        instance::Request::ToggleWifi => update(&window.as_weak(), |app| {
+            if let Some(command) = app.snapshot.as_ref().map(view::wifi_switch) {
+                send(app, command);
+            }
+        }),
+    }
+}
+
+/// `vinculum --toggle-wifi` with no Vinculum running: switch it and leave.
+fn toggle_wifi_once() {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime");
+    let result = runtime.block_on(async {
+        let client = vinculum_nm::Client::system().await?;
+        let on = client.snapshot().await?.wireless_enabled;
+        client.set_wireless_enabled(!on).await
+    });
+    if let Err(error) = result {
+        eprintln!("vinculum: couldn't switch Wi-Fi: {error}");
+    }
+}
+
+/// Starts or stops the tray as config.toml says.
+fn apply_settings(window: &MainWindow, settings: Settings) {
+    let weak = window.as_weak();
+    APP.with(|app| {
+        let mut app = app.borrow_mut();
+        app.settings = settings;
+        if settings.tray && app.tray.is_none() {
+            let quick = app.quick.clone();
+            app.tray = tray::spawn(quick, move |event| {
+                let _ = weak.upgrade_in_event_loop(move |window| on_tray(&window, event));
+            });
+        } else if !settings.tray {
+            app.tray = None;
+        }
+    });
+}
+
+/// The tray menu's and the quick popup's actions.
+fn on_tray(window: &MainWindow, event: tray::Event) {
+    let weak = window.as_weak();
+    match event {
+        tray::Event::Activate => toggle_quick(window),
+        tray::Event::Connect(id) | tray::Event::Toggle(id) => {
+            update(&weak, |app| {
+                let Some(snap) = &app.snapshot else { return };
+                let q = quick::build(Some(snap));
+                let page = if id.starts_with("wifi:") { view::Page::Wifi } else { view::Page::Vpn };
+                let action = if id.starts_with("wifi:") {
+                    if q.networks.iter().any(|n| n.id == id && n.active) {
+                        return;
+                    }
+                    "connect"
+                } else if q.vpns.iter().any(|v| v.id == id && v.on) {
+                    "disconnect"
+                } else {
+                    "connect"
+                };
+                app.ui = view::UiState { page, selected: Some(id), ..view::UiState::default() };
+                act(app, action);
+            });
+            // A password to type, or something to confirm: that's the window's job.
+            if APP.with(|app| {
+                let app = app.borrow();
+                app.dialog.is_some() || app.confirm.is_some() || app.message.is_some()
+            }) {
+                hide_quick();
+                let _ = window.show();
+            }
+        }
+        tray::Event::SetWifi(on) => update(&weak, |app| send(app, view::Command::SetWifi(on))),
+        tray::Event::SetAirplane(on) => update(&weak, |app| send(app, view::Command::SetAirplane(on))),
+        tray::Event::Open => {
+            hide_quick();
+            let _ = window.show();
+        }
+        tray::Event::Settings => {
+            hide_quick();
+            update(&weak, |app| app.ui = view::UiState { page: view::Page::Settings, ..view::UiState::default() });
+            let _ = window.show();
+        }
+        tray::Event::Quit => {
+            let _ = slint::quit_event_loop();
+        }
+    }
+}
+
+fn hide_quick() {
+    QUICK.with(|q| {
+        if let Some(q) = q.borrow().as_ref() {
+            let _ = q.hide();
+        }
+    });
+}
+
+/// Opens the quick popup, or closes it if it's open.
+fn toggle_quick(window: &MainWindow) {
+    let made = QUICK.with(|q| q.borrow().is_some());
+    if !made {
+        let Ok(popup) = QuickWindow::new() else { return };
+        let main = window.as_weak();
+        let on = move |event: tray::Event| {
+            let main = main.clone();
+            move || {
+                if let Some(window) = main.upgrade() {
+                    on_tray(&window, event.clone());
+                }
+            }
+        };
+        popup.on_wifi_switched({
+            let main = window.as_weak();
+            move || {
+                if let Some(window) = main.upgrade() {
+                    let on = APP.with(|app| app.borrow().quick.wifi_on);
+                    on_tray(&window, tray::Event::SetWifi(!on));
+                }
+            }
+        });
+        popup.on_rescan({
+            let main = window.as_weak();
+            move || {
+                update(&main, |app| {
+                    if let Some(command) = app.snapshot.as_ref().and_then(view::rescan) {
+                        send(app, command);
+                    }
+                })
+            }
+        });
+        popup.on_connect({
+            let main = window.as_weak();
+            move |id| {
+                if let Some(window) = main.upgrade() {
+                    on_tray(&window, tray::Event::Connect(id.into()));
+                }
+            }
+        });
+        popup.on_toggled({
+            let main = window.as_weak();
+            move |id| {
+                if let Some(window) = main.upgrade() {
+                    let event = if id == "airplane" {
+                        let on = APP.with(|app| app.borrow().quick.airplane);
+                        tray::Event::SetAirplane(!on)
+                    } else {
+                        tray::Event::Toggle(id.into())
+                    };
+                    on_tray(&window, event);
+                }
+            }
+        });
+        popup.on_open_main(on(tray::Event::Open));
+        popup.on_open_settings(on(tray::Event::Settings));
+        popup.on_dismissed(hide_quick);
+        QUICK.with(|q| *q.borrow_mut() = Some(popup));
+        APP.with(|app| app.borrow_mut().quick_new = true);
+        apply_theme(window);
+        render(window);
+    }
+    QUICK.with(|q| {
+        let q = q.borrow();
+        let Some(popup) = q.as_ref() else { return };
+        if popup.window().is_visible() {
+            let _ = popup.hide();
+        } else {
+            let _ = popup.show();
+            // A fresh list to pick from.
+            update(&window.as_weak(), |app| {
+                if let Some(command) = app.snapshot.as_ref().and_then(view::rescan) {
+                    send(app, command);
+                }
+            });
+        }
+    });
+}
+
+/// The tray and the popup show what changed.
+fn render_quick(app: &mut App) {
+    let q = quick::build(app.snapshot.as_ref());
+    if q == app.quick && !std::mem::take(&mut app.quick_new) {
+        return;
+    }
+    if let Some(tray) = &app.tray {
+        tray.show(q.clone());
+    }
+    QUICK.with(|popup| {
+        let Some(popup) = popup.borrow().as_ref().map(|p| p.as_weak()) else { return };
+        let Some(popup) = popup.upgrade() else { return };
+        popup.set_wifi_available(q.wifi_available);
+        popup.set_wifi_on(q.wifi_on);
+        popup.set_wifi_status(q.status.as_str().into());
+        popup.set_networks(model(
+            q.networks
+                .iter()
+                .take(quick::NETWORKS)
+                .map(|n| QuickRow {
+                    id: n.id.as_str().into(),
+                    name: n.name.as_str().into(),
+                    meta: n.meta.as_str().into(),
+                    bars: n.bars.into(),
+                    active: n.active,
+                    connecting: n.connecting,
+                })
+                .collect(),
+        ));
+        let mut toggles: Vec<QuickToggle> = q
+            .vpns
+            .iter()
+            .map(|v| QuickToggle {
+                id: v.id.as_str().into(),
+                name: v.name.as_str().into(),
+                meta: v.meta.as_str().into(),
+                on: v.on,
+            })
+            .collect();
+        toggles.push(QuickToggle {
+            id: "airplane".into(),
+            name: "Airplane mode".into(),
+            meta: "Turns off Wi-Fi and mobile broadband".into(),
+            on: q.airplane,
+        });
+        popup.set_toggles(model(toggles));
+    });
+    app.quick = q;
 }
 
 fn connect_callbacks(window: &MainWindow) {
@@ -212,6 +502,38 @@ fn connect_callbacks(window: &MainWindow) {
         })
     });
     editing::connect(window);
+    let weak = window.as_weak();
+    window.on_option_toggled(move |id| {
+        update(&weak, |app| {
+            let s = &mut app.settings;
+            let (table, key, on) = match id.as_str() {
+                "tray" => ("tray", "enabled", &mut s.tray),
+                "keep_running" => ("tray", "keep_running", &mut s.keep_running),
+                _ => ("notifications", "enabled", &mut s.notifications),
+            };
+            *on = !*on;
+            let on = *on;
+            // The file watcher starts or stops the tray once it sees the change.
+            if let Err(error) = config::set(&config::path(), table, key, on) {
+                app.message_title.clear();
+                app.message = Some((format!("Couldn't save the setting: {error}."), "danger"));
+            }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_builtin_chosen(move |i| {
+        update(&weak, |app| {
+            let builtin = config::Builtin::ALL[(i.max(0) as usize).min(2)];
+            app.builtin = builtin;
+            if let Err(error) = config::set(&config::path(), "theme", "builtin", builtin.key()) {
+                app.message_title.clear();
+                app.message = Some((format!("Couldn't save the setting: {error}."), "danger"));
+            }
+        });
+        if let Some(window) = weak.upgrade() {
+            apply_theme(&window);
+        }
+    });
     let weak = window.as_weak();
     window.on_add_clicked(move || update(&weak, |app| app.add_open = true));
     let weak = window.as_weak();
@@ -630,6 +952,27 @@ fn render(window: &MainWindow) {
         app.row_ids = v.row_ids;
         // Keep a selection that went away (a network out of range) from sticking.
         app.ui.selected = v.selected;
+        let tray_sub = match (app.settings.tray, app.tray.is_some()) {
+            (true, false) => "Show Vinculum in the system tray · no tray found: start a bar with one, such as Waybar",
+            _ => "Show Vinculum in the system tray",
+        };
+        window.set_options(model(vec![
+            view::toggle("tray", "Tray icon", tray_sub, app.settings.tray),
+            view::toggle(
+                "keep_running",
+                "Close to tray",
+                "Closing the window keeps the tray icon running",
+                app.settings.keep_running,
+            ),
+            view::toggle(
+                "notifications",
+                "Notifications",
+                "Connected, disconnected and failed",
+                app.settings.notifications,
+            ),
+        ]));
+        window.set_builtin_choice(config::Builtin::ALL.iter().position(|b| *b == app.builtin).unwrap_or(0) as i32);
+        render_quick(&mut app);
     });
 }
 
@@ -1195,6 +1538,12 @@ fn failed(weak: &slint::Weak<MainWindow>, reason: String, retry: Option<view::Co
                 if name.is_empty() { "Couldn't connect".to_owned() } else { format!("Couldn't connect to {name}") };
             app.message = Some((reason.clone(), "danger"));
             app.retry = retry;
+            if app.settings.notifications
+                && !window.window().is_visible()
+                && let Some(notifier) = &app.notifier
+            {
+                notifier.send(notify::failure(&name, &reason));
+            }
             app.ui.failed = (!row.is_empty()).then_some((row, reason));
         });
         render(&window);
@@ -1251,6 +1600,14 @@ fn deliver(weak: &slint::Weak<MainWindow>, snapshot: Result<vinculum_nm::Snapsho
             let mut app = app.borrow_mut();
             match snapshot {
                 Ok(snapshot) => {
+                    if app.settings.notifications
+                        && !window.window().is_visible()
+                        && let (Some(before), Some(notifier)) = (&app.snapshot, &app.notifier)
+                    {
+                        for notice in notify::changes(before, &snapshot) {
+                            notifier.send(notice);
+                        }
+                    }
                     app.snapshot = Some(snapshot);
                     app.error = None;
                 }
@@ -1292,6 +1649,7 @@ fn spawn_theme_watcher(weak: slint::Weak<MainWindow>) {
                 let (statuses, palette) = theme::resolve(&config.theme.sources);
                 let rows = source_rows(&config, &statuses);
                 let builtin = config.theme.builtin;
+                let settings = Settings::from(&config);
                 let config_path = path.display().to_string();
                 let _ = weak.upgrade_in_event_loop(move |window| {
                     APP.with(|app| {
@@ -1300,6 +1658,8 @@ fn spawn_theme_watcher(weak: slint::Weak<MainWindow>) {
                         app.builtin = builtin;
                     });
                     apply_theme(&window);
+                    apply_settings(&window, settings);
+                    render(&window);
                     window.set_config_path(shorten_home(&config_path).into());
                     window.set_builtin_label(builtin_label(builtin, palette.is_some()).into());
                     window.set_sources(model(rows.into_iter().map(SourceRow::from).collect()));
@@ -1393,7 +1753,15 @@ fn apply_theme(window: &MainWindow) {
         (app.palette, app.builtin)
     });
     let p = palette.unwrap_or_else(|| theme::Palette::builtin(builtin, window.get_prefers_dark()));
-    let t = window.global::<Theme>();
+    set_theme(window.global::<Theme>(), &p);
+    QUICK.with(|q| {
+        if let Some(q) = q.borrow().as_ref() {
+            set_theme(q.global::<Theme>(), &p);
+        }
+    });
+}
+
+fn set_theme(t: Theme<'_>, p: &theme::Palette) {
     t.set_bg(color(p.bg));
     t.set_panel(color(p.panel));
     t.set_surface(color(p.surface));

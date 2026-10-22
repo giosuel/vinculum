@@ -126,7 +126,7 @@ fn action(id: &str, label: &str, kind: &str) -> Action {
     Action { id: s(id), label: s(label), kind: s(kind), enabled: true }
 }
 
-fn toggle(id: &str, label: &str, sub: &str, on: bool) -> Toggle {
+pub(crate) fn toggle(id: &str, label: &str, sub: &str, on: bool) -> Toggle {
     Toggle { id: s(id), label: s(label), sub: s(sub), on }
 }
 
@@ -394,7 +394,7 @@ fn hotspot_page(snap: &Snapshot) -> HotspotView {
     }
 }
 
-fn wifi_device(snapshot: &Snapshot) -> Option<&Device> {
+pub(crate) fn wifi_device(snapshot: &Snapshot) -> Option<&Device> {
     snapshot.devices.iter().find(|d| d.kind == DeviceKind::Wifi)
 }
 
@@ -466,7 +466,7 @@ fn nav(snapshot: Option<&Snapshot>, page: Page) -> Vec<NavItem> {
     ]
 }
 
-fn network_id(n: &Network) -> String {
+pub(crate) fn network_id(n: &Network) -> String {
     format!("wifi:{}:{}", hex(&n.ssid), n.security.label())
 }
 
@@ -1160,7 +1160,7 @@ pub fn rescan(snap: &Snapshot) -> Option<Command> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use slint::Model;
     use vinculum_nm::{AccessPoint, ActiveConnection, DeviceState, IpConfig, WifiDevice, WiredDevice};
@@ -1178,7 +1178,7 @@ mod tests {
     }
 
     /// Connected to "Lumen Home", two more networks in range, an unplugged Ethernet port.
-    fn home() -> Snapshot {
+    pub(crate) fn home() -> Snapshot {
         let wifi = Device {
             path: "/d/wlan".into(),
             interface: "wlp2s0".into(),
