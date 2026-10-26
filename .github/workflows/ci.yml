@@ -66,6 +66,8 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends dbus python3-dbusmock gnome-keyring
       - name: test (including the mock NetworkManager tests)
         run: scripts/test.sh
+        env:
+          VINCULUM_REQUIRE_KEYRING: 1
       - name: --version
         run: cargo run --locked -p vinculum -- --version
 

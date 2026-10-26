@@ -46,8 +46,12 @@ async fn round_trip(keyring: &Keyring) {
 #[tokio::test]
 async fn secret_service() {
     let Ok(address) = std::env::var("VINCULUM_KEYRING_BUS") else {
-        // CI installs gnome-keyring, so skipping there would hide a broken set-up.
-        assert!(std::env::var_os("CI").is_none(), "CI has no keyring to test against");
+        // Our CI installs gnome-keyring, so skipping there would hide a broken set-up. Other CI
+        // (the AUR package's check() runs in a release job) has none.
+        assert!(
+            std::env::var_os("VINCULUM_REQUIRE_KEYRING").is_none(),
+            "VINCULUM_REQUIRE_KEYRING is set, but there's no keyring to test against"
+        );
         eprintln!("skipped: set VINCULUM_KEYRING_BUS to a bus with an unlocked Secret Service");
         return;
     };
