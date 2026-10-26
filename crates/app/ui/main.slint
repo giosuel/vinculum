@@ -67,8 +67,6 @@ component ListRow inherits Rectangle {
     callback clicked();
     height: 52px;
     border-radius: 8px;
-    border-width: 1px;
-    border-color: entry.selected ? Theme.accent-soft-border : transparent;
     background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
     accessible-role: list-item;
     accessible-label: entry.name + ", " + entry.meta;
@@ -193,7 +191,8 @@ export component MainWindow inherits Window {
     // Settings page.
     in property <string> config-path;
     in property <[SourceRow]> sources;
-    in property <string> builtin-label;
+    /// Why the built-in theme choice is greyed out (a colour source is in use); empty when it isn't.
+    in property <string> builtin-note;
     in property <int> builtin-choice;
     in property <[Toggle]> options;
     callback builtin-chosen(int);
@@ -752,15 +751,20 @@ export component MainWindow inherits Window {
                             }
                             HorizontalLayout {
                                 spacing: 24px;
-                                Text { text: "Built-in theme"; color: Theme.icon-soft; width: 200px; vertical-alignment: center; }
-                                HorizontalLayout {
-                                    alignment: start;
-                                    Segmented {
-                                        label: "Built-in theme";
-                                        options: ["Follow system", "Dark", "Light"];
-                                        selected: root.builtin-choice;
-                                        changed(i) => { root.builtin-chosen(i); }
+                                Text { text: "Built-in theme"; color: Theme.icon-soft; width: 200px; height: 40px; vertical-alignment: center; }
+                                VerticalLayout {
+                                    spacing: 8px;
+                                    HorizontalLayout {
+                                        alignment: start;
+                                        Segmented {
+                                            label: "Built-in theme";
+                                            options: ["Follow system", "Dark", "Light"];
+                                            selected: root.builtin-choice;
+                                            enabled: root.builtin-note == "";
+                                            changed(i) => { root.builtin-chosen(i); }
+                                        }
                                     }
+                                    if root.builtin-note != "": Text { text: root.builtin-note; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
                                 }
                             }
                             for o in root.options: HorizontalLayout {

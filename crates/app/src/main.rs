@@ -1699,6 +1699,7 @@ fn spawn_theme_watcher(weak: slint::Weak<MainWindow>) {
             if last.as_ref() != Some(&now) {
                 let (statuses, palette) = theme::resolve(&config.theme.sources);
                 let rows = source_rows(&config, &statuses);
+                let note = theme::builtin_note(&config.theme.sources, &statuses);
                 let builtin = config.theme.builtin;
                 let settings = Settings::from(&config);
                 let config_path = path.display().to_string();
@@ -1712,7 +1713,7 @@ fn spawn_theme_watcher(weak: slint::Weak<MainWindow>) {
                     apply_settings(&window, settings);
                     render(&window);
                     window.set_config_path(shorten_home(&config_path).into());
-                    window.set_builtin_label(builtin_label(builtin, palette.is_some()).into());
+                    window.set_builtin_note(note.into());
                     window.set_sources(model(rows.into_iter().map(SourceRow::from).collect()));
                 });
                 last = Some(now);
@@ -1776,15 +1777,6 @@ fn source_rows(config: &config::Config, statuses: &[theme::SourceStatus]) -> Vec
         swatches: Vec::new(),
     });
     rows
-}
-
-fn builtin_label(builtin: config::Builtin, overridden: bool) -> String {
-    let label = match builtin {
-        config::Builtin::Auto => "Follow the desktop (dark or light)",
-        config::Builtin::Dark => "Dark",
-        config::Builtin::Light => "Light",
-    };
-    if overridden { format!("{label}, when no colour source is usable") } else { label.into() }
 }
 
 fn shorten_home(path: &str) -> String {

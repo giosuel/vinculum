@@ -83,9 +83,11 @@ export component Segmented inherits Rectangle {
     in property <[string]> options;
     in property <string> label;
     in-out property <int> selected;
+    in property <bool> enabled: true;
     /// Also called when the user picks one (for a choice that isn't bound two-way).
     callback changed(int);
     height: 40px;
+    opacity: root.enabled ? 1 : 0.5;
     border-radius: 9px;
     border-width: 1px;
     border-color: Theme.border2;
@@ -99,13 +101,12 @@ export component Segmented inherits Rectangle {
             // Measured in the selected (heavier) weight, so choosing an option doesn't resize it.
             min-width: widest.preferred-width + 24px;
             border-radius: 7px;
-            border-width: i == root.selected ? 1px : 0;
-            border-color: Theme.accent-soft-border;
-            background: i == root.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+            background: i == root.selected ? Theme.accent-soft-bg : touch.has-hover && root.enabled ? Theme.sel-bg : transparent;
             accessible-role: tab;
             accessible-label: option;
             accessible-item-selected: i == root.selected;
-            accessible-action-default => { root.selected = i; root.changed(i); }
+            accessible-enabled: root.enabled;
+            accessible-action-default => { if root.enabled { root.selected = i; root.changed(i); } }
             label := Text {
                 text: option;
                 color: i == root.selected ? Theme.text : Theme.muted;
@@ -116,7 +117,7 @@ export component Segmented inherits Rectangle {
                 overflow: elide;
             }
             widest := Text { text: option; font-size: 13px; font-weight: 500; visible: false; }
-            touch := TouchArea { mouse-cursor: pointer; clicked => { root.selected = i; root.changed(i); } }
+            touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.selected = i; root.changed(i); } }
         }
     }
 }
