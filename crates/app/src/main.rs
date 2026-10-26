@@ -6,6 +6,7 @@ use clap::Parser;
 use futures_util::StreamExt;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+mod audio;
 mod bluetooth;
 mod config;
 mod editing;

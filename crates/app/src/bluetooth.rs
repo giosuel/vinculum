@@ -9,9 +9,10 @@ use futures_util::StreamExt;
 use slint::{ComponentHandle, SharedString};
 use vinculum_bt::{Adapter, AgentEvent, Answer, Ask, Device, DeviceKind, PairingRequest, Snapshot};
 
+use crate::audio;
 use crate::{
-    APP, Action, App, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, DetailItem, Details, MainWindow, NavItem,
-    Toggle, model, update,
+    APP, Action, App, BtAudio, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, DetailItem, Details, MainWindow,
+    NavItem, Toggle, model, update,
 };
 
 /// How long "Look for devices" looks before it stops by itself (discovery costs battery).
@@ -78,6 +79,11 @@ pub enum Command {
     Unblock,
     /// Reads everything again now ("Check again").
     Refresh,
+    /// Switches a sound card's profile (PipeWire), then reads the cards again.
+    SetAudio {
+        card: String,
+        profile: String,
+    },
 }
 
 impl Command {
@@ -99,6 +105,9 @@ pub enum Event {
     Agent(AgentEvent),
     /// rfkill couldn't be written to.
     UnblockFailed(String),
+    /// The Bluetooth sound cards; `None` when there's no PipeWire (or PulseAudio) to ask.
+    Audio(Option<Vec<audio::Card>>),
+    AudioFailed(String),
 }
 
 /// A message above the list.
@@ -153,6 +162,8 @@ pub struct State {
     pub open: bool,
     pub commands: Option<tokio::sync::mpsc::UnboundedSender<Command>>,
     pub row_ids: Vec<String>,
+    /// The Bluetooth sound cards PipeWire has.
+    pub audio: Vec<audio::Card>,
 }
 
 impl State {
@@ -453,6 +464,16 @@ fn item(label: &str, value: impl Into<SharedString>, mono: bool) -> DetailItem {
     DetailItem { label: s(label), value: value.into(), mono }
 }
 
+/// The audio choice for a connected headset or speaker: the options, and the one in use.
+fn audio_choice(device: &Device, state: &State) -> Option<(Vec<audio::Choice>, Option<usize>)> {
+    if !device.connected || !device.audio() {
+        return None;
+    }
+    let card = state.audio.iter().find(|c| c.address.eq_ignore_ascii_case(&device.address))?;
+    let (choices, selected) = audio::choices(card);
+    (!choices.is_empty()).then_some((choices, selected))
+}
+
 fn details(device: &Device, adapter: &Adapter, state: &State) -> Details {
     let busy = state.busy.contains(&device.path);
     let kind = capitalised(kind_label(device.kind()));
@@ -604,6 +625,10 @@ pub fn page(state: &State, now: Instant) -> (BtPage, Vec<String>, Option<String>
     if let Some(device) = selected.as_deref().and_then(|id| snap.device(id)) {
         page.has_details = true;
         page.details = details(device, adapter, state);
+        if let Some((choices, chosen)) = audio_choice(device, state) {
+            page.audio = model(choices.into_iter().map(|c| BtAudio { label: s(c.label), sub: s(c.sub) }).collect());
+            page.audio_selected = chosen.map_or(-1, |i| i as i32);
+        }
     }
     if let Some(m) = &state.message {
         page.message = s(&m.text);
@@ -908,6 +933,15 @@ pub fn handle(app: &mut App, event: Event) {
                 next_prompt(state);
             }
         }
+        Event::Audio(cards) => state.audio = cards.unwrap_or_default(),
+        Event::AudioFailed(error) => {
+            state.message = Some(Message {
+                title: "Couldn't switch the audio".into(),
+                text: format!("{error}."),
+                tone: "danger",
+                retry: None,
+            })
+        }
         Event::UnblockFailed(error) => {
             state.message = None;
             // Shown on the empty state, which has no message: put it in the error line instead.
@@ -1035,6 +1069,19 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
                 }
             }
             "dismiss" => state.message = None,
+            "audio" => {
+                let Some(device) = selected else { return };
+                let Some((choices, _)) = audio_choice(&device, state) else { return };
+                let Some(choice) = argument.parse::<usize>().ok().and_then(|i| choices.get(i)) else { return };
+                let Some(card) = state.audio.iter_mut().find(|c| c.address.eq_ignore_ascii_case(&device.address))
+                else {
+                    return;
+                };
+                // Shown at once; the cards are read again once it's switched.
+                card.active = Some(choice.profile.clone());
+                let (card, profile) = (card.name.clone(), choice.profile.clone());
+                state.send(Command::SetAudio { card, profile });
+            }
             "pair-accept" => answer_prompt(state, true, &code, always),
             "pair-cancel" => answer_prompt(state, false, &code, always),
             _ => {}
@@ -1090,10 +1137,30 @@ pub fn spawn(weak: slint::Weak<MainWindow>, mut commands: tokio::sync::mpsc::Unb
                     loop {
                         tokio::select! {
                             snapshot = snapshots.next() => match snapshot {
-                                Some(snapshot) => deliver(&weak, Event::Snapshot(snapshot)),
+                                Some(snapshot) => {
+                                    // A headset that connected (or went) changes the sound cards.
+                                    let audio = snapshot.as_ref().is_ok_and(|s| s.devices.iter().any(|d| d.connected && d.audio()));
+                                    deliver(&weak, Event::Snapshot(snapshot));
+                                    if audio {
+                                        read_audio(&weak);
+                                    } else {
+                                        deliver(&weak, Event::Audio(Some(Vec::new())));
+                                    }
+                                }
                                 None => break,
                             },
                             Some(command) = commands.recv() => {
+                                if let Command::SetAudio { card, profile } = &command {
+                                    let (card, profile, weak) = (card.clone(), profile.clone(), weak.clone());
+                                    tokio::spawn(async move {
+                                        let set = tokio::task::spawn_blocking(move || audio::set_profile(&card, &profile)).await;
+                                        if let Ok(Err(error)) = set {
+                                            deliver(&weak, Event::AudioFailed(error.to_string()));
+                                        }
+                                        read_audio(&weak);
+                                    });
+                                    continue;
+                                }
                                 if command == Command::Refresh {
                                     deliver(&weak, Event::Snapshot(client.snapshot().await));
                                     continue;
@@ -1138,6 +1205,16 @@ pub fn spawn(weak: slint::Weak<MainWindow>, mut commands: tokio::sync::mpsc::Unb
     });
 }
 
+/// Reads the sound cards in the background and hands them to the page.
+fn read_audio(weak: &slint::Weak<MainWindow>) {
+    let weak = weak.clone();
+    tokio::spawn(async move {
+        let cards = tokio::task::spawn_blocking(audio::cards).await;
+        // No sound server (or a broken one): the audio choice isn't shown.
+        deliver(&weak, Event::Audio(cards.ok().and_then(Result::ok)));
+    });
+}
+
 enum Failure {
     Bluez(vinculum_bt::Error),
     Rfkill(String),
@@ -1173,7 +1250,8 @@ async fn run(client: &vinculum_bt::Client, command: &Command) -> Result<(), Fail
         Command::Rename { device, alias } => client.set_alias(device, alias).await?,
         Command::Forget { adapter, device } => client.remove(adapter, device).await?,
         Command::Unblock => unblock().map_err(|e| Failure::Rfkill(e.to_string()))?,
-        Command::Refresh => {}
+        // Both handled before they get here.
+        Command::Refresh | Command::SetAudio { .. } => {}
     }
     Ok(())
 }
@@ -1415,6 +1493,31 @@ mod tests {
         answer_prompt(&mut state, true, " 042 ", false);
         assert!(state.prompt.is_none());
         assert_eq!(answer.try_recv().unwrap(), Answer::Passkey(42));
+    }
+
+    #[test]
+    fn a_connected_headset_gets_the_audio_choice() {
+        let mut state = state();
+        let card = |address: &str| audio::Card {
+            name: "bluez_card.x".into(),
+            address: address.into(),
+            profiles: vec![
+                audio::Profile { name: "a2dp-sink".into(), description: "(A2DP Sink, codec LDAC)".into(), priority: 2 },
+                audio::Profile { name: "headset-head-unit".into(), description: String::new(), priority: 1 },
+                audio::Profile { name: "off".into(), description: String::new(), priority: 0 },
+            ],
+            active: Some("headset-head-unit".into()),
+        };
+        // No card for it (no PipeWire): no choice.
+        assert_eq!(page(&state, Instant::now()).0.audio.row_count(), 0);
+        state.audio = vec![card("aa:bb:cc:00:00:01")];
+        let page = page(&state, Instant::now()).0;
+        let options: Vec<String> = page.audio.iter().map(|o| format!("{} {}", o.label, o.sub)).collect();
+        assert_eq!(options, ["High quality A2DP · LDAC", "Headset HFP · microphone on", "Off Controls only"]);
+        assert_eq!(page.audio_selected, 1);
+        // Not for the phone, which isn't connected.
+        state.selected = Some("/org/bluez/hci0/dev_2".into());
+        assert_eq!(super::page(&state, Instant::now()).0.audio.row_count(), 0);
     }
 
     #[test]

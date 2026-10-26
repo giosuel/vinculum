@@ -11,6 +11,8 @@ import { Details, DetailsPane } from "details.slint";
 export struct BtRow { id: string, name: string, meta: string, tone: string, icon: string, battery: int, bars: int, button: string, selected: bool }
 /// busy: the spinner and its label on the right of the title ("Looking for devices").
 /// empty: a line shown when there are no rows.
+/// One choice of a headset's audio: "High quality", "A2DP · LDAC".
+export struct BtAudio { label: string, sub: string }
 export struct BtSection { title: string, rows: [BtRow], busy: string, empty: string }
 /// state: "list", "loading", "off", "blocked", "no-adapter" or "no-service"; everything but
 /// "list" shows the empty-* fields instead of the list.
@@ -25,6 +27,9 @@ export struct BtPage {
     sections: [BtSection],
     has-details: bool,
     details: Details,
+    /// The audio choice for a connected headset or speaker, when PipeWire has its card.
+    audio: [BtAudio],
+    audio-selected: int,
     message: string,
     message-title: string,
     message-tone: string,
@@ -320,6 +325,43 @@ export component BluetoothPage inherits HorizontalLayout {
         action(id) => { root.act("detail", id); }
         toggle(id) => { root.act("toggle", id); }
         rename => { root.act("rename", ""); }
+        if root.page.audio.length > 0: VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Text { text: "Audio"; color: Theme.text; font-weight: 600; vertical-alignment: center; }
+                Text { text: "through PipeWire"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+            }
+            Rectangle {
+                height: 52px;
+                border-radius: 9px;
+                border-width: 1px;
+                border-color: Theme.border2;
+                accessible-role: tab-list;
+                accessible-label: "Audio";
+                HorizontalLayout {
+                    padding: 3px;
+                    spacing: 3px;
+                    for option[i] in root.page.audio: Rectangle {
+                        horizontal-stretch: 1;
+                        border-radius: 7px;
+                        background: i == root.page.audio-selected ? Theme.accent-soft-bg : audio-touch.has-hover ? Theme.sel-bg : transparent;
+                        accessible-role: tab;
+                        accessible-label: option.label;
+                        accessible-item-selected: i == root.page.audio-selected;
+                        accessible-action-default => { root.act("audio", "" + i); }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text { text: option.label; color: i == root.page.audio-selected ? Theme.text : Theme.muted; font-size: 13px; font-weight: i == root.page.audio-selected ? 600 : 500; horizontal-alignment: center; overflow: elide; }
+                            Text { text: option.sub; color: Theme.faint; font-size: 11px; horizontal-alignment: center; overflow: elide; }
+                        }
+                        audio-touch := TouchArea { mouse-cursor: pointer; clicked => { root.act("audio", "" + i); } }
+                    }
+                }
+            }
+        }
     }
 }
 
