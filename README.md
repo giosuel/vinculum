@@ -118,7 +118,8 @@ What the sandbox allows, and what works differently in it, is in [`packaging/fla
 
 Every release also has ARM64 builds (except the Flatpak). All of them need NetworkManager. Optional: NetworkManager's
 OpenVPN plugin (`networkmanager-openvpn` on Arch) for OpenVPN, an XDG desktop portal with a file
-dialog (`xdg-desktop-portal-gtk`, say) for choosing certificates and VPN files, and a keyring.
+dialog (`xdg-desktop-portal-gtk`, say) for choosing certificates and VPN files, a keyring, and
+BlueZ (`bluez`, with its service running) for Bluetooth.
 
 **From source** – with [Rust](https://rustup.rs) and fontconfig's development files:
 

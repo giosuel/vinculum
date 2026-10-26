@@ -6,6 +6,7 @@ use clap::Parser;
 use futures_util::StreamExt;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+mod bluetooth;
 mod config;
 mod editing;
 mod editor;
@@ -127,6 +128,8 @@ struct App {
     /// The popup was just made, and needs everything once.
     quick_new: bool,
     notifier: Option<notify::Notifier>,
+    /// The Bluetooth page.
+    bt: bluetooth::State,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -194,6 +197,10 @@ fn main() -> Result<(), slint::PlatformError> {
             for prompt in app.prompts.drain(..) {
                 let _ = prompt.reply.send(None);
             }
+            // Dropping the pairing requests rejects them; nobody looks for devices any more.
+            app.bt.prompt = None;
+            app.bt.prompts.clear();
+            bluetooth::set_open(&mut app.bt, false);
         });
         // In the background or the tray the agent keeps running; otherwise closing the window quits.
         let in_tray = APP.with(|app| {
@@ -212,6 +219,19 @@ fn main() -> Result<(), slint::PlatformError> {
     let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
     APP.with(|app| app.borrow_mut().commands = Some(commands));
     spawn_network_manager(window.as_weak(), receiver);
+    let (bt_commands, bt_receiver) = tokio::sync::mpsc::unbounded_channel();
+    APP.with(|app| app.borrow_mut().bt.commands = Some(bt_commands));
+    bluetooth::spawn(window.as_weak(), bt_receiver);
+    // The Bluetooth page's "Visible · 2:41" counts down.
+    let countdown = slint::Timer::default();
+    let weak = window.as_weak();
+    countdown.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
+        if APP.with(|app| bluetooth::counting_down(&app.borrow()))
+            && let Some(window) = weak.upgrade()
+        {
+            render(&window);
+        }
+    });
     spawn_theme_watcher(window.as_weak());
     if cli.quick {
         toggle_quick(&window);
@@ -477,6 +497,9 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_move_selection(move |delta| {
         update(&weak, |app| {
+            if app.ui.page == view::Page::Bluetooth {
+                return bluetooth::move_selection(&mut app.bt, delta);
+            }
             let ids = &app.row_ids;
             if ids.is_empty() {
                 return;
@@ -489,7 +512,18 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_action(move |id| update(&weak, |app| act(app, &id)));
     let weak = window.as_weak();
-    window.on_activate_selected(move || update(&weak, |app| act(app, "connect")));
+    window.on_activate_selected(move || {
+        update(&weak, |app| match app.ui.page {
+            view::Page::Bluetooth => bluetooth::activate(&mut app.bt),
+            _ => act(app, "connect"),
+        })
+    });
+    let weak = window.as_weak();
+    window.on_bt_act(move |verb, argument| {
+        if let Some(window) = weak.upgrade() {
+            bluetooth::act(&window, &verb, &argument);
+        }
+    });
     let weak = window.as_weak();
     window.on_toggle(move |id| {
         update(&weak, |app| {
@@ -895,7 +929,13 @@ fn render(window: &MainWindow) {
     APP.with(|app| {
         let mut app = app.borrow_mut();
         let v = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui);
-        window.set_nav(model(v.nav));
+        // Bluetooth goes between Hotspot and Saved connections.
+        let mut nav = v.nav;
+        nav.insert(nav.len().min(4), bluetooth::nav(&app.bt, app.ui.page == view::Page::Bluetooth));
+        window.set_nav(model(nav));
+        let on_bluetooth = app.ui.page == view::Page::Bluetooth && window.window().is_visible();
+        bluetooth::set_open(&mut app.bt, on_bluetooth);
+        bluetooth::render(window, &mut app);
         window.set_page(app.ui.page.id().into());
         window.set_page_title(v.page_title.into());
         window.set_show_wifi_switch(v.show_wifi_switch);

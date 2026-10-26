@@ -11,6 +11,7 @@ license=('AGPL-3.0-or-later' 'OFL-1.1')
 depends=('fontconfig' 'glibc' 'hicolor-icon-theme' 'libgcc' 'libglvnd' 'libx11' 'libxcursor' 'libxi'
          'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'networkmanager' 'wayland')
 optdepends=('networkmanager-openvpn: OpenVPN connections'
+            'bluez: Bluetooth'
             'xdg-desktop-portal: file dialogs for certificates and VPN files'
             'gnome-keyring: passwords kept "for me only" (or KWallet)')
 provides=("$_pkgname=$pkgver")
