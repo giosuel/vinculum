@@ -31,6 +31,10 @@ vinculum-nm.workspace = true
 [build-dependencies]
 slint-build.workspace = true
 
+[dev-dependencies]
+# Slint's own test backend (a mock window and clock), the same version as slint.
+i-slint-backend-testing = "=1.18.1"
+
 [lints]
 workspace = true
 
