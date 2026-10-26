@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/app", "crates/cli", "crates/keyring", "crates/nm", "xtask"]
+members = ["crates/app", "crates/bt", "crates/cli", "crates/keyring", "crates/nm", "xtask"]
 
 [workspace.package]
 version = "0.0.0-dev"
@@ -21,6 +21,7 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 serde = "1.0.229"
 thiserror = "2.0.21"
 tokio = "1.53.2"
+vinculum-bt = { path = "crates/bt" }
 vinculum-keyring = { path = "crates/keyring" }
 vinculum-nm = { path = "crates/nm" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }

@@ -46,12 +46,15 @@ rustPlatform.buildRustPackage {
     "-p"
     "vinculum"
   ];
-  # The unit tests; the integration tests need a D-Bus mock of NetworkManager and a keyring.
+  # The unit tests; the integration tests need D-Bus mocks of NetworkManager and BlueZ, and a
+  # keyring.
   cargoTestFlags = [
     "-p"
     "vinculum"
     "-p"
     "vinculum-nm"
+    "-p"
+    "vinculum-bt"
     "-p"
     "vinculum-keyring"
     "--lib"

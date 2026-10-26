@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The whole test suite, including the tests against a mock NetworkManager
-# (crates/nm/tests/mock_nm.rs). Those need dbus-daemon and python-dbusmock; without them this
+# The whole test suite, including the tests against a mock NetworkManager and a mock BlueZ
+# (crates/nm/tests/mock_nm.rs, crates/bt/tests/mock_bluez.rs). Those need dbus-daemon and python-dbusmock; without them this
 # fails instead of skipping them. Extra arguments go to cargo test.
 #
 # The keyring tests (crates/keyring/tests/keyring.rs) also run against a real Secret Service:

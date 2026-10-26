@@ -4922,6 +4922,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vinculum-bt"
+version = "0.0.0-dev"
+dependencies = [
+ "futures-util",
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "vinculum-cli"
 version = "0.0.0-dev"
 dependencies = [
