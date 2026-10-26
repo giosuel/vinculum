@@ -60,7 +60,15 @@ impl Error {
 
     /// What went wrong, for people: BlueZ's own messages are terse ("Page Timeout").
     pub fn describe(&self) -> String {
-        let Self::Refused { kind, message } = self else { return self.to_string() };
+        let Self::Refused { kind, message } = self else {
+            // Another service's error can be long (a Python traceback, say): its first line.
+            let text = self.to_string();
+            let first = text.lines().next().unwrap_or_default();
+            return match first.char_indices().nth(160) {
+                Some((cut, _)) => format!("{}…", &first[..cut]),
+                None => first.to_owned(),
+            };
+        };
         match kind.as_str() {
             "AuthenticationFailed" | "AuthenticationRejected" => "The device didn't accept the pairing.".into(),
             "AuthenticationCanceled" => "Pairing was cancelled.".into(),
@@ -154,6 +162,11 @@ impl Client {
             self.set(adapter, ADAPTER, "DiscoverableTimeout", Value::from(timeout)).await?;
         }
         self.set(adapter, ADAPTER, "Discoverable", Value::from(on)).await
+    }
+
+    /// Whether other devices may ask to pair.
+    pub async fn set_pairable(&self, adapter: &str, on: bool) -> Result<(), Error> {
+        self.set(adapter, ADAPTER, "Pairable", Value::from(on)).await
     }
 
     /// The name other devices see this computer as.

@@ -13,6 +13,8 @@ finish-args:
   - --device=dri
   # NetworkManager, on the system bus: everything the app shows and changes.
   - --system-talk-name=org.freedesktop.NetworkManager
+  # BlueZ, on the system bus: Bluetooth adapters, devices and pairing.
+  - --system-talk-name=org.bluez
   # Passwords kept "for me only": GNOME Keyring (Secret Service), or KWallet.
   - --talk-name=org.freedesktop.secrets
   - --talk-name=org.kde.kwalletd6

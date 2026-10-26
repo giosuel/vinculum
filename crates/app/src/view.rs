@@ -16,6 +16,7 @@ pub enum Page {
     Wired,
     Vpn,
     Hotspot,
+    Bluetooth,
     Saved,
     Settings,
 }
@@ -27,6 +28,7 @@ impl Page {
             "wired" => Self::Wired,
             "vpn" => Self::Vpn,
             "hotspot" => Self::Hotspot,
+            "bluetooth" => Self::Bluetooth,
             "saved" => Self::Saved,
             "settings" => Self::Settings,
             _ => return None,
@@ -39,6 +41,7 @@ impl Page {
             Self::Wired => "wired",
             Self::Vpn => "vpn",
             Self::Hotspot => "hotspot",
+            Self::Bluetooth => "bluetooth",
             Self::Saved => "saved",
             Self::Settings => "settings",
         }
@@ -159,6 +162,7 @@ impl From<DetailsData> for Details {
             toggles: model(d.toggles),
             items: model(d.items),
             note: s(d.note),
+            ..Details::default()
         }
     }
 }
@@ -266,7 +270,8 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
             view.hotspot = Some(hotspot_page(snapshot));
             Vec::new()
         }
-        Page::Settings => Vec::new(),
+        // Bluetooth has a page of its own (bluetooth.rs).
+        Page::Bluetooth | Page::Settings => Vec::new(),
     };
     // Rows grouped by section title, the selection resolved, and the selected row's details.
     view.row_ids = rows.iter().flat_map(|(_, r)| r.iter().map(|r| r.id.clone())).collect();
@@ -297,7 +302,11 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
     if let Some(id) = &selected {
         view.details = details(snapshot, state, id).map(Details::from);
     }
-    if view.empty.is_none() && view.row_ids.is_empty() && state.page != Page::Settings && view.placeholder.is_empty() {
+    if view.empty.is_none()
+        && view.row_ids.is_empty()
+        && !matches!(state.page, Page::Settings | Page::Bluetooth)
+        && view.placeholder.is_empty()
+    {
         view.empty = Some(nothing_here(state.page, !state.search.is_empty()));
     }
     view.selected = selected;
@@ -310,6 +319,7 @@ fn page_title(page: Page) -> &'static str {
         Page::Wired => "Wired",
         Page::Vpn => "VPN",
         Page::Hotspot => "Hotspot",
+        Page::Bluetooth => "Bluetooth",
         Page::Saved => "Saved connections",
         Page::Settings => "Settings",
     }

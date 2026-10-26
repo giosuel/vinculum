@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs a command against a mock NetworkManager on a private bus, with the networks from the
-# mockups (connected to "Lumen Home", a few others in range, an unplugged Ethernet port):
+# mockups (connected to "Lumen Home", a few others in range, an unplugged Ethernet port), and a
+# mock BlueZ with the mockups' Bluetooth devices (MOCK_BLUEZ=0 leaves it out):
 #   scripts/mock-nm.sh vinculum-cli list
 #   scripts/mock-nm.sh target/debug/vinculum
 # The command sees the mock as its system bus; the real one is never touched. Needs dbus-daemon
@@ -11,7 +12,11 @@
 #   MOCK_NM_ADDRESS_FILE=/tmp/bus scripts/mock-nm.sh target/debug/vinculum &
 #   gdbus call --address "$(cat /tmp/bus)" -d org.freedesktop.NetworkManager \
 #     -o /org/freedesktop/NetworkManager -m org.freedesktop.DBus.Mock.Test.AskForPassword 'Aster Café' 1
-# (flags: 1 to ask, 3 to say the last password was wrong).
+# (flags: 1 to ask, 3 to say the last password was wrong). The mock BlueZ asks Vinculum's pairing
+# agent the same way, with a method of the agent (RequestConfirmation, RequestPinCode, …) and its
+# arguments after the device's address:
+#   gdbus call --address "$(cat /tmp/bus)" -d org.bluez -o / \
+#     -m org.freedesktop.DBus.Mock.Test.AskAgent RequestConfirmation 'AA:42:7C:11:9E:01' '[<uint32 482913>]'
 set -euo pipefail
 [ $# -gt 0 ] || { echo "usage: mock-nm.sh COMMAND [ARGS...]" >&2; exit 2; }
 if [ -z "${MOCK_NM_INSIDE:-}" ]; then
@@ -65,6 +70,60 @@ for name in self.connection.list_names():
 '
 gdbus call --session -d org.freedesktop.NetworkManager -o /org/freedesktop/NetworkManager -m org.freedesktop.DBus.Mock.AddMethod \
   org.freedesktop.DBus.Mock.Test AskForPassword su '' "$ask" >/dev/null
+if [ "${MOCK_BLUEZ:-1}" != 0 ]; then
+  "$python" -m dbusmock --session --template bluez5 >>"${MOCK_NM_LOG:-/dev/null}" 2>&1 &
+  bluez=$!
+  trap 'kill $mock $bluez 2>/dev/null' EXIT
+  for _ in $(seq 100); do
+    gdbus introspect --session -d org.bluez -o / >/dev/null 2>&1 && break
+    sleep 0.05
+  done
+  bz() { gdbus call --session -d org.bluez -o "$1" -m "$2" "${@:3}" | sed -n "s/^('\(.*\)',)$/\1/p"; }
+  bz / org.bluez.Mock.AddAdapter hci0 thinkpad-x1 >/dev/null
+  # The mock's StartDiscovery needs a filter set first; BlueZ's doesn't.
+  bz /org/bluez/hci0 org.bluez.Adapter1.SetDiscoveryFilter '{}' >/dev/null
+  # The mock's Connect and Disconnect don't change Connected; these do.
+  connect='self.UpdateProperties("org.bluez.Device1", {"Connected": dbus.Boolean(True)})'
+  disconnect='self.UpdateProperties("org.bluez.Device1", {"Connected": dbus.Boolean(False)})'
+  # device ADDRESS NAME ICON PAIRED CONNECTED RSSI BATTERY UUIDS
+  device() {
+    local path
+    path=$(bz / org.bluez.Mock.AddDevice hci0 "$1" "$2")
+    gdbus call --session -d org.bluez -o "$path" -m org.freedesktop.DBus.Mock.UpdateProperties org.bluez.Device1 \
+      "{'Icon': <'$3'>, 'Paired': <$4>, 'Connected': <$5>, 'RSSI': <int16 $6>, 'UUIDs': <@as [$8]>}" >/dev/null
+    [ "$7" != - ] && gdbus call --session -d org.bluez -o "$path" -m org.freedesktop.DBus.Mock.AddProperties \
+      org.bluez.Battery1 "{'Percentage': <byte $7>}" >/dev/null
+    gdbus call --session -d org.bluez -o "$path" -m org.freedesktop.DBus.Mock.AddMethod org.bluez.Device1 Connect '' '' "$connect" >/dev/null
+    gdbus call --session -d org.bluez -o "$path" -m org.freedesktop.DBus.Mock.AddMethod org.bluez.Device1 Disconnect '' '' "$disconnect" >/dev/null
+  }
+  u() { printf "'0000%s-0000-1000-8000-00805f9b34fb'," "$@" | sed 's/,$//'; }
+  device AA:42:7C:11:9E:01 "Sony WH-1000XM5" audio-headphones true true -60 82 "$(u 110b 111e 110e 180f)"
+  device AA:42:7C:11:9E:02 "MX Master 3S" input-mouse true true -55 64 "$(u 1812 180f)"
+  device AA:42:7C:11:9E:03 "Pixel 8" phone true false -65 - "$(u 1116 1105 110a 111f 112f)"
+  device AA:42:7C:11:9E:04 "JBL Flip 6" audio-card true false -70 - "$(u 110b 110e)"
+  device D4:3A:7F:21:C8:05 "MX Keys S" input-keyboard false false -58 - "$(u 1812 180f 180a)"
+  device 3C:28:6D:9A:44:E1 "Pixel 7a" phone false false -72 - "$(u 1116 1105 110a 111f)"
+  device 00:1E:7C:4F:2A:10 "CARKIT-4F2A" audio-card false false -84 - "$(u 110b 111f)"
+  # AskAgent(method, address, arguments): calls the pairing agent as BlueZ does.
+  ask_agent='
+import dbus
+path = "/org/bluez/hci0/dev_" + args[1].replace(":", "_")
+for name in self.connection.list_names():
+    if not name.startswith(":") or name == self.connection.get_unique_name():
+        continue
+    try:
+        agent = self.connection.get_object(name, "/ch/giosuel/Vinculum/BluetoothAgent", introspect=False)
+        dbus.Interface(agent, "org.freedesktop.DBus.Introspectable").Introspect(timeout=1)
+    except dbus.exceptions.DBusException:
+        continue
+    # The arguments arrive as variants; type(a)(a) unwraps them, so they go out as u, q or s.
+    agent.get_dbus_method(args[0], "org.bluez.Agent1")(dbus.ObjectPath(path), *[type(a)(a) for a in args[2]], timeout=180,
+        reply_handler=lambda *r, self=self: self.log("agent answered " + str(r)),
+        error_handler=lambda e, self=self: self.log("agent refused: " + e.get_dbus_name()))
+'
+  gdbus call --session -d org.bluez -o / -m org.freedesktop.DBus.Mock.AddMethod \
+    org.freedesktop.DBus.Mock.Test AskAgent ssav '' "$ask_agent" >/dev/null
+fi
 mock_bus="$DBUS_SESSION_BUS_ADDRESS"
 [ -n "${MOCK_NM_ADDRESS_FILE:-}" ] && echo "$mock_bus" > "$MOCK_NM_ADDRESS_FILE"
 if [ -n "$MOCK_NM_SESSION" ]; then export DBUS_SESSION_BUS_ADDRESS="$MOCK_NM_SESSION"; else unset DBUS_SESSION_BUS_ADDRESS; fi

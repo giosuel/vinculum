@@ -25,6 +25,7 @@ toml.workspace = true
 toml_edit.workspace = true
 ksni.workspace = true
 resvg.workspace = true
+vinculum-bt.workspace = true
 vinculum-keyring.workspace = true
 vinculum-nm.workspace = true
 
@@ -51,7 +52,7 @@ connection setting."""
 # $auto adds the libraries the binary links against; xkbcommon and EGL are loaded at runtime.
 depends = "$auto, network-manager, libxkbcommon0, libegl1"
 # Optional: OpenVPN, file dialogs (certificates, VPN files), and a keyring for "for me only".
-recommends = "xdg-desktop-portal, gnome-keyring | kwalletmanager"
+recommends = "xdg-desktop-portal, gnome-keyring | kwalletmanager, bluez"
 suggests = "network-manager-openvpn"
 assets = [
     ["target/release/vinculum", "usr/bin/", "755"],

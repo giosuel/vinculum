@@ -4915,6 +4915,7 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
+ "vinculum-bt",
  "vinculum-keyring",
  "vinculum-nm",
  "x25519-dalek",
