@@ -9,6 +9,7 @@ The repository is a Cargo workspace:
 |---|---|
 | `crates/app` | the Slint app, binary `vinculum` |
 | `crates/nm` | NetworkManager over D-Bus: the model, its change stream and the secret agent; no UI |
+| `crates/bt` | BlueZ over D-Bus: adapters and devices, their change stream and the pairing agent; no UI |
 | `xtask` | repository tooling (`cargo xtask dep-age`) |
 | `packaging/` | desktop file, metainfo, icon, AppImage script, AUR packages |
 | `scripts/` | versions and packaging helpers |
