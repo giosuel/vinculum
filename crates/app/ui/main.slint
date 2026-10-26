@@ -67,8 +67,6 @@ component ListRow inherits Rectangle {
     callback clicked();
     height: 52px;
     border-radius: 8px;
-    border-width: 1px;
-    border-color: entry.selected ? Theme.accent-soft-border : transparent;
     background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
     accessible-role: list-item;
     accessible-label: entry.name + ", " + entry.meta;
@@ -193,7 +191,8 @@ export component MainWindow inherits Window {
     // Settings page.
     in property <string> config-path;
     in property <[SourceRow]> sources;
-    in property <string> builtin-label;
+    /// Why the built-in theme choice is greyed out (a colour source is in use); empty when it isn't.
+    in property <string> builtin-note;
     in property <int> builtin-choice;
     in property <[Toggle]> options;
     callback builtin-chosen(int);
@@ -600,8 +599,10 @@ export component MainWindow inherits Window {
                         horizontal-stretch: 1;
                         Text { text: root.placeholder; color: Theme.muted; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; width: 70%; }
                     }
+                    // Hotspot and Settings sit on the list pages' panel, with their title where
+                    // the list's is.
                     if root.page == "hotspot": Rectangle {
-                        background: Theme.surface;
+                        background: Theme.panel;
                         horizontal-stretch: 1;
                         if !root.hotspot-available: VerticalLayout {
                             alignment: center;
@@ -611,15 +612,16 @@ export component MainWindow inherits Window {
                             Text { text: "A hotspot needs a Wi-Fi card to share the connection over."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
                         }
                         if root.hotspot-available: HorizontalLayout {
-                            padding: 28px;
+                            padding: 16px;
                             spacing: 40px;
                             VerticalLayout {
                                 spacing: 16px;
                                 alignment: start;
                                 horizontal-stretch: 1;
                                 HorizontalLayout {
-                                    Text { text: "Hotspot"; color: Theme.text; font-size: 19px; font-weight: 600; horizontal-stretch: 1; }
-                                    Switch { on: root.hotspot-on; label: "Hotspot"; switch-width: 40px; toggled => { root.hotspot-toggled(); } }
+                                    height: 32px;
+                                    Text { text: "Hotspot"; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+                                    Switch { on: root.hotspot-on; label: "Hotspot"; switch-width: 40px; y: (parent.height - self.height) / 2; toggled => { root.hotspot-toggled(); } }
                                 }
                                 HorizontalLayout {
                                     spacing: 8px;
@@ -699,16 +701,16 @@ export component MainWindow inherits Window {
                     }
                     // Settings
                     if root.page == "settings": Rectangle {
-                        background: Theme.surface;
+                        background: Theme.panel;
                         horizontal-stretch: 1;
                         VerticalLayout {
-                            padding: 32px;
-                            padding-top: 24px;
+                            padding: 16px;
                             spacing: 22px;
                             alignment: start;
                             HorizontalLayout {
+                                height: 32px;
                                 spacing: 12px;
-                                Text { text: "Settings"; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; }
+                                Text { text: "Settings"; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
                                 Text { text: "Saved to"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
                                 Text { text: root.config-path; color: Theme.icon-soft; font-size: 12px; font-family: "JetBrains Mono"; vertical-alignment: center; }
                             }
@@ -749,15 +751,20 @@ export component MainWindow inherits Window {
                             }
                             HorizontalLayout {
                                 spacing: 24px;
-                                Text { text: "Built-in theme"; color: Theme.icon-soft; width: 200px; vertical-alignment: center; }
-                                HorizontalLayout {
-                                    alignment: start;
-                                    Segmented {
-                                        label: "Built-in theme";
-                                        options: ["Follow system", "Dark", "Light"];
-                                        selected: root.builtin-choice;
-                                        changed(i) => { root.builtin-chosen(i); }
+                                Text { text: "Built-in theme"; color: Theme.icon-soft; width: 200px; height: 40px; vertical-alignment: center; }
+                                VerticalLayout {
+                                    spacing: 8px;
+                                    HorizontalLayout {
+                                        alignment: start;
+                                        Segmented {
+                                            label: "Built-in theme";
+                                            options: ["Follow system", "Dark", "Light"];
+                                            selected: root.builtin-choice;
+                                            enabled: root.builtin-note == "";
+                                            changed(i) => { root.builtin-chosen(i); }
+                                        }
                                     }
+                                    if root.builtin-note != "": Text { text: root.builtin-note; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
                                 }
                             }
                             for o in root.options: HorizontalLayout {

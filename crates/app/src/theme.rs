@@ -209,9 +209,27 @@ pub fn resolve(sources: &[ColourSource]) -> (Vec<SourceStatus>, Option<Palette>)
     (statuses, palette)
 }
 
+/// Why the built-in theme choice doesn't apply: the colour source in use, if there is one.
+pub fn builtin_note(sources: &[ColourSource], statuses: &[SourceStatus]) -> String {
+    let used = sources.iter().zip(statuses).find(|(_, s)| matches!(s, SourceStatus::Used(_)));
+    let Some((source, _)) = used else { return String::new() };
+    let what = if source.path.contains("ml4w") { "Your ML4W colours are" } else { "Your colour file is" };
+    format!("{what} in use. The built-in theme applies when no colour source is found.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_built_in_theme_is_greyed_out_while_a_colour_source_is_in_use() {
+        let sources = crate::config::ThemeConfig::default().sources;
+        let used = SourceStatus::Used(Palette::from_material(&blue()).unwrap());
+        assert_eq!(builtin_note(&sources, &[SourceStatus::Missing, SourceStatus::Missing]), "");
+        let note = builtin_note(&sources, &[SourceStatus::Missing, used.clone()]);
+        assert!(note.starts_with("Your ML4W colours are in use."), "{note}");
+        assert!(builtin_note(&sources, &[used, SourceStatus::Missing]).starts_with("Your colour file is"));
+    }
 
     /// The owner's blue ML4W palette from the mockups.
     fn blue() -> HashMap<String, String> {
