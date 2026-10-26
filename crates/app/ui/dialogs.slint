@@ -96,7 +96,8 @@ export component Segmented inherits Rectangle {
         spacing: 3px;
         for option[i] in root.options: Rectangle {
             horizontal-stretch: 1;
-            min-width: label.preferred-width + 24px;
+            // Measured in the selected (heavier) weight, so choosing an option doesn't resize it.
+            min-width: widest.preferred-width + 24px;
             border-radius: 7px;
             border-width: i == root.selected ? 1px : 0;
             border-color: Theme.accent-soft-border;
@@ -114,6 +115,7 @@ export component Segmented inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
             }
+            widest := Text { text: option; font-size: 13px; font-weight: 500; visible: false; }
             touch := TouchArea { mouse-cursor: pointer; clicked => { root.selected = i; root.changed(i); } }
         }
     }
