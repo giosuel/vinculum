@@ -1,6 +1,6 @@
 ---
 title: Installing
-description: Packages for Arch (AUR), Debian and Ubuntu, Fedora and openSUSE, the AppImage, the Flatpak, and building from source.
+description: Packages for Arch (AUR), Debian and Ubuntu, Fedora and openSUSE, the AppImage, the Flatpak, Nix, and building from source.
 ---
 
 Every release has packages for x86-64 and ARM64 Linux on its
@@ -67,6 +67,20 @@ differently there:
 - With Hyprland, start it with `exec-once = flatpak run ch.giosuel.Vinculum --background`.
 
 The full list is in [`packaging/flatpak/`](https://github.com/giosuel/vinculum/tree/main/packaging/flatpak).
+
+## Nix
+
+The repository is a flake:
+
+```sh
+nix run github:giosuel/vinculum            # try it
+nix profile install github:giosuel/vinculum
+nix run github:giosuel/vinculum/v0.3.0     # a particular release
+```
+
+On NixOS or with home-manager, add `github:giosuel/vinculum` as an input and use its
+`packages.${system}.default` or `overlays.default`. For OpenVPN, add
+`networking.networkmanager.plugins = [ pkgs.networkmanager-openvpn ];`.
 
 ## Tarball
 
