@@ -1838,3 +1838,41 @@ fn set_theme(t: Theme<'_>, p: &theme::Palette) {
     t.set_warn_border(color(p.warn_border));
     t.set_warn_text(color(p.warn_text));
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use i_slint_backend_testing::{ElementHandle, mock_elapsed_time};
+    use slint::{ComponentHandle, LogicalSize};
+
+    use super::MainWindow;
+
+    /// Widening the window must not show the closed editor in the new space, not even while
+    /// the editor's slide animation would be running.
+    #[test]
+    fn the_closed_editor_stays_out_of_sight_when_the_window_grows() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.window().set_size(LogicalSize::new(1040.0, 700.0));
+        window.show().unwrap();
+        // Where the editor is, if it's drawn at all (a hidden element isn't found).
+        let editor =
+            || ElementHandle::find_by_element_id(&window, "MainWindow::editor").next().map(|e| e.absolute_position().x);
+        assert_eq!(editor(), None);
+
+        window.window().set_size(LogicalSize::new(1600.0, 700.0));
+        for _ in 0..5 {
+            assert_eq!(editor(), None);
+            mock_elapsed_time(Duration::from_millis(50));
+        }
+
+        // Opening it still slides it in.
+        window.set_editor_open(true);
+        mock_elapsed_time(Duration::from_millis(50));
+        let x = editor().expect("the editor is shown");
+        assert!(0.0 < x && x < 1600.0, "{x}");
+        mock_elapsed_time(Duration::from_millis(500));
+        assert_eq!(editor(), Some(0.0));
+    }
+}

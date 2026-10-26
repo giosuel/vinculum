@@ -848,13 +848,16 @@ export component MainWindow inherits Window {
         cancelled => { root.join-cancelled(); keys.focus(); }
     }
 
-    // The editor sweeps in from the right, over everything but the dialogs above.
-    Editor {
-        x: root.editor-open ? 0 : root.width;
+    // The editor sweeps in from the right, over everything but the dialogs above. The slide
+    // is a fraction of the width, not a position: an animated x would trail behind a resize
+    // and show the closed editor in the window's new space.
+    property <float> editor-slide: root.editor-open ? 0 : 1;
+    animate editor-slide { duration: 220ms; easing: ease-out; }
+    editor := Editor {
+        x: root.width * root.editor-slide;
         width: root.width;
         height: root.height;
-        visible: self.x < root.width;
-        animate x { duration: 220ms; easing: ease-out; }
+        visible: root.editor-slide < 1;
         title: root.editor-title;
         subtitle: root.editor-subtitle;
         tabs: root.editor-tabs;
