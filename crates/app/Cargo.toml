@@ -13,6 +13,7 @@ build = "build.rs"
 base64.workspace = true
 clap.workspace = true
 qrcodegen.workspace = true
+pulseaudio.workspace = true
 x25519-dalek.workspace = true
 futures-util.workspace = true
 serde = { workspace = true, features = ["derive"] }

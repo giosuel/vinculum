@@ -12,6 +12,7 @@ depends=('fontconfig' 'glibc' 'hicolor-icon-theme' 'libgcc' 'libglvnd' 'libx11' 
          'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'networkmanager' 'wayland')
 optdepends=('networkmanager-openvpn: OpenVPN connections'
             'bluez: Bluetooth'
+            'pipewire-pulse: Bluetooth audio profiles'
             'xdg-desktop-portal: file dialogs for certificates and VPN files'
             'gnome-keyring: passwords kept "for me only" (or KWallet)')
 provides=("$_pkgname=$pkgver")
