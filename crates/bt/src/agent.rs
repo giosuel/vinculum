@@ -59,6 +59,12 @@ impl PairingRequest {
     pub fn reply(self, answer: Answer) {
         let _ = self.reply.send(answer);
     }
+
+    /// A request for tests of what answers it.
+    #[doc(hidden)]
+    pub fn for_tests(device: &str, ask: Ask, reply: oneshot::Sender<Answer>) -> Self {
+        Self { device: device.into(), ask, reply }
+    }
 }
 
 #[derive(Debug)]

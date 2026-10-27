@@ -21,6 +21,7 @@ The release workflow builds the bundle on every packaging PR (as a dry run) and 
 | --- | --- |
 | `--socket=wayland`, `--socket=fallback-x11`, `--share=ipc`, `--device=dri` | The window, with GPU rendering |
 | `--system-talk-name=org.freedesktop.NetworkManager` | Everything the app shows and changes. NetworkManager still asks polkit for anything that affects other users |
+| `--system-talk-name=org.bluez` | The Bluetooth page: adapters, devices and pairing |
 | `--talk-name=org.freedesktop.secrets`, `org.kde.kwalletd6`, `org.kde.kwalletd5` | Passwords kept "for me only", in GNOME Keyring or KWallet |
 | `--talk-name=org.freedesktop.Notifications` | Connected, disconnected and failed notifications |
 | `--talk-name=org.kde.StatusNotifierWatcher` | Registering the tray icon with the bar (Waybar, KDE, …) |

@@ -34,6 +34,23 @@ export component Icon inherits Path {
         : name == "eye-off" ? "M1.5 8c1.6-3 3.8-4.5 6.5-4.5s4.9 1.5 6.5 4.5c-1.6 3-3.8 4.5-6.5 4.5S3.1 11 1.5 8zM6 8a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M2.5 2.5l11 11"
         : name == "check" ? "M3.5 8.5l3 3 6-7"
         : name == "chevron" ? "M4.5 6l3.5 3.5 3.5-3.5"
+        : name == "close" ? "M4 4l8 8M12 4l-8 8"
+        : name == "bluetooth" ? "M4.5 5l7 6L8 14V2l3.5 3-7 6"
+        : name == "bluetooth-off" ? "M4.5 5l3.5 3M11.5 11L8 14V8M8 5.3V2l3.5 3-1.8 1.6M2.5 2.5l11 11"
+        : name == "headphones" ? "M2.5 11V8.5a5.5 5.5 0 0 1 11 0V11M3.5 9.5h1a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1zM11.5 9.5h1a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z"
+        : name == "phone" ? "M5.9 1.5h4.2a1.4 1.4 0 0 1 1.4 1.4v10.2a1.4 1.4 0 0 1-1.4 1.4h-4.2a1.4 1.4 0 0 1-1.4-1.4V2.9a1.4 1.4 0 0 1 1.4-1.4zM7.2 12.4h1.6"
+        : name == "mouse" ? "M8 1.5a3.5 3.5 0 0 1 3.5 3.5v6a3.5 3.5 0 0 1-7 0V5a3.5 3.5 0 0 1 3.5-3.5zM8 1.5v4"
+        : name == "speaker" ? "M5.6 1.5h4.8a1.6 1.6 0 0 1 1.6 1.6v9.8a1.6 1.6 0 0 1-1.6 1.6h-4.8a1.6 1.6 0 0 1-1.6-1.6V3.1a1.6 1.6 0 0 1 1.6-1.6zM5.7 9.8a2.3 2.3 0 1 0 4.6 0a2.3 2.3 0 1 0 -4.6 0M8 4.6h0.01"
+        : name == "keyboard" ? "M2.8 4h10.4a1.3 1.3 0 0 1 1.3 1.3v5.9a1.3 1.3 0 0 1-1.3 1.3H2.8a1.3 1.3 0 0 1-1.3-1.3V5.3A1.3 1.3 0 0 1 2.8 4zM4 6.8h0.2M6.4 6.8h0.2M8.8 6.8h0.2M11.2 6.8h0.2M5 9.8h6"
+        : name == "car" ? "M2.5 10.5V8l1.6-3.6a1.2 1.2 0 0 1 1.1-0.7h5.6a1.2 1.2 0 0 1 1.1 0.7L13.5 8v2.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1zM2.5 8h11M4.5 11.5v1.5M11.5 11.5v1.5"
+        : name == "computer" ? "M3.2 2.5h9.6a1.2 1.2 0 0 1 1.2 1.2v6.6a1.2 1.2 0 0 1-1.2 1.2H3.2a1.2 1.2 0 0 1-1.2-1.2V3.7a1.2 1.2 0 0 1 1.2-1.2zM5.5 14h5M8 11.5V14"
+        : name == "gamepad" ? "M5 5h6a3.5 3.5 0 0 1 0 7c-1 0-1.6-0.6-2.2-1.4H7.2C6.6 11.4 6 12 5 12a3.5 3.5 0 0 1 0-7zM5 7.2v2.4M3.8 8.4h2.4M10.6 8h0.01M11.8 9.2h0.01"
+        : name == "gear" ? "M6 8a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1"
+        : name == "pencil" ? "M10.5 2.8l2.7 2.7L6 12.7 2.8 13.2l0.5-3.2z"
+        : name == "globe" ? "M2 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0M2 8h12M8 2c1.8 1.7 2.6 3.8 2.6 6S9.8 12.3 8 14c-1.8-1.7-2.6-3.8-2.6-6S6.2 3.7 8 2z"
+        : name == "upload" ? "M8 11V2.5M4.8 5.7L8 2.5l3.2 3.2M2.5 10.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2"
+        : name == "file" ? "M4 1.8h5l3 3v9.4H4zM9 1.8v3h3"
+        : name == "monitor" ? "M3.2 2.5h9.6a1.2 1.2 0 0 1 1.2 1.2v6.6a1.2 1.2 0 0 1-1.2 1.2H3.2a1.2 1.2 0 0 1-1.2-1.2V3.7a1.2 1.2 0 0 1 1.2-1.2zM5.5 14h5M8 11.5V14"
         : "";
 }
 
@@ -86,5 +103,53 @@ export component Logo inherits Rectangle {
         height: self.width;
         border-radius: self.width / 2;
         background: Theme.text;
+    }
+}
+
+/// A battery outline, filled to `percent`.
+export component Battery inherits Rectangle {
+    in property <int> percent;
+    in property <color> tint: Theme.muted;
+    width: 18px;
+    height: 10px;
+    Rectangle {
+        x: 0.75px;
+        y: 0.75px;
+        width: 14px;
+        height: 8.5px;
+        border-radius: 2px;
+        border-width: 1.2px;
+        border-color: root.tint;
+    }
+    Rectangle { x: 15.6px; y: 3.2px; width: 1.6px; height: 3.6px; border-radius: 0.6px; background: root.tint; }
+    Rectangle { x: 2.5px; y: 2.5px; width: 10px * clamp(root.percent, 5, 100) / 100; height: 5px; border-radius: 1px; background: root.tint; }
+}
+
+/// A turning arc: something is in progress.
+export component Spinner inherits Rectangle {
+    in property <length> size: 12px;
+    in property <color> tint: Theme.accent;
+    width: size;
+    height: size;
+    Path {
+        width: root.size;
+        height: root.size;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: Theme.border2;
+        stroke-width: 2px;
+        fill: transparent;
+        commands: "M2 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0";
+    }
+    Path {
+        width: root.size;
+        height: root.size;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.tint;
+        stroke-width: 2px;
+        fill: transparent;
+        commands: "M8 2a6 6 0 0 1 6 6";
+        transform-rotation: mod(animation-tick() / 2.5ms, 360) * 1deg;
     }
 }
