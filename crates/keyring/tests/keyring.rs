@@ -8,9 +8,9 @@
 use std::process::Stdio;
 use std::time::Duration;
 
+use lituus_keyring::{Entry, Keyring};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use lituus_keyring::{Entry, Keyring};
 use zbus::Connection;
 
 async fn connect(address: &str) -> Connection {

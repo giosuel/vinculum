@@ -1,11 +1,11 @@
 //! What the window shows, worked out from a NetworkManager snapshot and the UI state (page,
 //! selection, search). Pure, so it's tested without a window.
 
-use slint::{ModelRc, SharedString, VecModel};
 use lituus_nm::{
     ActiveState, Band, ConnectionKind, Device, DeviceKind, KeyMgmt, Network, SavedConnection, Security, Snapshot,
     WifiJoin, bars, channel,
 };
+use slint::{ModelRc, SharedString, VecModel};
 
 use crate::{Action, DetailItem, Details, NavItem, Row, Section, Toggle};
 
@@ -1362,8 +1362,8 @@ pub fn rescan(snap: &Snapshot) -> Option<Command> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use slint::Model;
     use lituus_nm::{AccessPoint, ActiveConnection, DeviceState, IpConfig, WifiDevice, WiredDevice};
+    use slint::Model;
 
     fn ap(path: &str, ssid: &str, mhz: u32, strength: u8, security: Security) -> AccessPoint {
         AccessPoint {

@@ -10,10 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
 use lituus_bt::agent::AGENT_PATH;
 use lituus_bt::{AgentEvent, Answer, Ask, Client, DeviceKind, Error, Snapshot};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
 use zbus::Connection;
 use zbus::zvariant::{OwnedObjectPath, Value};
 

@@ -8,9 +8,9 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use futures_util::StreamExt;
+use lituus_nm::{ActiveState, Band, Client, ConnectionKind, DeviceKind, DeviceState, Error, Security};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use lituus_nm::{ActiveState, Band, Client, ConnectionKind, DeviceKind, DeviceState, Error, Security};
 use zbus::Connection;
 
 const MOCK: &str = "org.freedesktop.DBus.Mock";

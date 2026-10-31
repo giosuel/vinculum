@@ -6,8 +6,8 @@ use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
-use slint::{ComponentHandle, SharedString};
 use lituus_bt::{Adapter, AgentEvent, Answer, Ask, Device, DeviceKind, PairingRequest, Snapshot};
+use slint::{ComponentHandle, SharedString};
 
 use crate::audio;
 use crate::{
@@ -1269,8 +1269,8 @@ fn unblock() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use slint::Model;
     use lituus_bt::{PowerState, uuid};
+    use slint::Model;
 
     use super::*;
 

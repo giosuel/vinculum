@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString};
 use lituus_nm::{ConnectionKind, DeviceKind, Settings, Snapshot};
+use slint::{ComponentHandle, Model, ModelRc, SharedString};
 
 use crate::editor::{self, Address, EapForm, Form, IpForm, Kind, PeerForm, Route, Tab, WgForm};
 use crate::openvpn::OvpnForm;

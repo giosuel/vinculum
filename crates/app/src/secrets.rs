@@ -4,10 +4,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, oneshot};
 use lituus_keyring::{Entry, Keyring};
 use lituus_nm::agent::secret;
 use lituus_nm::{AgentConnection, AgentEvent, KeyMgmt, Refusal, SecretRequest};
+use tokio::sync::{Mutex, oneshot};
 
 /// The Wi-Fi password setting, the only one the password dialog asks for.
 pub const WIFI_SECURITY: &str = "802-11-wireless-security";
