@@ -1,0 +1,145 @@
+// The details pane next to a list (Wi-Fi, Wired, VPN, Saved, Bluetooth) and the data it shows.
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+import { Button, Switch } from "controls.slint";
+
+/// kind: "primary", "secondary", "danger".
+export struct Action { id: string, label: string, kind: string, enabled: bool }
+export struct Toggle { id: string, label: string, sub: string, on: bool }
+export struct DetailItem { label: string, value: string, mono: bool }
+/// A small rounded label, such as one of a Bluetooth device's services; `on` lights its dot.
+export struct Chip { label: string, on: bool }
+/// One line of chips: Slint has no wrapping layout, so Rust breaks them into lines.
+export struct ChipRow { chips: [Chip] }
+export struct Details {
+    title: string,
+    status: string,
+    status-tone: string,
+    status-extra: string,
+    /// A pencil next to the title renames it.
+    renamable: bool,
+    actions: [Action],
+    /// A paragraph under the buttons.
+    intro: string,
+    toggles: [Toggle],
+    items: [DetailItem],
+    chips-label: string,
+    chips: [ChipRow],
+    note: string,
+}
+
+/// Its children go under the buttons (the Bluetooth audio choice, say).
+export component DetailsPane inherits Rectangle {
+    in property <Details> details;
+    callback action(string);
+    callback toggle(string);
+    callback rename();
+    background: Theme.surface;
+    // Its content would cap it at the content's width, and Slint shrinks the window to match.
+    max-width: 100000px;
+    // Slint sizes the window to the layout's preferred size when the layout changes; a fixed one
+    // here keeps that at 1040 px (with the sidebar and list) instead of following the content.
+    preferred-width: 460px;
+    VerticalLayout {
+        padding: 28px;
+        padding-bottom: 20px;
+        spacing: 22px;
+        alignment: start;
+        VerticalLayout {
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Text { text: root.details.title; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; }
+                if root.details.renamable: Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 6px;
+                    background: pencil.has-hover ? Theme.sel-bg : transparent;
+                    accessible-role: button;
+                    accessible-label: "Rename";
+                    accessible-action-default => { root.rename(); }
+                    Icon { name: "pencil"; tint: Theme.muted; size: 14px; }
+                    pencil := TouchArea { mouse-cursor: pointer; clicked => { root.rename(); } }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Theme.tone(root.details.status-tone); y: (parent.height - 8px) / 2; }
+                Text { text: root.details.status; color: Theme.tone(root.details.status-tone); font-size: 13px; }
+                Text { text: root.details.status-extra; color: Theme.muted; font-size: 13px; }
+            }
+        }
+        if root.details.actions.length > 0: HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            for a in root.details.actions: Button {
+                label: a.label;
+                kind: a.kind;
+                enabled: a.enabled;
+                clicked => { root.action(a.id); }
+            }
+        }
+        if root.details.intro != "": Text { text: root.details.intro; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+        @children
+        if root.details.toggles.length > 0: Rectangle {
+            border-width: 1px;
+            border-color: Theme.border2;
+            border-radius: 10px;
+            VerticalLayout {
+                for t[i] in root.details.toggles: Rectangle {
+                    height: t.sub == "" ? 42px : 52px;
+                    Rectangle { y: 0; height: 1px; background: i == 0 ? transparent : Theme.border2; }
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        spacing: 12px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            horizontal-stretch: 1;
+                            Text { text: t.label; color: Theme.text; }
+                            if t.sub != "": Text { text: t.sub; color: Theme.muted; font-size: 12px; }
+                        }
+                        Switch { on: t.on; label: t.label; y: (parent.height - self.height) / 2; toggled => { root.toggle(t.id); } }
+                    }
+                }
+            }
+        }
+        GridLayout {
+            spacing-horizontal: 24px;
+            spacing-vertical: 14px;
+            for item[i] in root.details.items: VerticalLayout {
+                col: mod(i, 2);
+                row: floor(i / 2);
+                spacing: 3px;
+                Text { text: item.label; color: Theme.faint; font-size: 12px; }
+                Text { text: item.value; color: Theme.text; font-size: 13px; font-family: item.mono ? "JetBrains Mono" : "Inter"; overflow: elide; }
+            }
+        }
+        if root.details.chips.length > 0: VerticalLayout {
+            spacing: 8px;
+            Text { text: root.details.chips-label; color: Theme.faint; font-size: 12px; }
+            for line in root.details.chips: HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                for chip in line.chips: Rectangle {
+                    height: 28px;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.border2;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 12px;
+                        spacing: 7px;
+                        Rectangle { width: 6px; height: 6px; border-radius: 3px; y: (parent.height - 6px) / 2; background: chip.on ? Theme.accent : Theme.faint; }
+                        Text { text: chip.label; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+        if root.details.note != "": Text { text: root.details.note; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+    }
+}

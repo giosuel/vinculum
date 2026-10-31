@@ -1,0 +1,221 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds the Linux packages (tarball, .deb, .rpm, AppImage) for x86-64 and ARM64,
+# and a Flatpak bundle for x86-64, and publishes them as a GitHub release, then pushes the AUR packages (stable tags only). The version is the tag; nothing in the repository is bumped by hand.
+# Running it by hand (Actions › Release › Run workflow) is a dry run: everything is built and
+# uploaded as workflow artifacts, and nothing is published. PRs that change the packaging run the
+# same dry run.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: ["packaging/**", "scripts/**", ".github/workflows/release.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Build caches: tag runs can only restore them (a cache saved for a tag is visible to that tag
+# alone), and they are saved by dry runs on main. Run one before tagging.
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      notes: ${{ steps.version.outputs.notes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the tags, for a dry run's version
+      # A tag's version is the tag; a dry run's comes from the tags before it (0.1.1-dev.5+g…).
+      - id: version
+        name: Version and release notes
+        run: |
+          notes=""
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::$GITHUB_REF_NAME is not a version tag like v1.2.3 or v1.2.3-rc.1"
+              exit 1
+            fi
+            # The checkout may have turned an annotated tag into a lightweight one.
+            git fetch --force origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+            if [ "$(git cat-file -t "$GITHUB_REF_NAME")" = tag ]; then
+              notes=$(git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$GITHUB_REF_NAME")
+            else
+              echo "::warning::$GITHUB_REF_NAME has no message: the release has no notes of its own (tag with git tag -a)"
+            fi
+          else
+            version=$(scripts/version.sh)
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          { echo "notes<<END_OF_NOTES"; printf '%s\n' "$notes"; echo "END_OF_NOTES"; } >> "$GITHUB_OUTPUT"
+          echo "Version $version"
+
+  linux:
+    name: linux (${{ matrix.arch }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    # Each architecture on its own native runner. Built on Debian 12 (glibc 2.36), so the
+    # packages run on Debian 12, Ubuntu 22.04, and anything newer.
+    runs-on: ${{ matrix.runner }}
+    container: debian:12
+    timeout-minutes: 60
+    # In a container, steps run with sh unless told otherwise.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Build tools and system libraries
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl file git build-essential pkg-config \
+            libfontconfig1-dev libxkbcommon-dev
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust (the version in rust-toolchain.toml)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: release-${{ matrix.arch }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # After the cache step, so the cache key still matches main's. Never committed.
+      - name: Set the version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASE_NOTES: ${{ needs.version.outputs.notes }}
+        run: scripts/set-version.sh "$VERSION"
+      - run: cargo build --release --locked -p lituus
+      - run: target/release/lituus --version
+      - name: Binary archive
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: scripts/package-tarball.sh "$VERSION" "$ARCH"
+      # Packaging tools at fixed versions, at least two weeks old like every dependency.
+      - name: .deb and .rpm
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.0
+          cargo deb --no-build --locked -p lituus
+          # RPM versions can't contain '-': a pre-release uses '~', which also sorts it before the
+          # release (cargo-deb does the same for the .deb).
+          cargo generate-rpm -p crates/app --set-metadata "version = \"${VERSION//-/\~}\"" \
+            --set-metadata "requires = $(packaging/linux/rpm-requires.sh target/release/lituus)"
+          cp target/debian/*.deb target/generate-rpm/*.rpm target/dist/
+      - name: AppImage
+        run: packaging/linux/build-appimage.sh
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: linux-${{ matrix.arch }}
+          path: target/dist/*
+          if-no-files-found: error
+
+  flatpak:
+    name: flatpak (x64)
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # Flathub's own builder image, matching the manifest's runtime.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Before the build, like the other packages; the dir source copies the changed files.
+      - name: Set the version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASE_NOTES: ${{ needs.version.outputs.notes }}
+        run: scripts/set-version.sh "$VERSION"
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
+        with:
+          manifest-path: packaging/flatpak/ch.giosuel.Lituus.yml
+          bundle: Lituus-${{ needs.version.outputs.version }}-linux-x64.flatpak
+          # Inside .flatpak-builder, which the manifest's dir source skips.
+          build-dir: .flatpak-builder/build
+          repo-dir: .flatpak-builder/repo
+          upload-artifact: false
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: flatpak
+          path: Lituus-*.flatpak
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, linux, flatpak]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          path: dist
+          pattern: "{linux-*,flatpak}"
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          NOTES: ${{ needs.version.outputs.notes }}
+        run: |
+          prerelease=""
+          [[ "$VERSION" == *-* ]] && prerelease="--prerelease"
+          printf '%s\n' "$NOTES" > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "Lituus $VERSION" --notes-file notes.md --generate-notes $prerelease
+
+  aur:
+    name: AUR (${{ matrix.pkg }})
+    # Stable releases only, after the GitHub release (and its tarballs) exists.
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: [lituus, lituus-bin]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set pkgver
+        env:
+          PKG: ${{ matrix.pkg }}
+        run: |
+          sed -i -e "s/^pkgver=.*/pkgver=${GITHUB_REF_NAME#v}/" -e "s/^pkgrel=.*/pkgrel=1/" \
+            "packaging/aur/$PKG/PKGBUILD"
+      # Builds the package (checksums refreshed, dependencies installed), then pushes PKGBUILD
+      # and a fresh .SRCINFO to the AUR.
+      - uses: KSXGitHub/github-actions-deploy-aur@084b0d9b15415bf9cdb65d44dad1efe37a354050 # v4.2.0
+        with:
+          pkgname: ${{ matrix.pkg }}
+          pkgbuild: packaging/aur/${{ matrix.pkg }}/PKGBUILD
+          updpkgsums: true
+          test: true
+          test_flags: --clean --cleanbuild --syncdeps --noconfirm
+          commit_username: giosuel
+          commit_email: me@giosuel.ch
+          commit_message: Update to ${{ github.ref_name }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

@@ -1,0 +1,1031 @@
+// The main window: sidebar, a list page (Wi-Fi, Wired, VPN, Saved) with its details pane, or the
+// Settings page. Everything shown comes from Rust (src/view.rs); this file is layout and looks,
+// following the approved mockups.
+import "fonts/Inter-Regular.ttf";
+import "fonts/Inter-Medium.ttf";
+import "fonts/Inter-SemiBold.ttf";
+import "fonts/JetBrainsMono-Regular.ttf";
+import "fonts/JetBrainsMono-Medium.ttf";
+import { Palette } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icon, SignalBars, Logo } from "icons.slint";
+import { Button, IconButton, Switch, SectionLabel, Kbd } from "controls.slint";
+import { JoinDialog, TextField, Segmented } from "dialogs.slint";
+import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
+import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
+import { BluetoothPage, BtAudio, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
+import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
+
+export { Theme, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+
+export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool }
+/// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
+/// indent: a port under its bridge or bond, or a VLAN under its device.
+export struct Row { id: string, name: string, meta: string, tone: string, icon: string, bars: int, secure: bool, selected: bool, indent: bool }
+export struct Section { title: string, rows: [Row] }
+export struct HostRow { name: string, address: string, since: string }
+export struct SourceRow { n: int, label: string, path: string, status: string, tone: string, swatches: [color] }
+
+component NavButton inherits Rectangle {
+    in property <NavItem> item;
+    callback clicked();
+    height: sub.text == "" ? 36px : 50px;
+    border-radius: 8px;
+    background: item.current ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    accessible-role: button;
+    accessible-label: item.label;
+    accessible-action-default => { clicked(); }
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 10px;
+        alignment: start;
+        Icon { name: root.item.icon; tint: root.item.current ? Theme.accent : Theme.muted; y: 9px; }
+        VerticalLayout {
+            spacing: 2px;
+            alignment: center;
+            Text { text: root.item.label; color: Theme.text; font-weight: 500; }
+            sub := Text { text: root.item.sub; color: Theme.muted; font-size: 12px; overflow: elide; visible: self.text != ""; }
+        }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component ListRow inherits Rectangle {
+    in property <Row> entry;
+    callback clicked();
+    height: 52px;
+    border-radius: 8px;
+    background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    accessible-role: list-item;
+    accessible-label: entry.name + ", " + entry.meta;
+    accessible-item-selected: entry.selected;
+    accessible-action-default => { clicked(); }
+    HorizontalLayout {
+        padding-left: root.entry.indent ? 34px : 10px;
+        padding-right: 10px;
+        spacing: 12px;
+        if root.entry.icon == "bars": SignalBars { bars: root.entry.bars; y: (parent.height - 14px) / 2; }
+        if root.entry.icon != "bars": Icon { name: root.entry.icon; tint: root.entry.selected ? Theme.accent : Theme.muted; y: (parent.height - 16px) / 2; width: 20px; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: root.entry.name; color: Theme.text; font-weight: 500; overflow: elide; }
+            Text { text: root.entry.meta; color: root.entry.selected && root.entry.tone == "muted" ? Theme.accent : Theme.tone(root.entry.tone); font-size: 12px; overflow: elide; }
+        }
+        if root.entry.secure: Icon { name: "lock"; tint: Theme.faint; size: 14px; y: (parent.height - 14px) / 2; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component MainWindow inherits Window {
+    in property <string> version;
+    in property <[NavItem]> nav;
+    in property <string> hostname;
+    in property <string> page: "wifi";
+    in property <string> page-title: "Wi-Fi";
+    // Header of the list page.
+    in property <bool> show-wifi-switch;
+    in property <bool> wifi-on: true;
+    in property <bool> show-rescan;
+    in property <bool> show-add;
+    in property <bool> show-search: true;
+    in property <string> search-placeholder: "Search networks";
+    in property <string> bottom-label;
+    in property <[Section]> sections;
+    in property <bool> has-details;
+    in property <Details> details;
+    // Shown instead of the list: Wi-Fi off, nothing found, NetworkManager not running.
+    in property <string> empty-icon;
+    in property <string> empty-title;
+    in property <string> empty-text;
+    in property <string> empty-action;
+    in property <string> banner;
+    // Settings page.
+    in property <string> config-path;
+    in property <[SourceRow]> sources;
+    /// Why the built-in theme choice is greyed out (a colour source is in use); empty when it isn't.
+    in property <string> builtin-note;
+    in property <int> builtin-choice;
+    in property <[Toggle]> options;
+    callback builtin-chosen(int);
+    callback option-toggled(string);
+    in property <string> placeholder;
+    // A message above the list: an error ("danger"), a polkit problem ("warn"), or a note ("info").
+    in property <string> message;
+    in property <string> message-tone: "info";
+    // A bold first line for the message ("Couldn't connect to Aster Café"), and a button on it.
+    in property <string> message-title;
+    in property <string> message-action;
+    // The confirmation dialog (forgetting a connection).
+    in property <bool> confirm-open;
+    in property <string> confirm-title;
+    in property <string> confirm-text;
+    in property <string> confirm-button;
+    // The password dialog (see dialogs.slint); the fields are read back when it's accepted.
+    in property <bool> join-open;
+    in property <string> join-mode;
+    in property <string> join-title;
+    in property <string> join-subtitle;
+    in property <string> join-error;
+    in property <[string]> join-securities;
+    in property <[string]> join-password-hints;
+    in property <[string]> join-storage-hints;
+    in-out property <string> join-name;
+    in-out property <int> join-security;
+    in-out property <string> join-password;
+    in-out property <int> join-storage;
+    in-out property <bool> join-autoconnect;
+    // The connection editor (see editor.slint).
+    in property <bool> editor-open;
+    in property <string> editor-title;
+    in property <string> editor-subtitle;
+    in property <[EditorTab]> editor-tabs;
+    in-out property <string> editor-tab: "general";
+    in-out property <EditorForm> editor-form;
+    in property <EditorErrors> editor-errors;
+    in property <EditorOptions> editor-options;
+    in property <bool> editor-dirty;
+    in property <bool> editor-valid: true;
+    in property <bool> editor-busy;
+    in property <bool> editor-new;
+    in property <string> editor-footer;
+    in property <string> editor-footer-tone: "muted";
+    in property <string> editor-routes;
+    in property <bool> editor-ports-open;
+    callback editor-port-chosen(string);
+    // "Add a connection", and the hostname dialog.
+    in property <bool> add-open;
+    in property <bool> hostname-open;
+    in-out property <string> hostname-input;
+    in property <string> hostname-error;
+    // The hotspot page.
+    in property <bool> hotspot-available;
+    in property <bool> hotspot-on;
+    in property <string> hotspot-status;
+    in property <string> hotspot-warning;
+    in property <image> hotspot-qr;
+    in property <[HostRow]> hotspot-clients;
+    in-out property <string> hotspot-ssid;
+    in-out property <string> hotspot-password;
+    in-out property <int> hotspot-band;
+    // Sharing a network: its QR code and password.
+    in property <bool> share-open;
+    in property <string> share-title;
+    in property <string> share-password;
+    in property <image> share-qr;
+    // The Bluetooth page and its dialogs (see bluetooth.slint).
+    in property <BtPage> bt;
+    in property <bool> bt-pair-open;
+    in property <BtPair> bt-pair;
+    in-out property <string> bt-pair-code;
+    in-out property <bool> bt-pair-always;
+    in property <bool> bt-adapter-open;
+    in property <string> bt-adapter-label;
+    in property <bool> bt-pairable;
+    in-out property <string> bt-adapter-name;
+    in-out property <int> bt-visible-choice;
+    in property <bool> bt-rename-open;
+    in property <string> bt-rename-title;
+    in property <string> bt-rename-hint;
+    in-out property <string> bt-rename-name;
+    /// Everything done on the Bluetooth page and its dialogs: (verb, argument).
+    callback bt-act(string, string);
+    // Sidebar switch, and where passwords are kept (for Settings).
+    in property <bool> airplane;
+    in property <string> keyring-label;
+    // Whether the desktop asks for dark colours, for the "auto" built-in theme.
+    out property <bool> prefers-dark: Palette.color-scheme != ColorScheme.light;
+
+    callback navigate(string);
+    callback select(string);
+    callback action(string);
+    callback toggle(string);
+    callback search(string);
+    callback move-selection(int);
+    callback wifi-switched();
+    callback rescan();
+    callback activate-selected();
+    callback dismiss-message();
+    callback confirm-accepted();
+    callback confirm-cancelled();
+    callback message-action-clicked();
+    callback bottom-clicked();
+    callback airplane-toggled();
+    callback editor-back();
+    callback editor-apply();
+    callback editor-revert();
+    callback editor-edited();
+    callback editor-add-row(string);
+    callback editor-remove-row(string, int);
+    callback editor-add-dns(string);
+    callback editor-edit-routes(string);
+    callback editor-routes-done(bool);
+    callback editor-choose-file(string);
+    callback editor-wg-generate();
+    callback editor-wg-show-key();
+    callback editor-wg-export();
+    callback editor-add-allowed(int);
+    callback add-clicked();
+    callback hotspot-toggled();
+    callback hotspot-new-password();
+    callback hotspot-edited();
+    callback share-closed();
+    callback empty-action-clicked();
+    callback add-chosen(string);
+    callback add-cancelled();
+    callback hostname-clicked();
+    callback hostname-save();
+    callback hostname-cancelled();
+    callback join-accepted();
+    callback join-cancelled();
+    /// Whether the dialog's fields can be sent: (mode, name, security, password).
+    pure callback join-check(string, string, int, string) -> bool;
+    // Incremented to move the keyboard focus into the search field.
+    property <int> search-focus-requests;
+
+    title: "Lituus";
+    icon: @image-url("assets/logo-mark.svg");
+    preferred-width: 1040px;
+    preferred-height: 680px;
+    // Fixed limits: Slint shrinks the window whenever the limits it works out from the content
+    // change (an empty page getting a list and details, say), so they mustn't change.
+    min-width: 936px;
+    min-height: 480px;
+    max-width: 100000px;
+    max-height: 100000px;
+    background: Theme.bg;
+    default-font-family: "Inter";
+    default-font-size: 14px;
+
+    forward-focus: keys;
+    keys := FocusScope {
+        init => { self.focus(); }
+        key-pressed(event) => {
+            if event.text == "/" && root.show-search { root.search-focus-requests += 1; return accept; }
+            if event.text == Key.DownArrow { root.move-selection(1); return accept; }
+            if event.text == Key.UpArrow { root.move-selection(-1); return accept; }
+            if event.text == Key.Escape && root.editor-open && root.editor-routes != "" { root.editor-routes-done(false); return accept; }
+            if event.text == Key.Escape && root.editor-open { root.editor-back(); return accept; }
+            if root.editor-open { return reject; }
+            if event.text == Key.Escape && root.bt-pair-open { root.bt-act("pair-cancel", ""); return accept; }
+            if event.text == Key.Escape && root.bt-adapter-open { root.bt-act("adapter-close", ""); return accept; }
+            if event.text == Key.Escape && root.bt-rename-open { root.bt-act("rename-cancel", ""); return accept; }
+            if root.bt-pair-open || root.bt-adapter-open || root.bt-rename-open { return reject; }
+            if root.page == "bluetooth" && (event.text == "p" || event.text == "s") { root.bt-act("key", event.text); return accept; }
+            if event.text == Key.Escape && root.add-open { root.add-cancelled(); return accept; }
+            if event.text == Key.Escape && root.share-open { root.share-closed(); return accept; }
+            if event.text == Key.Escape && root.hostname-open { root.hostname-cancelled(); return accept; }
+            if event.text == "e" && root.has-details && !root.confirm-open && !root.join-open { root.action("edit"); return accept; }
+            if event.text == Key.Return && !root.confirm-open && !root.join-open { root.activate-selected(); return accept; }
+            if event.text == Key.Escape && root.confirm-open { root.confirm-cancelled(); return accept; }
+            if event.text == Key.Escape && root.join-open { root.join-cancelled(); return accept; }
+            reject
+        }
+
+        HorizontalLayout {
+            // Sidebar
+            Rectangle {
+                width: 196px;
+                VerticalLayout {
+                    padding: 12px;
+                    padding-top: 18px;
+                    spacing: 4px;
+                    HorizontalLayout {
+                        padding-left: 6px;
+                        padding-bottom: 14px;
+                        spacing: 10px;
+                        alignment: start;
+                        Logo { size: 28px; }
+                        Text { text: "Lituus"; color: Theme.text; font-size: 15px; font-weight: 600; vertical-alignment: center; }
+                    }
+                    for item in root.nav: NavButton {
+                        item: item;
+                        clicked => { root.navigate(item.id); }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    NavButton {
+                        item: { id: "settings", label: "Settings", sub: "", icon: "settings", current: root.page == "settings" };
+                        clicked => { root.navigate("settings"); }
+                    }
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        height: 36px;
+                        spacing: 10px;
+                        Icon { name: "plane"; tint: Theme.muted; y: (parent.height - 16px) / 2; }
+                        Text { text: "Airplane mode"; color: Theme.text; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                        Switch { on: root.airplane; label: "Airplane mode"; y: (parent.height - self.height) / 2; toggled => { root.airplane-toggled(); } }
+                    }
+                    if root.hostname != "": Rectangle {
+                        height: host-row.preferred-height;
+                        border-radius: 6px;
+                        background: host-touch.has-hover ? Theme.sel-bg : transparent;
+                        accessible-role: button;
+                        accessible-label: "Change the hostname";
+                        accessible-action-default => { root.hostname-clicked(); }
+                        host-row := HorizontalLayout {
+                            padding: 8px;
+                            spacing: 6px;
+                            Text { text: "Hostname"; color: Theme.faint; font-size: 12px; }
+                            Text { text: root.hostname; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; horizontal-stretch: 1; }
+                        }
+                        host-touch := TouchArea { mouse-cursor: pointer; clicked => { root.hostname-clicked(); } }
+                    }
+                }
+                Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                // The same minimum in every state (the list and the narrowest details pane), so the
+                // first snapshot doesn't change the window's limits while it's being mapped.
+                min-width: 740px;
+                if root.banner != "": Rectangle {
+                    height: 40px;
+                    background: Theme.warn-bg;
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        spacing: 10px;
+                        Icon { name: "warning"; tint: Theme.warn-text; y: (parent.height - 16px) / 2; }
+                        Text { text: root.banner; color: Theme.warn-text; font-size: 13px; vertical-alignment: center; }
+                    }
+                }
+                HorizontalLayout {
+                    vertical-stretch: 1;
+                    // List page
+                    if root.page != "settings" && root.page != "hotspot" && root.page != "bluetooth" && root.placeholder == "": Rectangle {
+                        // A fixed 384 px next to the details pane; otherwise (loading, or an empty
+                        // state) all the room, and the window's 1040 px preferred width with the sidebar.
+                        min-width: root.has-details ? 384px : 0px;
+                        max-width: root.has-details ? 384px : 100000px;
+                        preferred-width: root.has-details ? 384px : 844px;
+                        horizontal-stretch: root.has-details ? 0 : 1;
+                        background: Theme.panel;
+                        VerticalLayout {
+                            padding: 12px;
+                            padding-top: 16px;
+                            spacing: 12px;
+                            HorizontalLayout {
+                                padding-left: 4px;
+                                padding-right: 4px;
+                                spacing: 10px;
+                                Text { text: root.page-title; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+                                if root.show-rescan && root.wifi-on: IconButton { icon: "rescan"; label: "Rescan"; clicked => { root.rescan(); } }
+                                if root.show-add: IconButton { icon: "plus"; label: "Add a connection"; clicked => { root.add-clicked(); } }
+                                if root.show-wifi-switch: Switch {
+                                    on: root.wifi-on;
+                                    label: "Wi-Fi";
+                                    switch-width: 40px;
+                                    y: (parent.height - self.height) / 2;
+                                    toggled => { root.wifi-switched(); }
+                                }
+                            }
+                            if root.show-search && root.empty-title == "": Rectangle {
+                                property <int> focus-requests: root.search-focus-requests;
+                                changed focus-requests => { search-input.focus(); }
+                                height: 36px;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: search-input.has-focus ? Theme.accent : Theme.border2;
+                                background: Theme.input-bg;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    spacing: 8px;
+                                    Icon { name: "search"; tint: Theme.faint; size: 15px; y: (parent.height - 15px) / 2; }
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        search-input := TextInput {
+                                            color: Theme.text;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                            single-line: true;
+                                            accessible-label: root.search-placeholder;
+                                            edited => { root.search(self.text); }
+                                            key-pressed(event) => {
+                                                if event.text == Key.Escape { self.text = ""; root.search(""); keys.focus(); return accept; }
+                                                reject
+                                            }
+                                        }
+                                        if search-input.text == "": Text { text: root.search-placeholder; color: Theme.faint; font-size: 13px; vertical-alignment: center; x: 0; }
+                                    }
+                                    Rectangle {
+                                        width: 18px;
+                                        height: 16px;
+                                        y: (parent.height - self.height) / 2;
+                                        border-width: 1px;
+                                        border-color: Theme.ctrl-border;
+                                        border-radius: 4px;
+                                        Text { text: "/"; color: Theme.faint; font-size: 11px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+                            if root.message != "": Rectangle {
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-border : Theme.ctrl-border;
+                                background: root.message-tone == "warn" ? Theme.warn-bg : transparent;
+                                accessible-role: text;
+                                accessible-label: root.message;
+                                HorizontalLayout {
+                                    padding: 10px;
+                                    padding-right: 6px;
+                                    spacing: 10px;
+                                    Icon {
+                                        name: root.message-tone == "info" ? "error" : root.message-tone == "warn" ? "warning" : "error";
+                                        tint: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-text : Theme.muted;
+                                        y: 2px;
+                                    }
+                                    VerticalLayout {
+                                        spacing: 2px;
+                                        horizontal-stretch: 1;
+                                        if root.message-title != "": Text {
+                                            text: root.message-title;
+                                            color: root.message-tone == "danger" ? Theme.danger : Theme.text;
+                                            font-size: 13px;
+                                            font-weight: 600;
+                                            wrap: word-wrap;
+                                        }
+                                        Text {
+                                            text: root.message;
+                                            color: root.message-tone == "warn" ? Theme.warn-text : root.message-title != "" ? Theme.muted : Theme.text;
+                                            font-size: 13px;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                    if root.message-action != "": Button {
+                                        label: root.message-action;
+                                        button-height: 28px;
+                                        min-width: self.preferred-width;
+                                        y: (parent.height - self.height) / 2;
+                                        clicked => { root.message-action-clicked(); }
+                                    }
+                                    Rectangle {
+                                        width: 24px;
+                                        height: 24px;
+                                        border-radius: 6px;
+                                        background: close-touch.has-hover ? Theme.sel-bg : transparent;
+                                        accessible-role: button;
+                                        accessible-label: "Dismiss";
+                                        accessible-action-default => { root.dismiss-message(); }
+                                        Path {
+                                            width: 12px; height: 12px;
+                                            viewbox-width: 16; viewbox-height: 16;
+                                            stroke: Theme.faint; stroke-width: 1.6px; fill: transparent;
+                                            commands: "M4 4l8 8M12 4l-8 8";
+                                        }
+                                        close-touch := TouchArea { mouse-cursor: pointer; clicked => { root.dismiss-message(); } }
+                                    }
+                                }
+                            }
+                            if root.empty-title == "": Flickable {
+                                vertical-stretch: 1;
+                                content-height: rows.preferred-height;
+                                rows := VerticalLayout {
+                                    alignment: start;
+                                    spacing: 2px;
+                                    for section[si] in root.sections: VerticalLayout {
+                                        spacing: 2px;
+                                        padding-top: si == 0 ? 4px : 14px;
+                                        SectionLabel { text: section.title; x: 8px; height: 22px; vertical-alignment: center; }
+                                        for row in section.rows: ListRow {
+                                            entry: row;
+                                            clicked => { root.select(row.id); keys.focus(); }
+                                        }
+                                    }
+                                }
+                            }
+                            if root.empty-title != "": VerticalLayout {
+                                vertical-stretch: 1;
+                                alignment: center;
+                                spacing: 14px;
+                                Icon { name: root.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+                                Text { text: root.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+                                Text { text: root.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
+                                if root.empty-action != "": HorizontalLayout {
+                                    alignment: center;
+                                    Button { label: root.empty-action; kind: "primary"; button-height: 36px; clicked => { root.empty-action-clicked(); } }
+                                }
+                            }
+                            if root.bottom-label != "" && root.empty-title == "": Rectangle {
+                                height: 36px;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.ctrl-border;
+                                background: bottom-touch.has-hover ? Theme.sel-bg : transparent;
+                                accessible-role: button;
+                                accessible-label: root.bottom-label;
+                                accessible-action-default => { root.bottom-clicked(); }
+                                Text { text: root.bottom-label; color: Theme.icon-soft; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+                                bottom-touch := TouchArea { mouse-cursor: pointer; clicked => { root.bottom-clicked(); } }
+                            }
+                        }
+                        Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; visible: root.has-details; }
+                    }
+                    if root.page != "settings" && root.page != "hotspot" && root.page != "bluetooth" && root.placeholder == "" && root.has-details: DetailsPane {
+                        horizontal-stretch: 1;
+                        details: root.details;
+                        action(id) => { root.action(id); }
+                        toggle(id) => { root.toggle(id); }
+                    }
+                    if root.placeholder != "" && root.page != "bluetooth": Rectangle {
+                        background: Theme.surface;
+                        horizontal-stretch: 1;
+                        Text { text: root.placeholder; color: Theme.muted; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; width: 70%; }
+                    }
+                    if root.page == "bluetooth": BluetoothPage {
+                        horizontal-stretch: 1;
+                        page: root.bt;
+                        act(verb, argument) => { root.bt-act(verb, argument); keys.focus(); }
+                    }
+                    // Hotspot and Settings sit on the list pages' panel, with their title where
+                    // the list's is.
+                    if root.page == "hotspot": Rectangle {
+                        background: Theme.panel;
+                        horizontal-stretch: 1;
+                        if !root.hotspot-available: VerticalLayout {
+                            alignment: center;
+                            spacing: 12px;
+                            Icon { name: "hotspot"; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+                            Text { text: "No Wi-Fi card"; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+                            Text { text: "A hotspot needs a Wi-Fi card to share the connection over."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
+                        }
+                        if root.hotspot-available: HorizontalLayout {
+                            padding: 16px;
+                            spacing: 40px;
+                            VerticalLayout {
+                                spacing: 16px;
+                                alignment: start;
+                                horizontal-stretch: 1;
+                                HorizontalLayout {
+                                    height: 32px;
+                                    Text { text: "Hotspot"; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+                                    Switch { on: root.hotspot-on; label: "Hotspot"; switch-width: 40px; y: (parent.height - self.height) / 2; toggled => { root.hotspot-toggled(); } }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    Rectangle { width: 8px; height: 8px; border-radius: 4px; y: (parent.height - 8px) / 2; background: root.hotspot-on ? Theme.accent : Theme.faint; }
+                                    Text { text: root.hotspot-status; color: root.hotspot-on ? Theme.accent : Theme.muted; font-size: 13px; }
+                                }
+                                for field[i] in ["Network name", "Password"]: HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: field; color: Theme.text; font-size: 13px; width: 168px; vertical-alignment: center; }
+                                    if i == 0: TextField { text <=> root.hotspot-ssid; mono: true; label: "Network name"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
+                                    if i == 1: TextField { text <=> root.hotspot-password; mono: true; label: "Password"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
+                                    if i == 1: Button { label: "New"; button-height: 36px; horizontal-stretch: 0; enabled: !root.hotspot-on; clicked => { root.hotspot-new-password(); } }
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Security"; color: Theme.text; font-size: 13px; width: 168px; }
+                                    Text { text: "WPA2 Personal"; color: Theme.text; font-size: 13px; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 10px;
+                                    Text { text: "Band"; color: Theme.text; font-size: 13px; width: 168px; vertical-alignment: center; }
+                                    HorizontalLayout {
+                                        alignment: start;
+                                        Segmented { options: ["Automatic", "2.4 GHz", "5 GHz"]; selected <=> root.hotspot-band; label: "Band"; }
+                                    }
+                                }
+                                if root.hotspot-warning != "": Rectangle {
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: Theme.warn-border;
+                                    background: Theme.warn-bg;
+                                    height: warn.preferred-height;
+                                    warn := HorizontalLayout {
+                                        padding: 10px;
+                                        spacing: 10px;
+                                        Icon { name: "warning"; tint: Theme.warn-text; y: 2px; }
+                                        Text { text: root.hotspot-warning; color: Theme.warn-text; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
+                                    }
+                                }
+                                if root.hotspot-on: VerticalLayout {
+                                    spacing: 8px;
+                                    SectionLabel { text: root.hotspot-clients.length == 0 ? "NO DEVICES YET" : "CONNECTED DEVICES · " + root.hotspot-clients.length; }
+                                    for c in root.hotspot-clients: Rectangle {
+                                        height: 50px;
+                                        border-radius: 8px;
+                                        border-width: 1px;
+                                        border-color: Theme.border2;
+                                        HorizontalLayout {
+                                            padding-left: 12px;
+                                            padding-right: 12px;
+                                            VerticalLayout {
+                                                alignment: center;
+                                                horizontal-stretch: 1;
+                                                Text { text: c.name; color: Theme.text; font-weight: 500; }
+                                                Text { text: c.address; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; }
+                                            }
+                                            Text { text: c.since; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                                        }
+                                    }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: start;
+                                spacing: 12px;
+                                padding-top: 40px;
+                                Rectangle {
+                                    width: 220px;
+                                    height: 220px;
+                                    border-radius: 12px;
+                                    background: white;
+                                    Image { source: root.hotspot-qr; width: 200px; height: 200px; image-rendering: pixelated; }
+                                }
+                                Text { text: "Scan with a phone camera to join"; color: Theme.muted; font-size: 12px; horizontal-alignment: center; }
+                            }
+                        }
+                    }
+                    // Settings
+                    if root.page == "settings": Rectangle {
+                        background: Theme.panel;
+                        horizontal-stretch: 1;
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 22px;
+                            alignment: start;
+                            HorizontalLayout {
+                                height: 32px;
+                                spacing: 12px;
+                                Text { text: "Settings"; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+                                Text { text: "Saved to"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                                Text { text: root.config-path; color: Theme.icon-soft; font-size: 12px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+                            }
+                            VerticalLayout {
+                                spacing: 10px;
+                                Text { text: "Colours"; color: Theme.text; font-weight: 600; }
+                                Text { text: "The first source that exists is used, and the window recolours when it changes."; color: Theme.muted; font-size: 13px; }
+                                Rectangle {
+                                    border-width: 1px;
+                                    border-color: Theme.border2;
+                                    border-radius: 10px;
+                                    VerticalLayout {
+                                        for s[i] in root.sources: Rectangle {
+                                            height: 54px;
+                                            Rectangle { y: 0; height: 1px; background: i == 0 ? transparent : Theme.border2; }
+                                            HorizontalLayout {
+                                                padding-left: 14px;
+                                                padding-right: 14px;
+                                                spacing: 12px;
+                                                Text { text: s.n; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; width: 14px; vertical-alignment: center; }
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    spacing: 2px;
+                                                    horizontal-stretch: 1;
+                                                    Text { text: s.label; color: Theme.text; font-weight: 500; }
+                                                    Text { text: s.path; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+                                                }
+                                                HorizontalLayout {
+                                                    spacing: 3px;
+                                                    alignment: center;
+                                                    for c in s.swatches: Rectangle { width: 14px; height: 14px; y: (parent.height - 14px) / 2; border-radius: 4px; background: c; border-width: 1px; border-color: Theme.border2; }
+                                                }
+                                                Text { text: s.status; color: Theme.tone(s.tone); font-size: 12px; width: 92px; horizontal-alignment: right; vertical-alignment: center; }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 24px;
+                                Text { text: "Built-in theme"; color: Theme.icon-soft; width: 200px; height: 40px; vertical-alignment: center; }
+                                VerticalLayout {
+                                    spacing: 8px;
+                                    HorizontalLayout {
+                                        alignment: start;
+                                        Segmented {
+                                            label: "Built-in theme";
+                                            options: ["Follow system", "Dark", "Light"];
+                                            selected: root.builtin-choice;
+                                            enabled: root.builtin-note == "";
+                                            changed(i) => { root.builtin-chosen(i); }
+                                        }
+                                    }
+                                    if root.builtin-note != "": Text { text: root.builtin-note; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                                }
+                            }
+                            for o in root.options: HorizontalLayout {
+                                spacing: 24px;
+                                Text { text: o.label; color: Theme.icon-soft; width: 200px; vertical-alignment: center; }
+                                Switch { on: o.on; label: o.label; y: (parent.height - self.height) / 2; toggled => { root.option-toggled(o.id); } }
+                                Text { text: o.sub; color: Theme.muted; font-size: 13px; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
+                            }
+                            HorizontalLayout {
+                                spacing: 24px;
+                                Text { text: "Passwords \"for me only\""; color: Theme.icon-soft; width: 200px; }
+                                Text { text: root.keyring-label; color: Theme.text; wrap: word-wrap; horizontal-stretch: 1; }
+                            }
+                            Text { text: "Colour sources are changed in the file."; color: Theme.faint; font-size: 12px; }
+                        }
+                    }
+                }
+                // Keyboard hints
+                Rectangle {
+                    height: 30px;
+                    background: Theme.bg;
+                    Rectangle { y: 0; height: 1px; background: Theme.border; }
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        spacing: 18px;
+                        alignment: start;
+                        if root.page != "bluetooth": Kbd { key: "/"; label: "Search"; }
+                        Kbd { key: "↑↓"; label: "Select"; }
+                        Kbd { key: "↵"; label: "Connect"; }
+                        if root.page != "bluetooth": Kbd { key: "Esc"; label: "Clear search"; }
+                        if root.page == "bluetooth": Kbd { key: "p"; label: "Pair"; }
+                        if root.page == "bluetooth": Kbd { key: "s"; label: "Look for devices"; }
+                        // Lets the bar (and so the window) grow wider than its hints.
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+        }
+    }
+
+    // The confirmation dialog, over everything.
+    if root.confirm-open: Rectangle {
+        background: #05060799;
+        TouchArea { clicked => { root.confirm-cancelled(); } }
+        Rectangle {
+            width: 420px;
+            height: dialog.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: Theme.ctrl-border;
+            background: Theme.surface;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000080;
+            accessible-role: groupbox;
+            accessible-label: root.confirm-title;
+            TouchArea {}
+            dialog := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                Text { text: root.confirm-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+                Text { text: root.confirm-text; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                HorizontalLayout {
+                    padding-top: 6px;
+                    spacing: 8px;
+                    alignment: end;
+                    Button { label: "Cancel"; button-height: 36px; clicked => { root.confirm-cancelled(); } }
+                    Button { label: root.confirm-button; kind: "destructive"; button-height: 36px; clicked => { root.confirm-accepted(); } }
+                }
+            }
+        }
+    }
+
+    if root.join-open: JoinDialog {
+        mode: root.join-mode;
+        title: root.join-title;
+        subtitle: root.join-subtitle;
+        error: root.join-error;
+        securities: root.join-securities;
+        password-hints: root.join-password-hints;
+        storage-hints: root.join-storage-hints;
+        name <=> root.join-name;
+        security <=> root.join-security;
+        password <=> root.join-password;
+        storage <=> root.join-storage;
+        autoconnect <=> root.join-autoconnect;
+        valid: root.join-check(root.join-mode, root.join-name, root.join-security, root.join-password);
+        accepted => { root.join-accepted(); keys.focus(); }
+        cancelled => { root.join-cancelled(); keys.focus(); }
+    }
+
+    // The editor sweeps in from the right, over everything but the dialogs above. The slide
+    // is a fraction of the width, not a position: an animated x would trail behind a resize
+    // and show the closed editor in the window's new space.
+    property <float> editor-slide: root.editor-open ? 0 : 1;
+    animate editor-slide { duration: 220ms; easing: ease-out; }
+    editor := Editor {
+        x: root.width * root.editor-slide;
+        width: root.width;
+        height: root.height;
+        visible: root.editor-slide < 1;
+        title: root.editor-title;
+        subtitle: root.editor-subtitle;
+        tabs: root.editor-tabs;
+        tab <=> root.editor-tab;
+        form <=> root.editor-form;
+        errors: root.editor-errors;
+        options: root.editor-options;
+        dirty: root.editor-dirty;
+        valid: root.editor-valid;
+        busy: root.editor-busy;
+        new: root.editor-new;
+        footer: root.editor-footer;
+        footer-tone: root.editor-footer-tone;
+        routes-open: root.editor-routes;
+        ports-open: root.editor-ports-open;
+        port-chosen(interface) => { root.editor-port-chosen(interface); }
+        back => { root.editor-back(); keys.focus(); }
+        apply => { root.editor-apply(); }
+        revert => { root.editor-revert(); }
+        form-edited => { root.editor-edited(); }
+        add-row(what) => { root.editor-add-row(what); }
+        remove-row(what, i) => { root.editor-remove-row(what, i); }
+        add-dns(family) => { root.editor-add-dns(family); }
+        edit-routes(family) => { root.editor-edit-routes(family); }
+        routes-done(keep) => { root.editor-routes-done(keep); }
+        choose-file(field) => { root.editor-choose-file(field); }
+        wg-generate => { root.editor-wg-generate(); }
+        wg-show-key => { root.editor-wg-show-key(); }
+        wg-export => { root.editor-wg-export(); }
+        add-allowed(i) => { root.editor-add-allowed(i); }
+    }
+
+    if root.add-open: Rectangle {
+        background: #05060799;
+        TouchArea { clicked => { root.add-cancelled(); } }
+        Rectangle {
+            width: 660px;
+            height: add-form.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: Theme.ctrl-border;
+            background: Theme.surface;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000080;
+            TouchArea {}
+            add-form := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                Text { text: "Add a connection"; color: Theme.text; font-size: 17px; font-weight: 600; }
+                GridLayout {
+                    spacing: 10px;
+                    for group[g] in ["NETWORKS", "VPN", "VIRTUAL INTERFACES"]: SectionLabel {
+                        text: group;
+                        col: 0;
+                        colspan: 3;
+                        row: g * 2;
+                    }
+                    for kind[i] in [
+                        { id: "wifi", icon: "wifi", title: "Wi-Fi", text: "Hidden and Enterprise (802.1X) too", ready: true },
+                        { id: "wired", icon: "wired", title: "Wired", text: "Ethernet, DHCP or static", ready: true },
+                        { id: "hotspot", icon: "hotspot", title: "Hotspot", text: "Share a connection over Wi-Fi", ready: true },
+                        { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Built in. Empty or from a .conf", ready: true },
+                        { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "By hand or from an .ovpn", ready: true },
+                        { id: "import", icon: "saved", title: "Import from file…", text: "A .conf or an .ovpn", ready: true },
+                        { id: "vlan", icon: "vlan", title: "VLAN", text: "A tagged network on a wired device", ready: true },
+                        { id: "bridge", icon: "bridge", title: "Bridge", text: "Join devices into one network, e.g. for VMs", ready: true },
+                        { id: "bond", icon: "bond", title: "Bond", text: "Combine devices for failover or speed", ready: true },
+                    ]: Rectangle {
+                        col: mod(i, 3);
+                        row: floor(i / 3) * 2 + 1;
+                        width: 196px;
+                        height: 76px;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: Theme.border2;
+                        background: tile.has-hover && kind.ready ? Theme.sel-bg : transparent;
+                        opacity: kind.ready ? 1 : 0.5;
+                        accessible-role: button;
+                        accessible-label: kind.title;
+                        accessible-enabled: kind.ready;
+                        accessible-action-default => { if kind.ready { root.add-chosen(kind.id); } }
+                        HorizontalLayout {
+                            padding: 14px;
+                            spacing: 12px;
+                            Icon { name: kind.icon; tint: Theme.accent; y: 2px; }
+                            VerticalLayout {
+                                spacing: 3px;
+                                alignment: start;
+                                Text { text: kind.title; color: Theme.text; font-weight: 600; font-size: 14px; }
+                                Text { text: kind.text; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                            }
+                        }
+                        tile := TouchArea { enabled: kind.ready; mouse-cursor: kind.ready ? pointer : default; clicked => { root.add-chosen(kind.id); } }
+                    }
+                }
+                HorizontalLayout {
+                    padding-top: 6px;
+                    alignment: end;
+                    Button { label: "Cancel"; button-height: 36px; clicked => { root.add-cancelled(); keys.focus(); } }
+                }
+            }
+        }
+    }
+
+    if root.hostname-open: Rectangle {
+        background: #05060799;
+        TouchArea { clicked => { root.hostname-cancelled(); keys.focus(); } }
+        Rectangle {
+            width: 420px;
+            height: host-form.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: Theme.ctrl-border;
+            background: Theme.surface;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000080;
+            TouchArea {}
+            host-form := VerticalLayout {
+                padding: 24px;
+                spacing: 12px;
+                Text { text: "Hostname"; color: Theme.text; font-size: 17px; font-weight: 600; }
+                Text { text: "The computer's name on the network. Changing it needs an admin password."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                TextField {
+                    text <=> root.hostname-input;
+                    mono: true;
+                    autofocus: true;
+                    label: "Hostname";
+                    invalid: root.hostname-error != "";
+                    accepted => { if root.hostname-error == "" { root.hostname-save(); keys.focus(); } }
+                }
+                if root.hostname-error != "": Text { text: root.hostname-error; color: Theme.danger; font-size: 12px; }
+                HorizontalLayout {
+                    padding-top: 6px;
+                    spacing: 8px;
+                    alignment: end;
+                    Button { label: "Cancel"; button-height: 36px; clicked => { root.hostname-cancelled(); keys.focus(); } }
+                    Button { label: "Save"; kind: "primary"; button-height: 36px; enabled: root.hostname-error == ""; clicked => { root.hostname-save(); keys.focus(); } }
+                }
+            }
+        }
+    }
+
+    if root.share-open: Rectangle {
+        background: #05060799;
+        TouchArea { clicked => { root.share-closed(); keys.focus(); } }
+        Rectangle {
+            width: 400px;
+            height: share-form.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: Theme.ctrl-border;
+            background: Theme.surface;
+            drop-shadow-blur: 40px;
+            drop-shadow-color: #00000080;
+            TouchArea {}
+            share-form := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                VerticalLayout {
+                    spacing: 3px;
+                    Text { text: root.share-title; color: Theme.text; font-size: 17px; font-weight: 600; }
+                    Text { text: "Scan with a phone camera to join."; color: Theme.muted; font-size: 13px; }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 264px;
+                        height: 264px;
+                        border-radius: 14px;
+                        background: white;
+                        Image { source: root.share-qr; width: 240px; height: 240px; image-rendering: pixelated; }
+                    }
+                }
+                if root.share-password != "": HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: "Password"; color: Theme.muted; font-size: 13px; width: 90px; vertical-alignment: center; }
+                    Rectangle {
+                        height: 30px;
+                        horizontal-stretch: 1;
+                        TextInput { text: root.share-password; read-only: true; color: Theme.text; font-family: "JetBrains Mono"; font-size: 13px; vertical-alignment: center; single-line: true; }
+                    }
+                }
+                HorizontalLayout {
+                    padding-top: 4px;
+                    alignment: end;
+                    Button { label: "Close"; button-height: 36px; clicked => { root.share-closed(); keys.focus(); } }
+                }
+            }
+        }
+    }
+
+    if root.bt-pair-open: BtPairDialog {
+        pair: root.bt-pair;
+        code <=> root.bt-pair-code;
+        always <=> root.bt-pair-always;
+        accepted => { root.bt-act("pair-accept", ""); keys.focus(); }
+        cancelled => { root.bt-act("pair-cancel", ""); keys.focus(); }
+    }
+    if root.bt-adapter-open: BtAdapterDialog {
+        adapter: root.bt-adapter-label;
+        pairable: root.bt-pairable;
+        name <=> root.bt-adapter-name;
+        visible-choice <=> root.bt-visible-choice;
+        name-saved => { root.bt-act("adapter-name", ""); }
+        visible-chosen(i) => { root.bt-act("adapter-visible", "" + i); }
+        pairable-toggled => { root.bt-act("pairable", ""); }
+        closed => { root.bt-act("adapter-close", ""); keys.focus(); }
+    }
+    if root.bt-rename-open: BtRenameDialog {
+        title: root.bt-rename-title;
+        hint: root.bt-rename-hint;
+        name <=> root.bt-rename-name;
+        saved => { root.bt-act("rename-save", ""); keys.focus(); }
+        cancelled => { root.bt-act("rename-cancel", ""); keys.focus(); }
+    }
+}

@@ -1,0 +1,115 @@
+// Buttons, switches and the small pieces the pages are built from, styled like the mockups.
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+
+/// kind: "primary", "secondary", "danger" (red text) or "destructive" (red button).
+export component Button inherits Rectangle {
+    in property <string> label;
+    in property <string> kind: "secondary";
+    in property <bool> enabled: true;
+    in property <length> button-height: 34px;
+    callback clicked();
+    height: button-height;
+    // Shrinks (eliding the label) before it makes a narrow window impossible.
+    min-width: 56px;
+    preferred-width: text.preferred-width + 24px;
+    border-radius: 8px;
+    border-width: kind == "danger" || kind == "destructive" ? 0 : 1px;
+    border-color: kind == "primary" ? Theme.accent : Theme.ctrl-border;
+    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (touch.has-hover && enabled ? Theme.sel-bg : Theme.ctrl-bg);
+    opacity: enabled ? 1 : 0.45;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-enabled: enabled;
+    accessible-action-default => { if enabled { clicked(); } }
+    text := Text {
+        x: 12px;
+        width: parent.width - 24px;
+        text: root.label;
+        color: kind == "primary" ? Theme.on-accent : kind == "destructive" ? Theme.bg : kind == "danger" ? Theme.danger : Theme.text;
+        font-size: 13px;
+        font-weight: kind == "primary" || kind == "destructive" ? 600 : 400;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+        overflow: elide;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// A square button with only an icon.
+export component IconButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    callback clicked();
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.ctrl-border;
+    background: touch.has-hover ? Theme.sel-bg : transparent;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { clicked(); }
+    Icon { name: root.icon; tint: Theme.icon-soft; }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Switch inherits Rectangle {
+    in property <bool> on;
+    in property <string> label;
+    in property <length> switch-width: 34px;
+    callback toggled();
+    width: switch-width;
+    height: switch-width == 34px ? 20px : 22px;
+    border-radius: self.height / 2;
+    background: on ? Theme.accent : Theme.off-track;
+    accessible-role: switch;
+    accessible-label: label;
+    accessible-checked: on;
+    accessible-action-default => { toggled(); }
+    Rectangle {
+        x: root.on ? parent.width - self.width - 2px : 2px;
+        y: (parent.height - self.height) / 2;
+        width: parent.height - 4px;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.on ? Theme.on-accent : Theme.knob-off;
+        animate x { duration: 120ms; easing: ease-out; }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+}
+
+/// The small uppercase label above a group of rows.
+export component SectionLabel inherits Text {
+    color: Theme.faint;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+}
+
+export component Kbd inherits HorizontalLayout {
+    in property <string> key;
+    in property <string> label;
+    spacing: 6px;
+    alignment: start;
+    Rectangle {
+        border-width: 1px;
+        border-color: Theme.ctrl-border;
+        border-radius: 4px;
+        width: k.preferred-width + 10px;
+        height: 16px;
+        y: (parent.height - self.height) / 2;
+        k := Text { text: root.key; color: Theme.icon-soft; font-size: 11px; font-family: "JetBrains Mono"; vertical-alignment: center; horizontal-alignment: center; }
+    }
+    Text { text: root.label; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+}

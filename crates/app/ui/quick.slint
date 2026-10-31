@@ -1,0 +1,143 @@
+// The quick popup: a small window from the tray icon (left-click), `lituus --quick` or a
+// keybind, with the nearest networks, the VPNs and airplane mode. Its rows come from Rust
+// (src/quick.rs). Wayland doesn't let apps place windows, so a window rule floats it (see
+// extras/hyprland.lua).
+import { Theme } from "theme.slint";
+import { Icon, SignalBars } from "icons.slint";
+import { Button, IconButton, Switch } from "controls.slint";
+
+export struct QuickRow { id: string, name: string, meta: string, bars: int, active: bool, connecting: bool }
+export struct QuickToggle { id: string, name: string, meta: string, on: bool }
+
+component NetworkRow inherits Rectangle {
+    in property <QuickRow> network;
+    callback connect();
+    height: 48px;
+    border-radius: 8px;
+    background: network.active ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    accessible-role: list-item;
+    accessible-label: network.name + ", " + network.meta;
+    touch := TouchArea {}
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 12px;
+        SignalBars { bars: root.network.bars; y: (parent.height - 14px) / 2; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 1px;
+            horizontal-stretch: 1;
+            Text { text: root.network.name; color: Theme.text; font-size: 13px; font-weight: 500; overflow: elide; }
+            Text { text: root.network.meta; color: Theme.muted; font-size: 11px; overflow: elide; }
+        }
+        if root.network.active: Text {
+            text: root.network.connecting ? "Connecting…" : "Connected";
+            color: Theme.accent;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+        if !root.network.active: Button {
+            label: "Connect";
+            button-height: 28px;
+            width: 76px;
+            y: (parent.height - self.height) / 2;
+            clicked => { root.connect(); }
+        }
+    }
+}
+
+export component QuickWindow inherits Window {
+    in property <bool> wifi-available;
+    in property <bool> wifi-on;
+    in property <string> wifi-status;
+    in property <[QuickRow]> networks;
+    in property <[QuickToggle]> toggles;
+    callback wifi-switched();
+    callback rescan();
+    callback connect(string);
+    callback toggled(string);
+    callback open-main();
+    callback open-settings();
+    callback dismissed();
+
+    title: "Lituus quick";
+    icon: @image-url("assets/logo-mark.svg");
+    width: 380px;
+    height: 560px;
+    background: Theme.surface;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+
+    FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.dismissed();
+                return accept;
+            }
+            reject
+        }
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "Wi-Fi"; color: Theme.text; font-size: 15px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+                if root.wifi-on: IconButton { icon: "rescan"; label: "Rescan"; clicked => { root.rescan(); } }
+                if root.wifi-available: Switch {
+                    on: root.wifi-on;
+                    label: "Wi-Fi";
+                    switch-width: 40px;
+                    y: (parent.height - self.height) / 2;
+                    toggled => { root.wifi-switched(); }
+                }
+            }
+            if root.networks.length == 0: Text {
+                text: root.wifi-status;
+                color: Theme.muted;
+                height: 48px;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+            VerticalLayout {
+                spacing: 2px;
+                for n in root.networks: NetworkRow { network: n; connect => { root.connect(n.id); } }
+            }
+            if root.toggles.length > 0: Rectangle { height: 1px; background: Theme.border2; }
+            VerticalLayout {
+                spacing: 2px;
+                for t in root.toggles: HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    height: 44px;
+                    spacing: 10px;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 1px;
+                        horizontal-stretch: 1;
+                        Text { text: t.name; color: Theme.text; font-size: 13px; overflow: elide; }
+                        Text { text: t.meta; color: Theme.muted; font-size: 11px; overflow: elide; }
+                    }
+                    Switch { on: t.on; label: t.name; y: (parent.height - self.height) / 2; toggled => { root.toggled(t.id); } }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+            HorizontalLayout {
+                spacing: 8px;
+                Button { label: "Open Lituus"; button-height: 36px; horizontal-stretch: 1; clicked => { root.open-main(); } }
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: Theme.ctrl-border;
+                    background: settings.has-hover ? Theme.sel-bg : Theme.ctrl-bg;
+                    accessible-role: button;
+                    accessible-label: "Settings";
+                    accessible-action-default => { root.open-settings(); }
+                    Icon { name: "settings"; tint: Theme.icon-soft; }
+                    settings := TouchArea { mouse-cursor: pointer; clicked => { root.open-settings(); } }
+                }
+            }
+        }
+    }
+}

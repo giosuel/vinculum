@@ -1,0 +1,581 @@
+// The Bluetooth page and its dialogs (pairing, adapter settings, renaming), following the
+// "Bluetooth (M5)" mockups. What it shows comes from Rust (src/bluetooth.rs); everything the
+// user does goes back through one callback, `act(verb, argument)`.
+import { Theme } from "theme.slint";
+import { Icon, SignalBars, Battery, Spinner } from "icons.slint";
+import { Button, IconButton, Switch, SectionLabel } from "controls.slint";
+import { TextField, Segmented, CheckBox } from "dialogs.slint";
+import { Details, DetailsPane } from "details.slint";
+
+/// battery and bars: -1 when not shown. button: the label of the button on the row, if any.
+export struct BtRow { id: string, name: string, meta: string, tone: string, icon: string, battery: int, bars: int, button: string, selected: bool }
+/// busy: the spinner and its label on the right of the title ("Looking for devices").
+/// empty: a line shown when there are no rows.
+/// One choice of a headset's audio: "High quality", "A2DP · LDAC".
+export struct BtAudio { label: string, sub: string }
+export struct BtSection { title: string, rows: [BtRow], busy: string, empty: string }
+/// state: "list", "loading", "off", "blocked", "no-adapter" or "no-service"; everything but
+/// "list" shows the empty-* fields instead of the list.
+export struct BtPage {
+    state: string,
+    powered: bool,
+    alias: string,
+    adapter: string,
+    visible: bool,
+    visible-label: string,
+    pairable: bool,
+    sections: [BtSection],
+    has-details: bool,
+    details: Details,
+    /// The audio choice for a connected headset or speaker, when PipeWire has its card.
+    audio: [BtAudio],
+    audio-selected: int,
+    message: string,
+    message-title: string,
+    message-tone: string,
+    message-action: string,
+    empty-icon: string,
+    empty-title: string,
+    empty-text: string,
+    empty-command: string,
+    empty-action: string,
+}
+/// mode: "confirm" (compare a code), "display" (type a code on the device), "pin", "passkey",
+/// "authorize" (pair without a code) or "service" (allow a service).
+export struct BtPair {
+    mode: string,
+    title: string,
+    text: string,
+    name: string,
+    address: string,
+    icon: string,
+    /// The code, a digit a box; empty for the modes that ask for one.
+    digits: [string],
+    /// How many of the digits the keyboard has had typed; -1 when it doesn't say.
+    typed: int,
+    /// What the device wants ("Wants: audio source (A2DP)").
+    wants: string,
+    hint: string,
+    accept: string,
+    always: string,
+}
+
+component BtListRow inherits Rectangle {
+    in property <BtRow> entry;
+    callback clicked();
+    callback button-clicked();
+    height: 52px;
+    border-radius: 8px;
+    background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    accessible-role: list-item;
+    accessible-label: entry.name + ", " + entry.meta;
+    accessible-item-selected: entry.selected;
+    accessible-action-default => { clicked(); }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 12px;
+        Icon { name: root.entry.icon; tint: root.entry.selected || root.entry.tone == "accent" ? Theme.accent : Theme.muted; y: (parent.height - 16px) / 2; width: 20px; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: root.entry.name; color: Theme.text; font-weight: 500; overflow: elide; }
+            Text { text: root.entry.meta; color: root.entry.selected && root.entry.tone == "muted" ? Theme.accent : Theme.tone(root.entry.tone); font-size: 12px; overflow: elide; }
+        }
+        if root.entry.battery >= 0: HorizontalLayout {
+            horizontal-stretch: 0;
+            spacing: 5px;
+            accessible-role: text;
+            accessible-label: "Battery " + root.entry.battery + " %";
+            Battery { percent: root.entry.battery; tint: root.entry.tone == "accent" ? Theme.accent : Theme.muted; y: (parent.height - 10px) / 2; }
+            Text { text: root.entry.battery + " %"; color: root.entry.tone == "accent" ? Theme.accent : Theme.muted; font-size: 12px; vertical-alignment: center; }
+        }
+        if root.entry.bars >= 0: SignalBars { bars: root.entry.bars; y: (parent.height - 14px) / 2; }
+        if root.entry.button != "": Button {
+            label: root.entry.button;
+            button-height: 28px;
+            horizontal-stretch: 0;
+            min-width: self.preferred-width;
+            max-width: self.preferred-width;
+            y: (parent.height - self.height) / 2;
+            clicked => { root.button-clicked(); }
+        }
+    }
+}
+
+/// A small switch-like label on the adapter card ("✓ Visible · 2:41").
+component Pill inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    callback clicked();
+    height: 26px;
+    width: pill.preferred-width;
+    border-radius: 13px;
+    border-width: 1px;
+    border-color: on ? Theme.accent-soft-border : Theme.ctrl-border;
+    background: on ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    accessible-role: checkbox;
+    accessible-label: label;
+    accessible-checked: on;
+    accessible-action-default => { clicked(); }
+    pill := HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 12px;
+        spacing: 5px;
+        if root.on: Icon { name: "check"; tint: Theme.accent; size: 12px; y: (parent.height - 12px) / 2; }
+        Text { text: root.label; color: root.on ? Theme.text : Theme.muted; font-size: 12px; vertical-alignment: center; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component BluetoothPage inherits HorizontalLayout {
+    in property <BtPage> page;
+    /// Moves the keyboard focus back to the window after a click.
+    callback act(string, string);
+
+    Rectangle {
+        // The command in the "service not running" state, for Copy.
+        copy-field := TextInput { visible: false; text: root.page.empty-command; read-only: true; }
+        // As the other list pages: 384 px next to the details pane, otherwise all the room.
+        min-width: root.page.has-details ? 384px : 0px;
+        max-width: root.page.has-details ? 384px : 100000px;
+        preferred-width: root.page.has-details ? 384px : 844px;
+        horizontal-stretch: root.page.has-details ? 0 : 1;
+        background: Theme.panel;
+        VerticalLayout {
+            padding: 12px;
+            padding-top: 16px;
+            spacing: 12px;
+            HorizontalLayout {
+                padding-left: 4px;
+                padding-right: 4px;
+                spacing: 10px;
+                height: 32px;
+                Text { text: "Bluetooth"; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+                if root.page.state == "list": IconButton { icon: "rescan"; label: "Look for devices again"; clicked => { root.act("rescan", ""); } }
+                if root.page.state == "list" || root.page.state == "off": Switch {
+                    on: root.page.powered;
+                    label: "Bluetooth";
+                    switch-width: 40px;
+                    y: (parent.height - self.height) / 2;
+                    toggled => { root.act("power", ""); }
+                }
+            }
+            if root.page.state == "list": Rectangle {
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: Theme.border2;
+                background: Theme.surface;
+                height: card.preferred-height;
+                card := VerticalLayout {
+                    padding: 12px;
+                    padding-top: 8px;
+                    spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        height: 30px;
+                        Text { text: "Visible as"; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
+                        Text { text: root.page.alias; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 6px;
+                            background: gear.has-hover ? Theme.sel-bg : transparent;
+                            accessible-role: button;
+                            accessible-label: "Adapter settings";
+                            accessible-action-default => { root.act("adapter", ""); }
+                            Icon { name: "gear"; tint: Theme.icon-soft; }
+                            gear := TouchArea { mouse-cursor: pointer; clicked => { root.act("adapter", ""); } }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Pill { label: root.page.visible-label; on: root.page.visible; clicked => { root.act("visible", ""); } }
+                        Pill { label: "Pairable"; on: root.page.pairable; clicked => { root.act("pairable", ""); } }
+                        Text { text: root.page.adapter; color: Theme.muted; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; horizontal-stretch: 1; }
+                    }
+                }
+            }
+            if root.page.state == "list" && root.page.message != "": Rectangle {
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: root.page.message-tone == "danger" ? Theme.danger : root.page.message-tone == "warn" ? Theme.warn-border : Theme.ctrl-border;
+                background: root.page.message-tone == "warn" ? Theme.warn-bg : transparent;
+                accessible-role: text;
+                accessible-label: root.page.message-title + " " + root.page.message;
+                HorizontalLayout {
+                    padding: 10px;
+                    padding-right: 6px;
+                    spacing: 10px;
+                    Icon { name: root.page.message-tone == "warn" ? "warning" : "error"; tint: root.page.message-tone == "danger" ? Theme.danger : root.page.message-tone == "warn" ? Theme.warn-text : Theme.muted; y: 2px; }
+                    VerticalLayout {
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        if root.page.message-title != "": Text { text: root.page.message-title; color: root.page.message-tone == "danger" ? Theme.danger : Theme.text; font-size: 13px; font-weight: 600; wrap: word-wrap; }
+                        Text { text: root.page.message; color: root.page.message-title != "" ? Theme.muted : Theme.text; font-size: 13px; wrap: word-wrap; }
+                    }
+                    if root.page.message-action != "": Button {
+                        label: root.page.message-action;
+                        button-height: 28px;
+                        min-width: self.preferred-width;
+                        y: (parent.height - self.height) / 2;
+                        clicked => { root.act("message-action", ""); }
+                    }
+                    Rectangle {
+                        width: 24px;
+                        height: 24px;
+                        border-radius: 6px;
+                        background: dismiss.has-hover ? Theme.sel-bg : transparent;
+                        accessible-role: button;
+                        accessible-label: "Dismiss";
+                        accessible-action-default => { root.act("dismiss", ""); }
+                        Icon { name: "close"; tint: Theme.faint; size: 12px; }
+                        dismiss := TouchArea { mouse-cursor: pointer; clicked => { root.act("dismiss", ""); } }
+                    }
+                }
+            }
+            if root.page.state == "list": Flickable {
+                vertical-stretch: 1;
+                content-height: rows.preferred-height;
+                rows := VerticalLayout {
+                    alignment: start;
+                    spacing: 2px;
+                    for section[si] in root.page.sections: VerticalLayout {
+                        spacing: 2px;
+                        padding-top: si == 0 ? 4px : 14px;
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            height: 22px;
+                            spacing: 6px;
+                            SectionLabel { text: section.title; vertical-alignment: center; horizontal-stretch: 1; }
+                            if section.busy != "": Spinner { y: (parent.height - 12px) / 2; }
+                            if section.busy != "": Text { text: section.busy; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                        }
+                        for row in section.rows: BtListRow {
+                            entry: row;
+                            clicked => { root.act("select", row.id); }
+                            button-clicked => { root.act("row-button", row.id); }
+                        }
+                        if section.rows.length == 0 && section.empty != "": HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            padding-top: 6px;
+                            padding-bottom: 6px;
+                            Text { text: section.empty; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
+                        }
+                    }
+                }
+            }
+            if root.page.state != "list": VerticalLayout {
+                vertical-stretch: 1;
+                alignment: center;
+                spacing: 14px;
+                padding-bottom: 40px;
+                if root.page.state == "loading": HorizontalLayout { alignment: center; Spinner { size: 20px; } }
+                if root.page.empty-icon != "": Icon { name: root.page.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+                Text { text: root.page.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+                if root.page.empty-text != "": HorizontalLayout {
+                    alignment: center;
+                    Text { text: root.page.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; max-width: 460px; }
+                }
+                if root.page.empty-command != "": HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: Theme.border2;
+                        background: Theme.surface;
+                        width: command.preferred-width;
+                        height: 46px;
+                        command := HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 8px;
+                            spacing: 12px;
+                            Text { text: root.page.empty-command; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+                            Button {
+                                label: "Copy";
+                                button-height: 28px;
+                                min-width: self.preferred-width;
+                                y: (parent.height - self.height) / 2;
+                                clicked => { copy-field.select-all(); copy-field.copy(); root.act("copied", ""); }
+                            }
+                        }
+                    }
+                }
+                if root.page.empty-action != "": HorizontalLayout {
+                    alignment: center;
+                    Button {
+                        label: root.page.empty-action;
+                        kind: root.page.state == "no-service" ? "secondary" : "primary";
+                        button-height: 34px;
+                        clicked => { root.act("empty-action", ""); }
+                    }
+                }
+            }
+        }
+        Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; visible: root.page.has-details; }
+    }
+    if root.page.state == "list" && root.page.has-details: DetailsPane {
+        horizontal-stretch: 1;
+        details: root.page.details;
+        action(id) => { root.act("detail", id); }
+        toggle(id) => { root.act("toggle", id); }
+        rename => { root.act("rename", ""); }
+        if root.page.audio.length > 0: VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Text { text: "Audio"; color: Theme.text; font-weight: 600; vertical-alignment: center; }
+                Text { text: "through PipeWire"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+            }
+            Rectangle {
+                height: 52px;
+                border-radius: 9px;
+                border-width: 1px;
+                border-color: Theme.border2;
+                accessible-role: tab-list;
+                accessible-label: "Audio";
+                HorizontalLayout {
+                    padding: 3px;
+                    spacing: 3px;
+                    for option[i] in root.page.audio: Rectangle {
+                        horizontal-stretch: 1;
+                        border-radius: 7px;
+                        background: i == root.page.audio-selected ? Theme.accent-soft-bg : audio-touch.has-hover ? Theme.sel-bg : transparent;
+                        accessible-role: tab;
+                        accessible-label: option.label;
+                        accessible-item-selected: i == root.page.audio-selected;
+                        accessible-action-default => { root.act("audio", "" + i); }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            Text { text: option.label; color: i == root.page.audio-selected ? Theme.text : Theme.muted; font-size: 13px; font-weight: i == root.page.audio-selected ? 600 : 500; horizontal-alignment: center; overflow: elide; }
+                            Text { text: option.sub; color: Theme.faint; font-size: 11px; horizontal-alignment: center; overflow: elide; }
+                        }
+                        audio-touch := TouchArea { mouse-cursor: pointer; clicked => { root.act("audio", "" + i); } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A dialog over the window: a dimmed backdrop and a card with the children.
+component Modal inherits Rectangle {
+    in property <length> card-width: 440px;
+    in property <string> label;
+    callback dismissed();
+    background: #05060799;
+    TouchArea { clicked => { root.dismissed(); } }
+    Rectangle {
+        width: root.card-width;
+        height: body.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Theme.ctrl-border;
+        background: Theme.surface;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: #00000080;
+        accessible-role: groupbox;
+        accessible-label: root.label;
+        TouchArea {}
+        // Esc in a field of the dialog: the window's own keys never see it.
+        FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Escape { root.dismissed(); return accept; }
+                reject
+            }
+            body := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
+                @children
+            }
+        }
+    }
+}
+
+component DeviceCard inherits Rectangle {
+    in property <string> icon;
+    in property <string> name;
+    in property <string> sub;
+    in property <bool> sub-mono: true;
+    height: 58px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.border2;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        Rectangle {
+            width: 34px;
+            height: 34px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 17px;
+            background: Theme.accent-soft-bg;
+            Icon { name: root.icon; tint: Theme.accent; }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text { text: root.name; color: Theme.text; font-weight: 500; overflow: elide; }
+            Text { text: root.sub; color: Theme.muted; font-size: 12px; font-family: root.sub-mono ? "JetBrains Mono" : "Inter"; overflow: elide; }
+        }
+    }
+}
+
+export component BtPairDialog inherits Modal {
+    in property <BtPair> pair;
+    in-out property <string> code;
+    in-out property <bool> always;
+    callback accepted();
+    callback cancelled();
+    label: pair.title;
+    dismissed => { root.cancelled(); }
+    VerticalLayout {
+        spacing: 4px;
+        Text { text: root.pair.title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+        Text { text: root.pair.text; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+    }
+    if root.pair.mode != "display": DeviceCard {
+        icon: root.pair.icon;
+        name: root.pair.name;
+        sub: root.pair.wants != "" ? root.pair.wants : root.pair.address;
+        sub-mono: root.pair.wants == "";
+    }
+    if root.pair.digits.length > 0: HorizontalLayout {
+        alignment: center;
+        spacing: 6px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+        for digit[i] in root.pair.digits: Rectangle {
+            // A gap in the middle, as phones show the code.
+            width: i == 3 && root.pair.digits.length == 6 ? 58px : 42px;
+            height: 52px;
+            Rectangle {
+                x: parent.width - 42px;
+                width: 42px;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: i < root.pair.typed ? Theme.accent-soft-border : Theme.border2;
+                background: i < root.pair.typed ? Theme.accent-soft-bg : Theme.bg;
+                Text { text: digit; color: i < root.pair.typed ? Theme.accent : Theme.text; font-size: 26px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
+            }
+        }
+    }
+    if root.pair.mode == "display" && root.pair.typed >= 0: HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        Spinner { y: (parent.height - 12px) / 2; }
+        Text { text: "Waiting for the keyboard · " + root.pair.typed + " of " + root.pair.digits.length + " typed"; color: Theme.muted; font-size: 12px; }
+    }
+    if root.pair.mode == "pin" || root.pair.mode == "passkey": VerticalLayout {
+        spacing: 6px;
+        Text { text: root.pair.mode == "pin" ? "PIN" : "Code"; color: Theme.text; font-size: 13px; font-weight: 500; }
+        TextField {
+            text <=> root.code;
+            mono: true;
+            autofocus: true;
+            label: root.pair.mode == "pin" ? "PIN" : "Code";
+            accepted => { if root.code != "" { root.accepted(); } }
+        }
+        if root.pair.hint != "": Text { text: root.pair.hint; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+    }
+    if root.pair.always != "": CheckBox {
+        checked <=> root.always;
+        text: root.pair.always;
+    }
+    if root.pair.mode == "service": Text { text: "Marks it as trusted; you can change this in its details."; color: Theme.muted; font-size: 12px; x: 28px; }
+    HorizontalLayout {
+        padding-top: 6px;
+        spacing: 8px;
+        alignment: end;
+        Button { label: root.pair.mode == "service" ? "Deny" : "Cancel"; button-height: 36px; clicked => { root.cancelled(); } }
+        if root.pair.accept != "": Button {
+            label: root.pair.accept;
+            kind: "primary";
+            button-height: 36px;
+            enabled: (root.pair.mode != "pin" && root.pair.mode != "passkey") || root.code != "";
+            clicked => { root.accepted(); }
+        }
+    }
+}
+
+export component BtAdapterDialog inherits Modal {
+    in property <string> adapter;
+    in property <bool> pairable;
+    in-out property <string> name;
+    in-out property <int> visible-choice;
+    callback name-saved();
+    callback visible-chosen(int);
+    callback pairable-toggled();
+    callback closed();
+    card-width: 560px;
+    label: "Bluetooth adapter";
+    dismissed => { root.name-saved(); root.closed(); }
+    Text { text: "Bluetooth adapter"; color: Theme.text; font-size: 17px; font-weight: 600; }
+    GridLayout {
+        spacing-horizontal: 16px;
+        spacing-vertical: 12px;
+        Row {
+            Text { text: "Adapter"; color: Theme.text; font-size: 13px; width: 136px; vertical-alignment: center; }
+            Text { text: root.adapter; color: Theme.text; font-size: 13px; vertical-alignment: center; height: 24px; }
+        }
+        Row {
+            Text { text: "Name"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+            VerticalLayout {
+                spacing: 4px;
+                TextField { text <=> root.name; mono: true; label: "Name"; accepted => { root.name-saved(); } }
+                Text { text: "What other devices see when they look for this computer"; color: Theme.muted; font-size: 12px; }
+            }
+        }
+        Row {
+            Text { text: "Visible"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+            HorizontalLayout {
+                alignment: start;
+                Segmented { options: ["Hidden", "3 minutes", "Always"]; selected <=> root.visible-choice; label: "Visible"; changed(i) => { root.visible-chosen(i); } }
+            }
+        }
+        Row {
+            Text { text: "Pairable"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+            HorizontalLayout {
+                spacing: 10px;
+                Switch { on: root.pairable; label: "Pairable"; y: (parent.height - self.height) / 2; toggled => { root.pairable-toggled(); } }
+                Text { text: "New devices can ask to pair"; color: Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+            }
+        }
+    }
+    HorizontalLayout {
+        padding-top: 6px;
+        alignment: end;
+        Button { label: "Close"; button-height: 36px; clicked => { root.name-saved(); root.closed(); } }
+    }
+}
+
+export component BtRenameDialog inherits Modal {
+    in property <string> title;
+    in property <string> hint;
+    in-out property <string> name;
+    callback saved();
+    callback cancelled();
+    card-width: 420px;
+    label: title;
+    dismissed => { root.cancelled(); }
+    Text { text: root.title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+    TextField { text <=> root.name; autofocus: true; label: "Name"; accepted => { root.saved(); } }
+    Text { text: root.hint; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+    HorizontalLayout {
+        padding-top: 6px;
+        spacing: 8px;
+        alignment: end;
+        Button { label: "Cancel"; button-height: 36px; clicked => { root.cancelled(); } }
+        Button { label: "Save"; kind: "primary"; button-height: 36px; clicked => { root.saved(); } }
+    }
+}

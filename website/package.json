@@ -1,0 +1,23 @@
+{
+  "name": "lituus-website",
+  "private": true,
+  "version": "0.0.1",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "description": "Lituus website: landing page, installing, guides and developer documentation.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "check-links": "node scripts/check-links.mjs"
+  },
+  "dependencies": {
+    "@astrojs/markdown-remark": "7.3.1",
+    "@astrojs/starlight": "0.42.4",
+    "astro": "7.3.5"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
