@@ -28,17 +28,17 @@ mod wireguard;
 slint::include_modules!();
 
 /// The app ID, also the Wayland app_id that Hyprland window rules match on.
-const APP_ID: &str = "ch.giosuel.Vinculum";
+const APP_ID: &str = "ch.giosuel.Lituus";
 
 /// How often the colour sources are checked for changes.
 const THEME_POLL: Duration = Duration::from_secs(1);
 
 #[derive(Parser)]
-#[command(name = "vinculum", version = env!("APP_VERSION"), about = "Manage Wi-Fi, wired and VPN connections")]
+#[command(name = "lituus", version = env!("APP_VERSION"), about = "Manage Wi-Fi, wired and VPN connections")]
 struct Cli {
     /// Start without a window and keep running when it's closed, so NetworkManager can ask for
-    /// passwords kept in the keyring (for example `exec-once = vinculum --background` in
-    /// Hyprland). Starting `vinculum` again shows the window.
+    /// passwords kept in the keyring (for example `exec-once = lituus --background` in
+    /// Hyprland). Starting `lituus` again shows the window.
     #[arg(long)]
     background: bool,
     /// Show the quick popup, or hide it if it's open (for a bar's on-click or a keybind).
@@ -53,19 +53,19 @@ struct Cli {
 const SECURITIES: [&str; 4] = ["None (open)", "WPA/WPA2 Personal", "WPA3 Personal", "WEP"];
 const PASSWORD_HINTS: [&str; 4] = ["", "8 to 63 characters", "", "5 or 13 characters, or a passphrase"];
 
-fn security_index(key_mgmt: vinculum_nm::KeyMgmt) -> i32 {
+fn security_index(key_mgmt: lituus_nm::KeyMgmt) -> i32 {
     match key_mgmt {
-        vinculum_nm::KeyMgmt::WpaPsk => 1,
-        vinculum_nm::KeyMgmt::Sae => 2,
-        vinculum_nm::KeyMgmt::Wep => 3,
+        lituus_nm::KeyMgmt::WpaPsk => 1,
+        lituus_nm::KeyMgmt::Sae => 2,
+        lituus_nm::KeyMgmt::Wep => 3,
     }
 }
 
-fn key_mgmt_at(index: i32) -> Option<vinculum_nm::KeyMgmt> {
+fn key_mgmt_at(index: i32) -> Option<lituus_nm::KeyMgmt> {
     match index {
-        1 => Some(vinculum_nm::KeyMgmt::WpaPsk),
-        2 => Some(vinculum_nm::KeyMgmt::Sae),
-        3 => Some(vinculum_nm::KeyMgmt::Wep),
+        1 => Some(lituus_nm::KeyMgmt::WpaPsk),
+        2 => Some(lituus_nm::KeyMgmt::Sae),
+        3 => Some(lituus_nm::KeyMgmt::Wep),
         _ => None,
     }
 }
@@ -83,7 +83,7 @@ enum Dialog {
 /// The UI thread's state: the latest snapshot, and what the user picked.
 #[derive(Default)]
 struct App {
-    snapshot: Option<vinculum_nm::Snapshot>,
+    snapshot: Option<lituus_nm::Snapshot>,
     error: Option<String>,
     ui: view::UiState,
     row_ids: Vec<String>,
@@ -257,16 +257,16 @@ fn handle_request(window: &MainWindow, request: instance::Request) {
     }
 }
 
-/// `vinculum --toggle-wifi` with no Vinculum running: switch it and leave.
+/// `lituus --toggle-wifi` with no Lituus running: switch it and leave.
 fn toggle_wifi_once() {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime");
     let result = runtime.block_on(async {
-        let client = vinculum_nm::Client::system().await?;
+        let client = lituus_nm::Client::system().await?;
         let on = client.snapshot().await?.wireless_enabled;
         client.set_wireless_enabled(!on).await
     });
     if let Err(error) = result {
-        eprintln!("vinculum: couldn't switch Wi-Fi: {error}");
+        eprintln!("lituus: couldn't switch Wi-Fi: {error}");
     }
 }
 
@@ -843,15 +843,15 @@ fn next_prompt(app: &mut App) {
 /// Connect in the password dialog, with its (name, security, password, storage, autoconnect).
 fn accept_dialog(app: &mut App, (name, security, password, storage, autoconnect): (String, i32, String, i32, bool)) {
     let storage = match storage {
-        1 => vinculum_nm::Storage::System,
-        2 => vinculum_nm::Storage::Ask,
-        _ => vinculum_nm::Storage::Agent,
+        1 => lituus_nm::Storage::System,
+        2 => lituus_nm::Storage::Ask,
+        _ => lituus_nm::Storage::Agent,
     };
     // "All users" connections are everyone's; the others belong to this user.
-    let owner = if storage == vinculum_nm::Storage::System { None } else { secrets::username() };
+    let owner = if storage == lituus_nm::Storage::System { None } else { secrets::username() };
     match app.dialog.take() {
         Some(Dialog::Join(target)) => {
-            let join = vinculum_nm::WifiJoin {
+            let join = lituus_nm::WifiJoin {
                 ssid: target.ssid.clone(),
                 uuid: secrets::new_uuid(),
                 security: Some((target.key_mgmt, password)),
@@ -864,7 +864,7 @@ fn accept_dialog(app: &mut App, (name, security, password, storage, autoconnect)
             send(app, view::Command::Join { device: target.device, access_point: Some(target.access_point), join });
         }
         Some(Dialog::Hidden { device }) => {
-            let join = vinculum_nm::WifiJoin {
+            let join = lituus_nm::WifiJoin {
                 ssid: name.clone().into_bytes(),
                 uuid: secrets::new_uuid(),
                 security: key_mgmt_at(security).map(|k| (k, password)),
@@ -998,8 +998,8 @@ fn render(window: &MainWindow) {
         // Keep a selection that went away (a network out of range) from sticking.
         app.ui.selected = v.selected;
         let tray_sub = match (app.settings.tray, app.tray.is_some()) {
-            (true, false) => "Show Vinculum in the system tray · no tray found: start a bar with one, such as Waybar",
-            _ => "Show Vinculum in the system tray",
+            (true, false) => "Show Lituus in the system tray · no tray found: start a bar with one, such as Waybar",
+            _ => "Show Lituus in the system tray",
         };
         window.set_options(model(vec![
             view::toggle("tray", "Tray icon", tray_sub, app.settings.tray),
@@ -1080,14 +1080,14 @@ fn spawn_network_manager(
             loop {
                 tell_keyring(&weak, &keyrings).await;
                 let result = async {
-                    let client = vinculum_nm::Client::system().await?;
+                    let client = lituus_nm::Client::system().await?;
                     let mut snapshots = Box::pin(client.watch().await?);
                     // Without the agent (NetworkManager refuses agents outside a login session),
                     // everything but the password dialog still works.
                     let mut agent = match client.register_agent(APP_ID).await {
                         Ok(agent) => Some(agent),
                         Err(error) => {
-                            eprintln!("vinculum: couldn't register the secret agent: {error}");
+                            eprintln!("lituus: couldn't register the secret agent: {error}");
                             None
                         }
                     };
@@ -1125,7 +1125,7 @@ fn spawn_network_manager(
                             }
                         }
                     }
-                    Ok::<(), vinculum_nm::Error>(())
+                    Ok::<(), lituus_nm::Error>(())
                 }
                 .await;
                 if let Err(error) = result {
@@ -1184,11 +1184,11 @@ impl secrets::Ui for AgentUi {
 /// Runs a command. For a connection attempt it waits for the outcome, and gives the reason it
 /// failed and what "Try again" should run.
 async fn run(
-    client: &vinculum_nm::Client,
+    client: &lituus_nm::Client,
     keyrings: &secrets::Keyrings,
     weak: &slint::Weak<MainWindow>,
     command: &view::Command,
-) -> Result<Option<(String, Option<view::Command>)>, vinculum_nm::Error> {
+) -> Result<Option<(String, Option<view::Command>)>, lituus_nm::Error> {
     use view::Command::*;
     let (active, device, retry) = match command {
         OpenEditor { connection, new } => {
@@ -1398,23 +1398,23 @@ async fn run(
         }
         Join { device, access_point, join } => {
             let mut join = join.clone();
-            if let (vinculum_nm::Storage::Agent, Some((key_mgmt, password))) = (join.storage, &join.security) {
+            if let (lituus_nm::Storage::Agent, Some((key_mgmt, password))) = (join.storage, &join.security) {
                 match keyrings.get().await {
                     Some(keyring) => {
                         let name = String::from_utf8_lossy(&join.ssid).into_owned();
                         let key = secrets::join_key(*key_mgmt);
-                        let entry = vinculum_keyring::Entry { uuid: &join.uuid, setting: secrets::WIFI_SECURITY, key };
+                        let entry = lituus_keyring::Entry { uuid: &join.uuid, setting: secrets::WIFI_SECURITY, key };
                         keyring.store(entry, &name, password).await.map_err(|e| {
-                            vinculum_nm::Error::Refused(format!("the keyring didn't take the password ({e})"))
+                            lituus_nm::Error::Refused(format!("the keyring didn't take the password ({e})"))
                         })?;
                     }
                     // No keyring after all: NetworkManager keeps it, and the connection stays the user's.
-                    None => join.storage = vinculum_nm::Storage::System,
+                    None => join.storage = lituus_nm::Storage::System,
                 }
             }
             let joined = client.join_wifi(device, access_point.as_deref(), &join).await;
             if joined.is_err()
-                && join.storage == vinculum_nm::Storage::Agent
+                && join.storage == lituus_nm::Storage::Agent
                 && let Some(keyring) = keyrings.get().await
             {
                 // No connection came of it, so its password goes too.
@@ -1426,8 +1426,8 @@ async fn run(
         }
     };
     Ok(match client.outcome(&active, device.as_deref()).await? {
-        vinculum_nm::Outcome::Failed(reason) => Some((reason, Some(retry))),
-        vinculum_nm::Outcome::Connected | vinculum_nm::Outcome::Stopped => None,
+        lituus_nm::Outcome::Failed(reason) => Some((reason, Some(retry))),
+        lituus_nm::Outcome::Connected | lituus_nm::Outcome::Stopped => None,
     })
 }
 
@@ -1459,7 +1459,7 @@ fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> 
 }
 
 /// Asks for a WireGuard or OpenVPN file and opens it in the editor as a new connection.
-async fn import_file(client: &vinculum_nm::Client, weak: &slint::Weak<MainWindow>) {
+async fn import_file(client: &lituus_nm::Client, weak: &slint::Weak<MainWindow>) {
     let filters: &[portal::Filter] = &[("WireGuard and OpenVPN", &["*.conf", "*.ovpn"]), ("All files", &["*"])];
     let path = match portal::open_file("Import a VPN connection", filters).await {
         Ok(Some(path)) => path,
@@ -1482,7 +1482,7 @@ async fn import_file(client: &vinculum_nm::Client, weak: &slint::Weak<MainWindow
                     if conf.peers.len() == 1 { "1 peer".to_owned() } else { format!("{} peers", conf.peers.len()) };
                 (wireguard::settings(&conf, name, &uuid, owner.as_deref()), format!("Imported from {file} · {peers}"))
             }
-            Err(e) => return notice(weak, &format!("{file} isn't a WireGuard file Vinculum can read: {e}")),
+            Err(e) => return notice(weak, &format!("{file} isn't a WireGuard file Lituus can read: {e}")),
         }
     } else {
         if !openvpn::plugin_installed() {
@@ -1490,11 +1490,11 @@ async fn import_file(client: &vinculum_nm::Client, weak: &slint::Weak<MainWindow
         }
         let name = file.trim_end_matches(".ovpn").trim_end_matches(".conf").to_owned();
         let home = std::env::var("HOME").unwrap_or_default();
-        let dir = std::path::PathBuf::from(home).join(".local/share/vinculum/certificates").join(&name);
+        let dir = std::path::PathBuf::from(home).join(".local/share/lituus/certificates").join(&name);
         let full = path.to_string_lossy().into_owned();
         let imported = match openvpn::import(&text, &full, &dir) {
             Ok(imported) => imported,
-            Err(e) => return notice(weak, &format!("{file} isn't an OpenVPN file Vinculum can read: {e}")),
+            Err(e) => return notice(weak, &format!("{file} isn't an OpenVPN file Lituus can read: {e}")),
         };
         for (path, contents) in &imported.files {
             if let Err(e) = write_private(path, contents) {
@@ -1502,7 +1502,7 @@ async fn import_file(client: &vinculum_nm::Client, weak: &slint::Weak<MainWindow
             }
         }
         let mut settings = editor::new_settings(editor::Kind::OpenVpn, &uuid);
-        let put = |s: &mut vinculum_nm::Settings, k: &str, v: zbus::zvariant::Value| {
+        let put = |s: &mut lituus_nm::Settings, k: &str, v: zbus::zvariant::Value| {
             s.entry("connection".into())
                 .or_default()
                 .insert(k.into(), zbus::zvariant::OwnedValue::try_from(v).expect("no fds"));
@@ -1542,8 +1542,8 @@ async fn import_file(client: &vinculum_nm::Client, weak: &slint::Weak<MainWindow
 /// Adds a bridge's or bond's new ports and deletes the ones let go; the new ports' (interface,
 /// connection) come back.
 async fn save_ports(
-    client: &vinculum_nm::Client,
-    controller: &vinculum_nm::Settings,
+    client: &lituus_nm::Client,
+    controller: &lituus_nm::Settings,
     plan: &virt::PortPlan,
 ) -> Result<Vec<(String, String)>, String> {
     let uuid = controller
@@ -1568,16 +1568,16 @@ async fn save_ports(
 }
 
 async fn save_connection(
-    client: &vinculum_nm::Client,
+    client: &lituus_nm::Client,
     keyrings: &secrets::Keyrings,
     path: Option<&str>,
-    settings: &vinculum_nm::Settings,
+    settings: &lituus_nm::Settings,
     secret: Option<&editing::KeyringSecret>,
     reapply: Option<&(String, Option<String>)>,
-) -> Result<(String, vinculum_nm::Settings), String> {
-    let explain = |e: vinculum_nm::Error| {
+) -> Result<(String, lituus_nm::Settings), String> {
+    let explain = |e: lituus_nm::Error| {
         match e {
-        vinculum_nm::Error::Denied(_) => {
+        lituus_nm::Error::Denied(_) => {
             "Not allowed: NetworkManager asks polkit first, and no polkit agent answered. Start one (for example hyprpolkitagent)."
                 .to_owned()
         }
@@ -1587,7 +1587,7 @@ async fn save_connection(
     if let Some((uuid, key, name, password)) = secret {
         match keyrings.get().await {
             Some(keyring) => {
-                let entry = vinculum_keyring::Entry { uuid, setting: secrets::WIFI_SECURITY, key };
+                let entry = lituus_keyring::Entry { uuid, setting: secrets::WIFI_SECURITY, key };
                 keyring
                     .store(entry, name, password)
                     .await
@@ -1643,7 +1643,7 @@ fn failed(weak: &slint::Weak<MainWindow>, reason: String, retry: Option<view::Co
 }
 
 /// Shows why a command failed, above the list.
-fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &vinculum_nm::Error) {
+fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituus_nm::Error) {
     use view::Command::*;
     let what = match command {
         SetWifi(true) => "Couldn't turn Wi-Fi on",
@@ -1667,7 +1667,7 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &vincu
         Forget { .. } => "Couldn't forget the connection",
     };
     let (text, tone) = match error {
-        vinculum_nm::Error::Denied(_) => (
+        lituus_nm::Error::Denied(_) => (
             format!(
                 "{what}: not allowed. NetworkManager asks polkit first, and no polkit agent answered. Start one (for example hyprpolkitagent) and try again."
             ),
@@ -1686,7 +1686,7 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &vincu
     });
 }
 
-fn deliver(weak: &slint::Weak<MainWindow>, snapshot: Result<vinculum_nm::Snapshot, vinculum_nm::Error>) {
+fn deliver(weak: &slint::Weak<MainWindow>, snapshot: Result<lituus_nm::Snapshot, lituus_nm::Error>) {
     let _ = weak.upgrade_in_event_loop(move |window| {
         APP.with(|app| {
             let mut app = app.borrow_mut();

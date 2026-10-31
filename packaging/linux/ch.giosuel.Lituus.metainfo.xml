@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>ch.giosuel.Vinculum</id>
+  <id>ch.giosuel.Lituus</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>AGPL-3.0-or-later</project_license>
-  <name>Vinculum</name>
+  <name>Lituus</name>
   <summary>Manage Wi-Fi, wired and VPN connections</summary>
   <description>
     <p>
@@ -12,9 +12,9 @@
       connection setting, from security to IP addresses, DNS and routes.
     </p>
   </description>
-  <launchable type="desktop-id">ch.giosuel.Vinculum.desktop</launchable>
-  <url type="homepage">https://github.com/giosuel/vinculum</url>
-  <url type="bugtracker">https://github.com/giosuel/vinculum/issues</url>
+  <launchable type="desktop-id">ch.giosuel.Lituus.desktop</launchable>
+  <url type="homepage">https://github.com/giosuel/lituus</url>
+  <url type="bugtracker">https://github.com/giosuel/lituus/issues</url>
   <developer id="ch.giosuel">
     <name>giosuel</name>
   </developer>

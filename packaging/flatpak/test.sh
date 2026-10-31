@@ -5,16 +5,16 @@
 #   packaging/flatpak/test.sh
 #
 # Needs podman (runs privileged, for flatpak-builder's sandbox). Runtimes are cached in the
-# "vinculum-flatpak" volume. The bundle ends up in target/dist/. The build itself (a few GB) goes
+# "lituus-flatpak" volume. The bundle ends up in target/dist/. The build itself (a few GB) goes
 # to $FLATPAK_OUT, by default .flatpak-builder in the checkout.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 out="${FLATPAK_OUT:-$root/.flatpak-builder}"
-podman volume exists vinculum-flatpak || podman volume create vinculum-flatpak >/dev/null
+podman volume exists lituus-flatpak || podman volume create lituus-flatpak >/dev/null
 mkdir -p "$root/target/dist" "$out"
 
 # shellcheck disable=SC2016 # the script runs inside the container
-podman run --rm --privileged -v vinculum-flatpak:/var/lib/flatpak -v "$root:/src:Z" -v "$out:/out:Z" \
+podman run --rm --privileged -v lituus-flatpak:/var/lib/flatpak -v "$root:/src:Z" -v "$out:/out:Z" \
   docker.io/library/fedora:43 bash -euo pipefail -c '
   dnf -q -y install flatpak ostree dbus-daemon sway >/dev/null 2>&1
   flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -29,21 +29,21 @@ podman run --rm --privileged -v vinculum-flatpak:/var/lib/flatpak -v "$root:/src
 
   echo "==> lint manifest"
   # Findings are reported, not fatal: some permissions need an exception from Flathub (README.md).
-  builder flatpak-builder-lint manifest ch.giosuel.Vinculum.yml || true
+  builder flatpak-builder-lint manifest ch.giosuel.Lituus.yml || true
   echo "==> build"
   builder flatpak-builder --force-clean --disable-rofiles-fuse --repo="$out/repo" --state-dir="$out/state" \
-    "$out/build" ch.giosuel.Vinculum.yml >/tmp/build.log 2>&1 || { tail -40 /tmp/build.log; exit 1; }
+    "$out/build" ch.giosuel.Lituus.yml >/tmp/build.log 2>&1 || { tail -40 /tmp/build.log; exit 1; }
   grep -E "Finished|Exporting" /tmp/build.log || true
   echo "==> lint repo"
   builder flatpak-builder-lint repo "$out/repo" || true
   echo "==> run"
   flatpak remote-delete --force local 2>/dev/null || true
   flatpak remote-add --no-gpg-verify local "$out/repo"
-  flatpak install -y --noninteractive --reinstall local ch.giosuel.Vinculum >/dev/null
-  flatpak run ch.giosuel.Vinculum --version
+  flatpak install -y --noninteractive --reinstall local ch.giosuel.Lituus >/dev/null
+  flatpak run ch.giosuel.Lituus --version
   setcap -r /usr/bin/sway 2>/dev/null || true # file caps make sway refuse to run as root
   dbus-run-session -- bash /src/packaging/flatpak/smoke.sh 2>&1 | { grep -v "^dbus-daemon" || true; }
   flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
-    "$out/repo" /src/target/dist/ch.giosuel.Vinculum.flatpak ch.giosuel.Vinculum
-  ls -l /src/target/dist/ch.giosuel.Vinculum.flatpak
+    "$out/repo" /src/target/dist/ch.giosuel.Lituus.flatpak ch.giosuel.Lituus
+  ls -l /src/target/dist/ch.giosuel.Lituus.flatpak
 '

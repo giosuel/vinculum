@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use vinculum_nm::{DeviceKind, Settings, Snapshot};
+use lituus_nm::{DeviceKind, Settings, Snapshot};
 use zbus::zvariant::{OwnedValue, Value};
 
 /// `bond.options` mode, by index: (value, label).

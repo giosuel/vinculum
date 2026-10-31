@@ -67,9 +67,9 @@ jobs:
       - name: test (including the mock NetworkManager tests)
         run: scripts/test.sh
         env:
-          VINCULUM_REQUIRE_KEYRING: 1
+          LITUUS_REQUIRE_KEYRING: 1
       - name: --version
-        run: cargo run --locked -p vinculum -- --version
+        run: cargo run --locked -p lituus -- --version
 
   deps:
     name: deps (two-week rule)
@@ -96,9 +96,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends desktop-file-utils appstream
       - name: desktop-file-validate
-        run: desktop-file-validate packaging/linux/ch.giosuel.Vinculum.desktop
+        run: desktop-file-validate packaging/linux/ch.giosuel.Lituus.desktop
       - name: appstreamcli validate
-        run: appstreamcli validate --no-net packaging/linux/ch.giosuel.Vinculum.metainfo.xml
+        run: appstreamcli validate --no-net packaging/linux/ch.giosuel.Lituus.metainfo.xml
 
   nix:
     name: nix (flake)
@@ -112,9 +112,9 @@ jobs:
       - name: Flake check
         run: nix flake check -L
       - name: Build
-        run: nix build -L .#vinculum
+        run: nix build -L .#lituus
       - name: --version
-        run: ./result/bin/vinculum --version
+        run: ./result/bin/lituus --version
 
   ci-result:
     name: CI result

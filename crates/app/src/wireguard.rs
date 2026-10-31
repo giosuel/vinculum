@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use vinculum_nm::Settings;
+use lituus_nm::Settings;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zbus::zvariant::{OwnedValue, Value};
 

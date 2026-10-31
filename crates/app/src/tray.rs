@@ -41,7 +41,7 @@ impl ksni::Tray for Tray {
     }
 
     fn title(&self) -> String {
-        "Vinculum".into()
+        "Lituus".into()
     }
 
     fn category(&self) -> ksni::Category {
@@ -117,7 +117,7 @@ fn menu(q: &Quick) -> Vec<MenuItem<Tray>> {
     items.push(MenuItem::Separator);
     items.push(check("Airplane mode", q.airplane, true, Event::SetAirplane(!q.airplane)));
     items.push(MenuItem::Separator);
-    items.push(item("Open Vinculum", Event::Open));
+    items.push(item("Open Lituus", Event::Open));
     items.push(item("Settings", Event::Settings));
     items.push(item("Quit", Event::Quit));
     items
@@ -167,7 +167,7 @@ pub fn spawn(quick: Quick, sink: impl Fn(Event) + Send + Sync + 'static) -> Opti
         let handle = match tray.disable_dbus_name(true).spawn() {
             Ok(handle) => handle,
             Err(error) => {
-                eprintln!("vinculum: no tray icon: {error}");
+                eprintln!("lituus: no tray icon: {error}");
                 let _ = started.send(false);
                 return;
             }
@@ -249,7 +249,7 @@ mod tests {
                 "--",
                 "[ ] Airplane mode",
                 "--",
-                "Open Vinculum",
+                "Open Lituus",
                 "Settings",
                 "Quit",
             ]

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use vinculum_nm::{ActiveState, ConnectionKind, Snapshot};
+use lituus_nm::{ActiveState, ConnectionKind, Snapshot};
 use zbus::zvariant::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,7 +80,7 @@ impl Notifier {
                             Some("org.freedesktop.Notifications"),
                             "Notify",
                             &(
-                                "Vinculum",
+                                "Lituus",
                                 last,
                                 n.icon,
                                 n.summary.as_str(),

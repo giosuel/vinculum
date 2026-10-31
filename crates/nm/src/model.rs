@@ -3,7 +3,7 @@
 
 use crate::wifi::Security;
 
-/// Everything Vinculum shows, read at one point in time.
+/// Everything Lituus shows, read at one point in time.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Snapshot {
     pub version: String,
@@ -60,7 +60,7 @@ pub struct Device {
     pub traffic: Option<(u64, u64)>,
 }
 
-/// NMDeviceType, for the kinds Vinculum treats specially.
+/// NMDeviceType, for the kinds Lituus treats specially.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceKind {
     Ethernet,

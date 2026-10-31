@@ -2,17 +2,17 @@
 # Runs a command against a mock NetworkManager on a private bus, with the networks from the
 # mockups (connected to "Lumen Home", a few others in range, an unplugged Ethernet port), and a
 # mock BlueZ with the mockups' Bluetooth devices (MOCK_BLUEZ=0 leaves it out):
-#   scripts/mock-nm.sh vinculum-cli list
-#   scripts/mock-nm.sh target/debug/vinculum
+#   scripts/mock-nm.sh lituus-cli list
+#   scripts/mock-nm.sh target/debug/lituus
 # The command sees the mock as its system bus; the real one is never touched. Needs dbus-daemon
-# and python-dbusmock ($VINCULUM_PYTHON picks the interpreter that has it).
+# and python-dbusmock ($LITUUS_PYTHON picks the interpreter that has it).
 #
-# The mock also has an AgentManager, so Vinculum's secret agent registers, and a method that
+# The mock also has an AgentManager, so Lituus's secret agent registers, and a method that
 # makes it ask for a password the way NetworkManager does when one is missing or wrong:
-#   MOCK_NM_ADDRESS_FILE=/tmp/bus scripts/mock-nm.sh target/debug/vinculum &
+#   MOCK_NM_ADDRESS_FILE=/tmp/bus scripts/mock-nm.sh target/debug/lituus &
 #   gdbus call --address "$(cat /tmp/bus)" -d org.freedesktop.NetworkManager \
 #     -o /org/freedesktop/NetworkManager -m org.freedesktop.DBus.Mock.Test.AskForPassword 'Aster Café' 1
-# (flags: 1 to ask, 3 to say the last password was wrong). The mock BlueZ asks Vinculum's pairing
+# (flags: 1 to ask, 3 to say the last password was wrong). The mock BlueZ asks Lituus's pairing
 # agent the same way, with a method of the agent (RequestConfirmation, RequestPinCode, …) and its
 # arguments after the device's address:
 #   gdbus call --address "$(cat /tmp/bus)" -d org.bluez -o / \
@@ -24,7 +24,7 @@ if [ -z "${MOCK_NM_INSIDE:-}" ]; then
   # the real session bus (if any), so nothing it asks for (the desktop portal, say) starts there.
   MOCK_NM_INSIDE=1 MOCK_NM_SESSION="${DBUS_SESSION_BUS_ADDRESS:-}" exec dbus-run-session -- "$0" "$@"
 fi
-python="${VINCULUM_PYTHON:-python3}"
+python="${LITUUS_PYTHON:-python3}"
 "$python" -m dbusmock --session --template networkmanager >"${MOCK_NM_LOG:-/dev/null}" 2>&1 &
 mock=$!
 trap 'kill $mock 2>/dev/null' EXIT
@@ -112,7 +112,7 @@ for name in self.connection.list_names():
     if not name.startswith(":") or name == self.connection.get_unique_name():
         continue
     try:
-        agent = self.connection.get_object(name, "/ch/giosuel/Vinculum/BluetoothAgent", introspect=False)
+        agent = self.connection.get_object(name, "/ch/giosuel/Lituus/BluetoothAgent", introspect=False)
         dbus.Interface(agent, "org.freedesktop.DBus.Introspectable").Introspect(timeout=1)
     except dbus.exceptions.DBusException:
         continue

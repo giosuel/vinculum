@@ -1,5 +1,5 @@
 //! KWallet's own D-Bus API (`org.kde.KWallet`), for KDE setups where the Secret Service isn't
-//! switched on. Entries are passwords named `{uuid};{setting};{key}` in a "Vinculum" folder of
+//! switched on. Entries are passwords named `{uuid};{setting};{key}` in a "Lituus" folder of
 //! the network wallet. Opening the wallet may show KWallet's unlock dialog.
 
 use std::collections::HashMap;
@@ -20,8 +20,8 @@ pub(crate) const SERVICES: [Service; 2] = [
 ];
 
 const IFACE: &str = "org.kde.KWallet";
-const FOLDER: &str = "Vinculum";
-const APP: &str = "Vinculum";
+const FOLDER: &str = "Lituus";
+const APP: &str = "Lituus";
 
 #[derive(Debug)]
 pub(crate) struct KWallet {

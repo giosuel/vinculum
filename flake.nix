@@ -1,5 +1,5 @@
 {
-  description = "Vinculum: Wi-Fi, wired and VPN connections for Hyprland and other Linux desktops";
+  description = "Lituus: Wi-Fi, wired and VPN connections for Hyprland and other Linux desktops";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -16,7 +16,7 @@
       # like a development build's: 0.0.0-dev+g1a2b3c4.
       version = "0.0.0-dev+g${self.shortRev or self.dirtyShortRev or "unknown"}";
 
-      vinculum =
+      lituus =
         pkgs:
         pkgs.callPackage ./packaging/nix/package.nix {
           inherit version;
@@ -36,15 +36,15 @@
     in
     {
       packages = forAllSystems (pkgs: {
-        vinculum = vinculum pkgs;
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.vinculum;
+        lituus = lituus pkgs;
+        default = self.packages.${pkgs.stdenv.hostPlatform.system}.lituus;
       });
 
-      overlays.default = final: _prev: { vinculum = vinculum final; };
+      overlays.default = final: _prev: { lituus = lituus final; };
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
-          inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.vinculum ];
+          inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.lituus ];
           packages = with pkgs; [
             clippy
             rustfmt

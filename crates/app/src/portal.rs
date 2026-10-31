@@ -49,7 +49,7 @@ async fn request(method: &str, title: &str, mut options: HashMap<&str, Value<'_>
     let conn = Connection::session().await.map_err(|_| Error::NoPortal)?;
     // The request object's path is known before the call, so the answer can't be missed.
     let token = format!(
-        "vinculum{}",
+        "lituus{}",
         std::process::id() ^ (std::time::SystemTime::now().elapsed().map_or(0, |d| d.subsec_nanos()))
     );
     let sender = conn.unique_name().map(|n| n.trim_start_matches(':').replace('.', "_")).unwrap_or_default();

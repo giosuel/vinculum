@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use slint::{ComponentHandle, SharedString};
-use vinculum_bt::{Adapter, AgentEvent, Answer, Ask, Device, DeviceKind, PairingRequest, Snapshot};
+use lituus_bt::{Adapter, AgentEvent, Answer, Ask, Device, DeviceKind, PairingRequest, Snapshot};
 
 use crate::audio;
 use crate::{
@@ -99,9 +99,9 @@ impl Command {
 /// What the Bluetooth thread tells the page.
 #[derive(Debug)]
 pub enum Event {
-    Snapshot(Result<Snapshot, vinculum_bt::Error>),
+    Snapshot(Result<Snapshot, lituus_bt::Error>),
     Done(Command),
-    Failed(Command, vinculum_bt::Error),
+    Failed(Command, lituus_bt::Error),
     Agent(AgentEvent),
     /// rfkill couldn't be written to.
     UnblockFailed(String),
@@ -149,7 +149,7 @@ pub struct State {
     /// Devices with a pairing or connection under way.
     pub busy: HashSet<String>,
     pub message: Option<Message>,
-    /// When "Visible" ends, if Vinculum switched it on with a limit.
+    /// When "Visible" ends, if Lituus switched it on with a limit.
     pub visible_until: Option<Instant>,
     pub prompt: Option<Prompt>,
     pub prompts: VecDeque<Prompt>,
@@ -240,7 +240,7 @@ fn bars(rssi: i16) -> i32 {
     }
 }
 
-/// The services Vinculum names, by UUID, with what an untrusted device asking for one wants.
+/// The services Lituus names, by UUID, with what an untrusted device asking for one wants.
 fn service(uuid: &str) -> Option<(&'static str, &'static str)> {
     let short = uuid.strip_prefix("0000")?.strip_suffix("-0000-1000-8000-00805f9b34fb")?;
     Some(match short {
@@ -308,7 +308,7 @@ fn empty(state: &State) -> Option<(&'static str, &'static str, String, String, &
             "no-service",
             "monitor",
             "The Bluetooth service isn't running".into(),
-            "Vinculum talks to BlueZ, which isn't running. Install the bluez package if needed, then start it:".into(),
+            "Lituus talks to BlueZ, which isn't running. Install the bluez package if needed, then start it:".into(),
             NOT_RUNNING_COMMAND,
             "Check again",
         ));
@@ -339,7 +339,7 @@ fn empty(state: &State) -> Option<(&'static str, &'static str, String, String, &
             "blocked",
             "plane",
             "Bluetooth is blocked".into(),
-            "Airplane mode or a hardware switch turned the Bluetooth radio off (rfkill). If a switch blocks it, flip the switch; Vinculum notices right away.".into(),
+            "Airplane mode or a hardware switch turned the Bluetooth radio off (rfkill). If a switch blocks it, flip the switch; Lituus notices right away.".into(),
             "",
             "Unblock",
         )),
@@ -683,7 +683,7 @@ pub fn pair_dialog(prompt: &Prompt, device: Option<&Device>) -> BtPair {
                 dialog.mode = s("service");
                 dialog.title = s(format!("Allow {name} to {verb}?"));
                 dialog.text =
-                    s(format!("{name} is paired but not trusted, so Vinculum asks before it connects to a service."));
+                    s(format!("{name} is paired but not trusted, so Lituus asks before it connects to a service."));
                 // "audio source (A2DP)": only the first letter goes small.
                 let mut chars = label.chars();
                 let label: String = chars.next().into_iter().flat_map(char::to_lowercase).chain(chars).collect();
@@ -851,7 +851,7 @@ pub fn handle(app: &mut App, event: Event) {
             }
         }
         Event::Snapshot(Err(error)) => {
-            state.not_running = matches!(error, vinculum_bt::Error::NotRunning);
+            state.not_running = matches!(error, lituus_bt::Error::NotRunning);
             state.error = Some(error.to_string());
             state.snapshot = None;
             state.busy.clear();
@@ -885,7 +885,7 @@ pub fn handle(app: &mut App, event: Event) {
                     }
                     state.prompts.retain(|p| p.device() != device);
                     let cancelled =
-                        matches!(&error, vinculum_bt::Error::Refused { kind, .. } if kind == "AuthenticationCanceled");
+                        matches!(&error, lituus_bt::Error::Refused { kind, .. } if kind == "AuthenticationCanceled");
                     if !cancelled {
                         state.failed = Some((device.clone(), reason.clone()));
                         state.message = Some(Message {
@@ -1121,14 +1121,14 @@ pub fn spawn(weak: slint::Weak<MainWindow>, mut commands: tokio::sync::mpsc::Unb
         runtime.block_on(async move {
             loop {
                 let result = async {
-                    let client = vinculum_bt::Client::system().await?;
+                    let client = lituus_bt::Client::system().await?;
                     let mut snapshots = Box::pin(client.watch().await?);
                     // Without the agent (another one is the default, say) pairing devices that
                     // ask for nothing still works.
                     let mut agent = match client.register_agent().await {
                         Ok(agent) => Some(agent),
                         Err(error) => {
-                            eprintln!("vinculum: couldn't register the Bluetooth agent: {error}");
+                            eprintln!("lituus: couldn't register the Bluetooth agent: {error}");
                             None
                         }
                     };
@@ -1188,7 +1188,7 @@ pub fn spawn(weak: slint::Weak<MainWindow>, mut commands: tokio::sync::mpsc::Unb
                             Some(event) = async { agent.as_mut()?.recv().await } => deliver(&weak, Event::Agent(event)),
                         }
                     }
-                    Ok::<(), vinculum_bt::Error>(())
+                    Ok::<(), lituus_bt::Error>(())
                 }
                 .await;
                 if let Err(error) = result {
@@ -1216,17 +1216,17 @@ fn read_audio(weak: &slint::Weak<MainWindow>) {
 }
 
 enum Failure {
-    Bluez(vinculum_bt::Error),
+    Bluez(lituus_bt::Error),
     Rfkill(String),
 }
 
-impl From<vinculum_bt::Error> for Failure {
-    fn from(error: vinculum_bt::Error) -> Self {
+impl From<lituus_bt::Error> for Failure {
+    fn from(error: lituus_bt::Error) -> Self {
         Self::Bluez(error)
     }
 }
 
-async fn run(client: &vinculum_bt::Client, command: &Command) -> Result<(), Failure> {
+async fn run(client: &lituus_bt::Client, command: &Command) -> Result<(), Failure> {
     match command {
         Command::Power { adapter, on } => client.set_powered(adapter, *on).await?,
         Command::Discoverable { adapter, on, timeout } => client.set_discoverable(adapter, *on, *timeout).await?,
@@ -1270,7 +1270,7 @@ fn unblock() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use slint::Model;
-    use vinculum_bt::{PowerState, uuid};
+    use lituus_bt::{PowerState, uuid};
 
     use super::*;
 
@@ -1411,7 +1411,7 @@ mod tests {
         let keyboard = "/org/bluez/hci0/dev_3".to_owned();
         state.send(Command::Pair { device: keyboard.clone() });
         let mut app = App { bt: state, ..App::default() };
-        let refused = vinculum_bt::Error::Refused { kind: "AuthenticationFailed".into(), message: String::new() };
+        let refused = lituus_bt::Error::Refused { kind: "AuthenticationFailed".into(), message: String::new() };
         handle(&mut app, Event::Failed(Command::Pair { device: keyboard.clone() }, refused));
         let state = &mut app.bt;
         state.selected = Some(keyboard.clone());
@@ -1424,7 +1424,7 @@ mod tests {
         assert_eq!(page.details.status_extra, "· last attempt failed");
 
         // Cancelling isn't a failure to report.
-        let cancelled = vinculum_bt::Error::Refused { kind: "AuthenticationCanceled".into(), message: String::new() };
+        let cancelled = lituus_bt::Error::Refused { kind: "AuthenticationCanceled".into(), message: String::new() };
         app.bt.message = None;
         app.bt.failed = None;
         handle(&mut app, Event::Failed(Command::Pair { device: keyboard }, cancelled));
@@ -1458,7 +1458,7 @@ mod tests {
     }
 
     #[test]
-    fn visible_counts_down_from_when_vinculum_switched_it_on() {
+    fn visible_counts_down_from_when_lituus_switched_it_on() {
         let mut a = adapter();
         let now = Instant::now();
         assert_eq!(visible_label(&a, None, now), "Hidden");
@@ -1485,7 +1485,7 @@ mod tests {
 
         // A passkey that isn't one keeps the dialog open; a good one answers.
         let (reply, mut answer) = tokio::sync::oneshot::channel();
-        let request = vinculum_bt::agent::PairingRequest::for_tests("/org/bluez/hci0/dev_3", Ask::Passkey, reply);
+        let request = lituus_bt::agent::PairingRequest::for_tests("/org/bluez/hci0/dev_3", Ask::Passkey, reply);
         let mut state = state;
         state.prompt = Some(Prompt::Ask(request));
         answer_prompt(&mut state, true, "12ab", false);

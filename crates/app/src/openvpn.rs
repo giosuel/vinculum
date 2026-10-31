@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use vinculum_nm::Settings;
+use lituus_nm::Settings;
 use zbus::zvariant::{OwnedValue, Value};
 
 pub const SERVICE: &str = "org.freedesktop.NetworkManager.openvpn";
@@ -447,7 +447,7 @@ abcd
 
     #[test]
     fn imports_an_ovpn_file() {
-        let dir = Path::new("/home/u/.local/share/vinculum/certificates/uni-zurich");
+        let dir = Path::new("/home/u/.local/share/lituus/certificates/uni-zurich");
         let i = import(FILE, "uni-zurich.ovpn", dir).unwrap();
         assert_eq!(i.name, "uni-zurich");
         assert_eq!(i.form.gateway, "vpn.uzh.ch:1194, vpn2.uzh.ch:443");

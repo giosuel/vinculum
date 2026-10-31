@@ -1,5 +1,5 @@
 [package]
-name = "vinculum"
+name = "lituus"
 description = "Manage Wi-Fi, wired and VPN connections on Linux desktops"
 version.workspace = true
 edition.workspace = true
@@ -26,9 +26,9 @@ toml.workspace = true
 toml_edit.workspace = true
 ksni.workspace = true
 resvg.workspace = true
-vinculum-bt.workspace = true
-vinculum-keyring.workspace = true
-vinculum-nm.workspace = true
+lituus-bt.workspace = true
+lituus-keyring.workspace = true
+lituus-nm.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
@@ -42,7 +42,7 @@ workspace = true
 
 # `cargo deb` (Debian, Ubuntu). target/release is mapped to the real target directory.
 [package.metadata.deb]
-name = "vinculum"
+name = "lituus"
 maintainer = "giosuel <me@giosuel.ch>"
 section = "net"
 priority = "optional"
@@ -56,29 +56,29 @@ depends = "$auto, network-manager, libxkbcommon0, libegl1"
 recommends = "xdg-desktop-portal, gnome-keyring | kwalletmanager, bluez"
 suggests = "network-manager-openvpn"
 assets = [
-    ["target/release/vinculum", "usr/bin/", "755"],
-    ["../../packaging/linux/ch.giosuel.Vinculum.desktop", "usr/share/applications/", "644"],
-    ["../../packaging/linux/ch.giosuel.Vinculum.metainfo.xml", "usr/share/metainfo/", "644"],
-    ["../../packaging/linux/icons/ch.giosuel.Vinculum.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
-    ["../../README.md", "usr/share/doc/vinculum/", "644"],
+    ["target/release/lituus", "usr/bin/", "755"],
+    ["../../packaging/linux/ch.giosuel.Lituus.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/linux/ch.giosuel.Lituus.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../packaging/linux/icons/ch.giosuel.Lituus.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["../../README.md", "usr/share/doc/lituus/", "644"],
     # The fonts built into the binary (SIL Open Font License).
-    ["ui/fonts/Inter-LICENSE.txt", "usr/share/doc/vinculum/fonts/", "644"],
-    ["ui/fonts/JetBrainsMono-LICENSE.txt", "usr/share/doc/vinculum/fonts/", "644"],
+    ["ui/fonts/Inter-LICENSE.txt", "usr/share/doc/lituus/fonts/", "644"],
+    ["ui/fonts/JetBrainsMono-LICENSE.txt", "usr/share/doc/lituus/fonts/", "644"],
 ]
 
 # `cargo generate-rpm` (Fedora, openSUSE). Library requirements by soname, so the same package
 # works across distributions whose package names differ.
 [package.metadata.generate-rpm]
-name = "vinculum"
+name = "lituus"
 summary = "Manage Wi-Fi, wired and VPN connections"
 assets = [
-    { source = "target/release/vinculum", dest = "/usr/bin/vinculum", mode = "755" },
-    { source = "../../packaging/linux/ch.giosuel.Vinculum.desktop", dest = "/usr/share/applications/ch.giosuel.Vinculum.desktop", mode = "644" },
-    { source = "../../packaging/linux/ch.giosuel.Vinculum.metainfo.xml", dest = "/usr/share/metainfo/ch.giosuel.Vinculum.metainfo.xml", mode = "644" },
-    { source = "../../packaging/linux/icons/ch.giosuel.Vinculum.svg", dest = "/usr/share/icons/hicolor/scalable/apps/ch.giosuel.Vinculum.svg", mode = "644" },
-    { source = "../../README.md", dest = "/usr/share/doc/vinculum/README.md", mode = "644", doc = true },
-    { source = "ui/fonts/Inter-LICENSE.txt", dest = "/usr/share/licenses/vinculum/Inter-LICENSE.txt", mode = "644", doc = true },
-    { source = "ui/fonts/JetBrainsMono-LICENSE.txt", dest = "/usr/share/licenses/vinculum/JetBrainsMono-LICENSE.txt", mode = "644", doc = true },
+    { source = "target/release/lituus", dest = "/usr/bin/lituus", mode = "755" },
+    { source = "../../packaging/linux/ch.giosuel.Lituus.desktop", dest = "/usr/share/applications/ch.giosuel.Lituus.desktop", mode = "644" },
+    { source = "../../packaging/linux/ch.giosuel.Lituus.metainfo.xml", dest = "/usr/share/metainfo/ch.giosuel.Lituus.metainfo.xml", mode = "644" },
+    { source = "../../packaging/linux/icons/ch.giosuel.Lituus.svg", dest = "/usr/share/icons/hicolor/scalable/apps/ch.giosuel.Lituus.svg", mode = "644" },
+    { source = "../../README.md", dest = "/usr/share/doc/lituus/README.md", mode = "644", doc = true },
+    { source = "ui/fonts/Inter-LICENSE.txt", dest = "/usr/share/licenses/lituus/Inter-LICENSE.txt", mode = "644", doc = true },
+    { source = "ui/fonts/JetBrainsMono-LICENSE.txt", dest = "/usr/share/licenses/lituus/JetBrainsMono-LICENSE.txt", mode = "644", doc = true },
 ]
 
 # The release workflow sets `requires` from the binary (packaging/linux/rpm-requires.sh).

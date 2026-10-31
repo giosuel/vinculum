@@ -2,7 +2,7 @@
 //! snapshots whenever BlueZ reports a change, and the pairing agent.
 //!
 //! Everything is read with one `GetManagedObjects` call and parsed leniently, as in
-//! `vinculum-nm`: BlueZ versions differ in which properties they have.
+//! `lituus-nm`: BlueZ versions differ in which properties they have.
 
 pub mod agent;
 mod client;

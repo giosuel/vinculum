@@ -1,5 +1,5 @@
 [package]
-name = "vinculum-nm"
+name = "lituus-nm"
 description = "NetworkManager over D-Bus: devices, access points, connections and the secret agent"
 version.workspace = true
 edition.workspace = true

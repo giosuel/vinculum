@@ -2,7 +2,7 @@
 //! selection, search). Pure, so it's tested without a window.
 
 use slint::{ModelRc, SharedString, VecModel};
-use vinculum_nm::{
+use lituus_nm::{
     ActiveState, Band, ConnectionKind, Device, DeviceKind, KeyMgmt, Network, SavedConnection, Security, Snapshot,
     WifiJoin, bars, channel,
 };
@@ -185,7 +185,7 @@ pub fn security_long(security: Security) -> String {
     }
 }
 
-fn active_uuid_state<'a>(snapshot: &'a Snapshot, uuid: &str) -> Option<&'a vinculum_nm::ActiveConnection> {
+fn active_uuid_state<'a>(snapshot: &'a Snapshot, uuid: &str) -> Option<&'a lituus_nm::ActiveConnection> {
     snapshot.active.iter().find(|a| a.uuid == uuid)
 }
 
@@ -241,7 +241,7 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
         view.page_title = page_title(state.page).into();
         view.show_search = false;
         view.banner = match error {
-            Some(e) => format!("{e}. Vinculum needs it to manage connections."),
+            Some(e) => format!("{e}. Lituus needs it to manage connections."),
             None => String::new(),
         };
         view.empty = Some(Empty {
@@ -496,7 +496,7 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
         view.empty = Some(Empty {
             icon: "wifi-off",
             title: "No Wi-Fi card".into(),
-            text: "Vinculum didn't find a Wi-Fi device. Wired and VPN connections are in their own sections.".into(),
+            text: "Lituus didn't find a Wi-Fi device. Wired and VPN connections are in their own sections.".into(),
             action: String::new(),
         });
         return Vec::new();
@@ -1363,7 +1363,7 @@ pub fn rescan(snap: &Snapshot) -> Option<Command> {
 pub(crate) mod tests {
     use super::*;
     use slint::Model;
-    use vinculum_nm::{AccessPoint, ActiveConnection, DeviceState, IpConfig, WifiDevice, WiredDevice};
+    use lituus_nm::{AccessPoint, ActiveConnection, DeviceState, IpConfig, WifiDevice, WiredDevice};
 
     fn ap(path: &str, ssid: &str, mhz: u32, strength: u8, security: Security) -> AccessPoint {
         AccessPoint {
@@ -1522,7 +1522,7 @@ pub(crate) mod tests {
             interface: Some(interface.into()),
             metered: None,
             hotspot: false,
-            port: port.map(|c| vinculum_nm::Port { controller: c.into(), kind: "bridge".into() }),
+            port: port.map(|c| lituus_nm::Port { controller: c.into(), kind: "bridge".into() }),
         }
     }
 

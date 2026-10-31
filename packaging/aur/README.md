@@ -1,7 +1,7 @@
 # AUR packages
 
-- `vinculum`: builds the tagged source with cargo.
-- `vinculum-bin`: installs the release tarball (`Vinculum-<version>-linux-<x64|arm64>.tar.gz`).
+- `lituus`: builds the tagged source with cargo.
+- `lituus-bin`: installs the release tarball (`Lituus-<version>-linux-<x64|arm64>.tar.gz`).
 
 The release workflow pushes both for every stable tag (no `-` in it): it sets `pkgver` from the
 tag, refreshes the checksums, test-builds the package and pushes `PKGBUILD` and `.SRCINFO`. So the

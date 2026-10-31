@@ -1,4 +1,4 @@
-//! Vinculum's secret agent: NetworkManager asks it for passwords it doesn't keep itself (the
+//! Lituus's secret agent: NetworkManager asks it for passwords it doesn't keep itself (the
 //! "for me only" ones, which live in the user's keyring) and for passwords it doesn't have yet
 //! (a new network, or a wrong one). The agent only passes the requests on, as [`AgentEvent`]s;
 //! the app decides whether to answer from the keyring or ask the user.

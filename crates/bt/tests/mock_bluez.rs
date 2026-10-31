@@ -1,8 +1,8 @@
 //! Against a mock BlueZ (python-dbusmock's template) on a private bus, so the real system bus is
 //! never touched.
 //!
-//! Needs dbus-daemon and python-dbusmock, so it runs only with VINCULUM_DBUSMOCK=1
-//! (scripts/test.sh and CI set it). VINCULUM_PYTHON picks the interpreter that has dbusmock.
+//! Needs dbus-daemon and python-dbusmock, so it runs only with LITUUS_DBUSMOCK=1
+//! (scripts/test.sh and CI set it). LITUUS_PYTHON picks the interpreter that has dbusmock.
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -12,8 +12,8 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use vinculum_bt::agent::AGENT_PATH;
-use vinculum_bt::{AgentEvent, Answer, Ask, Client, DeviceKind, Error, Snapshot};
+use lituus_bt::agent::AGENT_PATH;
+use lituus_bt::{AgentEvent, Answer, Ask, Client, DeviceKind, Error, Snapshot};
 use zbus::Connection;
 use zbus::zvariant::{OwnedObjectPath, Value};
 
@@ -31,8 +31,8 @@ struct Bus {
 
 impl Bus {
     async fn start(with_bluez: bool) -> Option<Self> {
-        if std::env::var("VINCULUM_DBUSMOCK").as_deref() != Ok("1") {
-            eprintln!("skipped: set VINCULUM_DBUSMOCK=1 (scripts/test.sh does) to run against the mock BlueZ");
+        if std::env::var("LITUUS_DBUSMOCK").as_deref() != Ok("1") {
+            eprintln!("skipped: set LITUUS_DBUSMOCK=1 (scripts/test.sh does) to run against the mock BlueZ");
             return None;
         }
         let mut daemon = Command::new("dbus-daemon")
@@ -45,7 +45,7 @@ impl Bus {
         BufReader::new(daemon.stdout.take().unwrap()).read_line(&mut line).await.unwrap();
         let mut bus = Self { address: line.trim().to_owned(), daemon, mock: None };
         if with_bluez {
-            let python = std::env::var("VINCULUM_PYTHON").unwrap_or_else(|_| "python3".into());
+            let python = std::env::var("LITUUS_PYTHON").unwrap_or_else(|_| "python3".into());
             bus.mock = Some(
                 Command::new(python)
                     .args(["-m", "dbusmock", "--session", "--template", "bluez5"])
@@ -55,7 +55,7 @@ impl Bus {
                     .spawn()
                     .expect("python-dbusmock runs"),
             );
-            bus.wait_for(vinculum_bt::BUS_NAME).await;
+            bus.wait_for(lituus_bt::BUS_NAME).await;
         }
         Some(bus)
     }
@@ -83,7 +83,7 @@ impl Bus {
         R: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type,
     {
         let conn = self.connect().await;
-        let reply = conn.call_method(Some(vinculum_bt::BUS_NAME), path, Some(interface), method, body).await.unwrap();
+        let reply = conn.call_method(Some(lituus_bt::BUS_NAME), path, Some(interface), method, body).await.unwrap();
         reply.body().deserialize().unwrap()
     }
 
@@ -108,7 +108,7 @@ async fn setup(bus: &Bus) -> (String, String, String) {
     let adapter: String = bus.mock("/", BLUEZ_MOCK, "AddAdapter", &("hci0", "thinkpad-x1")).await;
     let headphones: String = bus.mock("/", BLUEZ_MOCK, "AddDevice", &("hci0", HEADPHONES, "WH-1000XM5")).await;
     bus.mock::<_, ()>("/", BLUEZ_MOCK, "PairDevice", &("hci0", HEADPHONES)).await;
-    let uuids = vec![vinculum_bt::uuid::A2DP_SINK, vinculum_bt::uuid::HFP_HANDS_FREE];
+    let uuids = vec![lituus_bt::uuid::A2DP_SINK, lituus_bt::uuid::HFP_HANDS_FREE];
     bus.update(
         &headphones,
         "org.bluez.Device1",
@@ -247,7 +247,7 @@ async fn the_agent_passes_bluez_requests_on_and_answers_them() {
     let manager = AgentManager::default();
     let bluez = zbus::connection::Builder::address(bus.address.as_str())
         .unwrap()
-        .name(vinculum_bt::BUS_NAME)
+        .name(lituus_bt::BUS_NAME)
         .unwrap()
         .serve_at("/org/bluez", manager.clone())
         .unwrap()

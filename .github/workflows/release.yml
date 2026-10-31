@@ -102,8 +102,8 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           RELEASE_NOTES: ${{ needs.version.outputs.notes }}
         run: scripts/set-version.sh "$VERSION"
-      - run: cargo build --release --locked -p vinculum
-      - run: target/release/vinculum --version
+      - run: cargo build --release --locked -p lituus
+      - run: target/release/lituus --version
       - name: Binary archive
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -115,11 +115,11 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           cargo install --locked cargo-deb@3.8.0 cargo-generate-rpm@0.21.0
-          cargo deb --no-build --locked -p vinculum
+          cargo deb --no-build --locked -p lituus
           # RPM versions can't contain '-': a pre-release uses '~', which also sorts it before the
           # release (cargo-deb does the same for the .deb).
           cargo generate-rpm -p crates/app --set-metadata "version = \"${VERSION//-/\~}\"" \
-            --set-metadata "requires = $(packaging/linux/rpm-requires.sh target/release/vinculum)"
+            --set-metadata "requires = $(packaging/linux/rpm-requires.sh target/release/lituus)"
           cp target/debian/*.deb target/generate-rpm/*.rpm target/dist/
       - name: AppImage
         run: packaging/linux/build-appimage.sh
@@ -148,8 +148,8 @@ jobs:
         run: scripts/set-version.sh "$VERSION"
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
         with:
-          manifest-path: packaging/flatpak/ch.giosuel.Vinculum.yml
-          bundle: Vinculum-${{ needs.version.outputs.version }}-linux-x64.flatpak
+          manifest-path: packaging/flatpak/ch.giosuel.Lituus.yml
+          bundle: Lituus-${{ needs.version.outputs.version }}-linux-x64.flatpak
           # Inside .flatpak-builder, which the manifest's dir source skips.
           build-dir: .flatpak-builder/build
           repo-dir: .flatpak-builder/repo
@@ -157,7 +157,7 @@ jobs:
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: flatpak
-          path: Vinculum-*.flatpak
+          path: Lituus-*.flatpak
           if-no-files-found: error
 
   release:
@@ -185,7 +185,7 @@ jobs:
           [[ "$VERSION" == *-* ]] && prerelease="--prerelease"
           printf '%s\n' "$NOTES" > notes.md
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-            --title "Vinculum $VERSION" --notes-file notes.md --generate-notes $prerelease
+            --title "Lituus $VERSION" --notes-file notes.md --generate-notes $prerelease
 
   aur:
     name: AUR (${{ matrix.pkg }})
@@ -197,7 +197,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pkg: [vinculum, vinculum-bin]
+        pkg: [lituus, lituus-bin]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set pkgver

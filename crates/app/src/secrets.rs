@@ -5,15 +5,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, oneshot};
-use vinculum_keyring::{Entry, Keyring};
-use vinculum_nm::agent::secret;
-use vinculum_nm::{AgentConnection, AgentEvent, KeyMgmt, Refusal, SecretRequest};
+use lituus_keyring::{Entry, Keyring};
+use lituus_nm::agent::secret;
+use lituus_nm::{AgentConnection, AgentEvent, KeyMgmt, Refusal, SecretRequest};
 
 /// The Wi-Fi password setting, the only one the password dialog asks for.
 pub const WIFI_SECURITY: &str = "802-11-wireless-security";
 
 /// The keyring, opened the first time it's needed (and tried again while there's none: gnome-keyring
-/// may start after Vinculum does).
+/// may start after Lituus does).
 #[derive(Clone, Default)]
 pub struct Keyrings(Arc<Mutex<Option<Arc<Keyring>>>>);
 
@@ -98,7 +98,7 @@ pub async fn handle(event: AgentEvent, keyrings: &Keyrings, ui: &impl Ui) {
                 for (setting, key, value) in secrets {
                     let entry = Entry { uuid: &connection.uuid, setting: &setting, key: &key };
                     if let Err(error) = keyring.store(entry, &connection.id, &value).await {
-                        eprintln!("vinculum: couldn't save a password for {}: {error}", connection.id);
+                        eprintln!("lituus: couldn't save a password for {}: {error}", connection.id);
                     }
                 }
             }
@@ -107,7 +107,7 @@ pub async fn handle(event: AgentEvent, keyrings: &Keyrings, ui: &impl Ui) {
             if let Some(keyring) = keyrings.get().await
                 && let Err(error) = keyring.delete(&connection.uuid).await
             {
-                eprintln!("vinculum: couldn't delete the passwords of {}: {error}", connection.id);
+                eprintln!("lituus: couldn't delete the passwords of {}: {error}", connection.id);
             }
         }
     }
@@ -154,7 +154,7 @@ async fn get_secrets(request: SecretRequest, keyrings: &Keyrings, ui: &impl Ui) 
     {
         let entry = Entry { uuid: &request.connection.uuid, setting: &request.setting, key };
         if let Err(error) = keyring.store(entry, &request.connection.id, &password).await {
-            eprintln!("vinculum: couldn't save the password for {name}: {error}");
+            eprintln!("lituus: couldn't save the password for {name}: {error}");
         }
     }
     request.reply(Ok(HashMap::from([(key.to_owned(), password)])));
@@ -211,7 +211,7 @@ mod tests {
     }
 
     fn request(settings: &[(&str, &str, zbus::zvariant::Value<'static>)], setting: &str) -> SecretRequest {
-        let mut s: vinculum_nm::Settings = HashMap::new();
+        let mut s: lituus_nm::Settings = HashMap::new();
         for (group, key, value) in settings {
             s.entry((*group).into())
                 .or_default()

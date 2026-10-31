@@ -1,16 +1,16 @@
 //! The keyring backends against real services on private buses.
 //!
 //! - The Secret Service test needs a bus with an unlocked keyring on it, given as
-//!   VINCULUM_KEYRING_BUS (scripts/test.sh starts gnome-keyring when it's installed).
+//!   LITUUS_KEYRING_BUS (scripts/test.sh starts gnome-keyring when it's installed).
 //! - The KWallet test runs a python-dbusmock stand-in for kwalletd6 (tests/kwalletd6.py), with
-//!   VINCULUM_DBUSMOCK=1 like the NetworkManager tests.
+//!   LITUUS_DBUSMOCK=1 like the NetworkManager tests.
 
 use std::process::Stdio;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use vinculum_keyring::{Entry, Keyring};
+use lituus_keyring::{Entry, Keyring};
 use zbus::Connection;
 
 async fn connect(address: &str) -> Connection {
@@ -45,14 +45,14 @@ async fn round_trip(keyring: &Keyring) {
 
 #[tokio::test]
 async fn secret_service() {
-    let Ok(address) = std::env::var("VINCULUM_KEYRING_BUS") else {
+    let Ok(address) = std::env::var("LITUUS_KEYRING_BUS") else {
         // Our CI installs gnome-keyring, so skipping there would hide a broken set-up. Other CI
         // (the AUR package's check() runs in a release job) has none.
         assert!(
-            std::env::var_os("VINCULUM_REQUIRE_KEYRING").is_none(),
-            "VINCULUM_REQUIRE_KEYRING is set, but there's no keyring to test against"
+            std::env::var_os("LITUUS_REQUIRE_KEYRING").is_none(),
+            "LITUUS_REQUIRE_KEYRING is set, but there's no keyring to test against"
         );
-        eprintln!("skipped: set VINCULUM_KEYRING_BUS to a bus with an unlocked Secret Service");
+        eprintln!("skipped: set LITUUS_KEYRING_BUS to a bus with an unlocked Secret Service");
         return;
     };
     let keyring = Keyring::open(connect(&address).await).await.expect("a keyring on that bus");
@@ -67,8 +67,8 @@ struct Bus {
 }
 
 async fn private_bus() -> Option<Bus> {
-    if std::env::var("VINCULUM_DBUSMOCK").as_deref() != Ok("1") {
-        eprintln!("skipped: set VINCULUM_DBUSMOCK=1 (scripts/test.sh does) to run against python-dbusmock");
+    if std::env::var("LITUUS_DBUSMOCK").as_deref() != Ok("1") {
+        eprintln!("skipped: set LITUUS_DBUSMOCK=1 (scripts/test.sh does) to run against python-dbusmock");
         return None;
     }
     let config = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/bus.conf");
@@ -92,7 +92,7 @@ async fn nothing_on_the_bus() {
 #[tokio::test]
 async fn kwallet() {
     let Some(mut bus) = private_bus().await else { return };
-    let python = std::env::var("VINCULUM_PYTHON").unwrap_or_else(|_| "python3".into());
+    let python = std::env::var("LITUUS_PYTHON").unwrap_or_else(|_| "python3".into());
     let template = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/kwalletd6.py");
     bus._mock = Some(
         Command::new(python)

@@ -118,7 +118,7 @@ impl Session {
         let reply: protocol::AuthReply = session.ask(Command::Auth(auth))?;
         session.version = protocol::MAX_VERSION.min(reply.version);
         let mut props = protocol::Props::new();
-        props.set(protocol::Prop::ApplicationName, c"Vinculum");
+        props.set(protocol::Prop::ApplicationName, c"Lituus");
         let _: protocol::SetClientNameReply = session.ask(Command::SetClientName(props))?;
         Ok(session)
     }

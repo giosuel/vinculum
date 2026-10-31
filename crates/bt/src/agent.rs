@@ -1,8 +1,8 @@
-//! Vinculum's pairing agent: BlueZ asks it to show or confirm a code, to ask for a PIN, or to
+//! Lituus's pairing agent: BlueZ asks it to show or confirm a code, to ask for a PIN, or to
 //! allow a service while pairing or when an untrusted device connects. The agent only passes the
 //! requests on, as [`AgentEvent`]s; the app asks the user.
 //!
-//! Method calls are read straight off the connection, as `vinculum-nm`'s secret agent does, so
+//! Method calls are read straight off the connection, as `lituus-nm`'s secret agent does, so
 //! a request waiting for the user doesn't hold up `Cancel`.
 
 use futures_util::StreamExt;
@@ -15,7 +15,7 @@ use zbus::{Connection, MatchRule, Message, MessageStream};
 use crate::{BUS_NAME, Error};
 
 /// Where BlueZ finds the agent on the agent's connection.
-pub const AGENT_PATH: &str = "/ch/giosuel/Vinculum/BluetoothAgent";
+pub const AGENT_PATH: &str = "/ch/giosuel/Lituus/BluetoothAgent";
 const AGENT_IFACE: &str = "org.bluez.Agent1";
 const AGENT_MANAGER: &str = "org.bluez.AgentManager1";
 /// It can show a code and take one typed in, so BlueZ picks the safest pairing both sides allow.

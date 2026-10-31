@@ -1,7 +1,7 @@
 //! The typed snapshot of BlueZ's state. Plain data, so the UI can compare and render it without
 //! going back to D-Bus.
 
-/// Everything Vinculum shows, read at one point in time.
+/// Everything Lituus shows, read at one point in time.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Snapshot {
     pub adapters: Vec<Adapter>,
@@ -10,7 +10,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// The adapter Vinculum shows: the first powered one, else the first.
+    /// The adapter Lituus shows: the first powered one, else the first.
     pub fn adapter(&self) -> Option<&Adapter> {
         self.adapters.iter().find(|a| a.powered).or_else(|| self.adapters.first())
     }
@@ -150,7 +150,7 @@ impl Device {
     }
 }
 
-/// The service UUIDs Vinculum looks for, as BlueZ writes them.
+/// The service UUIDs Lituus looks for, as BlueZ writes them.
 pub mod uuid {
     /// A2DP sink: plays high-quality sound (headphones, speakers).
     pub const A2DP_SINK: &str = "0000110b-0000-1000-8000-00805f9b34fb";

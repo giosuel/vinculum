@@ -1,4 +1,4 @@
-// Vinculum website (Astro + Starlight). See README.md in this directory.
+// Lituus website (Astro + Starlight). See README.md in this directory.
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { remarkBaseLinks } from './plugins/remark-base-links.mjs';
@@ -13,7 +13,7 @@ export default defineConfig({
   },
   integrations: [
     starlight({
-      title: 'Vinculum',
+      title: 'Lituus',
       description:
         'A network manager for Hyprland, Sway and other desktops without one: Wi-Fi, wired and WireGuard on NetworkManager, written in Rust.',
       logo: { src: './src/assets/mark.svg' },
@@ -23,9 +23,9 @@ export default defineConfig({
         ThemeProvider: './src/components/ThemeProvider.astro',
         ThemeSelect: './src/components/ThemeSelect.astro',
       },
-      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/giosuel/vinculum' }],
+      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/giosuel/lituus' }],
       editLink: {
-        baseUrl: 'https://github.com/giosuel/vinculum/edit/main/website/',
+        baseUrl: 'https://github.com/giosuel/lituus/edit/main/website/',
       },
       lastUpdated: false,
       sidebar: [

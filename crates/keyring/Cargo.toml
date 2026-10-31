@@ -1,5 +1,5 @@
 [package]
-name = "vinculum-keyring"
+name = "lituus-keyring"
 description = "Connection passwords in the user's keyring: the Secret Service (GNOME Keyring, KeePassXC, KWallet 6) or KWallet's own API"
 version.workspace = true
 edition.workspace = true

@@ -1,4 +1,4 @@
-// The quick popup: a small window from the tray icon (left-click), `vinculum --quick` or a
+// The quick popup: a small window from the tray icon (left-click), `lituus --quick` or a
 // keybind, with the nearest networks, the VPNs and airplane mode. Its rows come from Rust
 // (src/quick.rs). Wayland doesn't let apps place windows, so a window rule floats it (see
 // extras/hyprland.lua).
@@ -60,7 +60,7 @@ export component QuickWindow inherits Window {
     callback open-settings();
     callback dismissed();
 
-    title: "Vinculum quick";
+    title: "Lituus quick";
     icon: @image-url("assets/logo-mark.svg");
     width: 380px;
     height: 560px;
@@ -123,7 +123,7 @@ export component QuickWindow inherits Window {
             Rectangle { vertical-stretch: 1; }
             HorizontalLayout {
                 spacing: 8px;
-                Button { label: "Open Vinculum"; button-height: 36px; horizontal-stretch: 1; clicked => { root.open-main(); } }
+                Button { label: "Open Lituus"; button-height: 36px; horizontal-stretch: 1; clicked => { root.open-main(); } }
                 Rectangle {
                     width: 36px;
                     height: 36px;

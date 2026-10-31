@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString};
-use vinculum_nm::{ConnectionKind, DeviceKind, Settings, Snapshot};
+use lituus_nm::{ConnectionKind, DeviceKind, Settings, Snapshot};
 
 use crate::editor::{self, Address, EapForm, Form, IpForm, Kind, PeerForm, Route, Tab, WgForm};
 use crate::openvpn::OvpnForm;
@@ -61,7 +61,7 @@ pub struct EditorState {
     active: Option<(String, Option<String>)>,
     current_ip6: Vec<String>,
     /// The device's IPv4 addresses, gateway and DNS now, for switching to Manual.
-    current_ip4: Option<vinculum_nm::IpConfig>,
+    current_ip4: Option<lituus_nm::IpConfig>,
     link: String,
     /// The routes as they were when the dialog opened, for Cancel.
     routes_backup: Option<(bool, Vec<Route>, bool, bool)>,
@@ -211,7 +211,7 @@ impl EditorState {
         let ssid = self.form.ssid.as_bytes();
         for d in snap.devices.iter().filter(|d| d.kind == DeviceKind::Wifi) {
             for ap in d.wifi.iter().flat_map(|w| &w.access_points).filter(|ap| ap.ssid == ssid) {
-                let band = vinculum_nm::Band::from_mhz(ap.frequency).map(|b| b.label()).unwrap_or("?");
+                let band = lituus_nm::Band::from_mhz(ap.frequency).map(|b| b.label()).unwrap_or("?");
                 self.bssids.push((
                     ap.bssid.to_uppercase(),
                     format!("{} ({band}, {} %)", ap.bssid.to_uppercase(), ap.strength),

@@ -1,6 +1,6 @@
-# Vinculum website
+# Lituus website
 
-The public site at https://vinculum.giosuel.ch: landing page, installing, guides and developer
+The public site at https://lituus.giosuel.ch: landing page, installing, guides and developer
 docs. Built with [Astro](https://astro.build) and [Starlight](https://starlight.astro.build), set
 up like Imaginarium's website.
 

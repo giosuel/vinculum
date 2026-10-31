@@ -1,5 +1,5 @@
 # Generates hero.svg for the README: the node-cube logo with signals running along its edges,
-# beside a small Vinculum window where a network connects. Works on light and dark pages.
+# beside a small Lituus window where a network connects. Works on light and dark pages.
 import sys
 out = sys.argv[1]
 A = '#5cc8b0'; DIM = '#3c5650'
@@ -10,8 +10,8 @@ S=4.1; OX=48; OY=34
 def P(p): return (OX+p[0]*S, OY+p[1]*S)
 L=[]
 L.append('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 330" width="840" height="330" role="img" aria-labelledby="t d">')
-L.append('  <title id="t">Vinculum</title>')
-L.append('  <desc id="d">The Vinculum logo, a cube of linked nodes with signals running along its edges, beside a Vinculum window where a Wi-Fi network connects.</desc>')
+L.append('  <title id="t">Lituus</title>')
+L.append('  <desc id="d">The Lituus logo, a cube of linked nodes with signals running along its edges, beside a Lituus window where a Wi-Fi network connects.</desc>')
 L.append('''  <defs>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
       <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity=".32"/>

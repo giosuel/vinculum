@@ -1,12 +1,12 @@
 //! Connection passwords in the user's keyring, for the "for me only" storage: NetworkManager
-//! keeps such secrets out of its own files and asks Vinculum's secret agent for them instead.
+//! keeps such secrets out of its own files and asks Lituus's secret agent for them instead.
 //!
 //! Two backends, tried in this order:
 //! - the **Secret Service** (`org.freedesktop.secrets`): GNOME Keyring, KeePassXC, and KWallet 6
 //!   when its Secret Service support is on. Items use nm-applet's attributes, so passwords saved
 //!   by nm-applet or GNOME Settings are found, and the other way round.
 //! - **KWallet**'s own D-Bus API (`kwalletd6`, then `kwalletd5`), for KDE setups without the
-//!   Secret Service. Entries go in a "Vinculum" folder of the network wallet.
+//!   Secret Service. Entries go in a "Lituus" folder of the network wallet.
 
 use std::collections::HashMap;
 

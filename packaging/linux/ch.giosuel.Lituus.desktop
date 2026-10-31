@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Vinculum
+Name=Lituus
 GenericName=Network Manager
 Comment=Manage Wi-Fi, wired and VPN connections
-Exec=vinculum
-Icon=ch.giosuel.Vinculum
+Exec=lituus
+Icon=ch.giosuel.Lituus
 Terminal=false
 Categories=Settings;HardwareSettings;
 Keywords=wifi;wireless;network;ethernet;vpn;wireguard;networkmanager;
-StartupWMClass=ch.giosuel.Vinculum
+StartupWMClass=ch.giosuel.Lituus

@@ -1,8 +1,8 @@
 //! Against a mock NetworkManager (python-dbusmock's template) on a private bus, so the real
 //! system bus is never touched.
 //!
-//! Needs dbus-daemon and python-dbusmock, so it runs only with VINCULUM_DBUSMOCK=1
-//! (scripts/test.sh and CI set it). VINCULUM_PYTHON picks the interpreter that has dbusmock.
+//! Needs dbus-daemon and python-dbusmock, so it runs only with LITUUS_DBUSMOCK=1
+//! (scripts/test.sh and CI set it). LITUUS_PYTHON picks the interpreter that has dbusmock.
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -10,7 +10,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use vinculum_nm::{ActiveState, Band, Client, ConnectionKind, DeviceKind, DeviceState, Error, Security};
+use lituus_nm::{ActiveState, Band, Client, ConnectionKind, DeviceKind, DeviceState, Error, Security};
 use zbus::Connection;
 
 const MOCK: &str = "org.freedesktop.DBus.Mock";
@@ -30,8 +30,8 @@ struct Bus {
 
 impl Bus {
     async fn start(with_nm: bool) -> Option<Self> {
-        if std::env::var("VINCULUM_DBUSMOCK").as_deref() != Ok("1") {
-            eprintln!("skipped: set VINCULUM_DBUSMOCK=1 (scripts/test.sh does) to run against the mock NetworkManager");
+        if std::env::var("LITUUS_DBUSMOCK").as_deref() != Ok("1") {
+            eprintln!("skipped: set LITUUS_DBUSMOCK=1 (scripts/test.sh does) to run against the mock NetworkManager");
             return None;
         }
         let mut daemon = Command::new("dbus-daemon")
@@ -45,7 +45,7 @@ impl Bus {
         let address = line.trim().to_owned();
         let mut bus = Self { address, daemon, mock: None };
         if with_nm {
-            let python = std::env::var("VINCULUM_PYTHON").unwrap_or_else(|_| "python3".into());
+            let python = std::env::var("LITUUS_PYTHON").unwrap_or_else(|_| "python3".into());
             bus.mock = Some(
                 Command::new(python)
                     .args(["-m", "dbusmock", "--session", "--template", "networkmanager"])
@@ -68,7 +68,7 @@ impl Bus {
         let conn = self.connect().await;
         let dbus = zbus::fdo::DBusProxy::new(&conn).await.unwrap();
         for _ in 0..100 {
-            if dbus.name_has_owner(vinculum_nm::BUS_NAME.try_into().unwrap()).await.unwrap() {
+            if dbus.name_has_owner(lituus_nm::BUS_NAME.try_into().unwrap()).await.unwrap() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -83,7 +83,7 @@ impl Bus {
         R: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type,
     {
         let conn = self.connect().await;
-        let reply = conn.call_method(Some(vinculum_nm::BUS_NAME), MANAGER, Some(MOCK), method, body).await.unwrap();
+        let reply = conn.call_method(Some(lituus_nm::BUS_NAME), MANAGER, Some(MOCK), method, body).await.unwrap();
         reply.body().deserialize().unwrap()
     }
 
@@ -94,7 +94,7 @@ impl Bus {
         R: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type,
     {
         let conn = self.connect().await;
-        let reply = conn.call_method(Some(vinculum_nm::BUS_NAME), path, Some(MOCK), method, body).await.unwrap();
+        let reply = conn.call_method(Some(lituus_nm::BUS_NAME), path, Some(MOCK), method, body).await.unwrap();
         reply.body().deserialize().unwrap()
     }
 }
@@ -287,7 +287,7 @@ async fn join_an_open_network() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn join_a_secured_network_with_the_password_in_the_keyring() {
-    use vinculum_nm::{KeyMgmt, Storage, WifiJoin};
+    use lituus_nm::{KeyMgmt, Storage, WifiJoin};
     let Some(bus) = Bus::start(true).await else { return };
     let (wifi, _) = home_setup(&bus).await;
     let client = Client::new(bus.connect().await);
@@ -324,7 +324,7 @@ async fn join_a_secured_network_with_the_password_in_the_keyring() {
 /// it the way NetworkManager does), but no one else.
 #[tokio::test(flavor = "multi_thread")]
 async fn secret_agent_answers_only_network_manager() {
-    use vinculum_nm::{AgentEvent, Refusal};
+    use lituus_nm::{AgentEvent, Refusal};
     let Some(bus) = Bus::start(true).await else { return };
     // The mock has no AgentManager: add one, and a test method that calls the agent from the
     // mock's own connection (the one that owns NetworkManager's name), remembering the answer.
@@ -363,7 +363,7 @@ agent.GetSecrets(dbus.Dictionary(settings, signature='sa{sv}'), dbus.ObjectPath(
     let agent_conn = bus.connect().await;
     let agent_name = agent_conn.unique_name().unwrap().to_string();
     let client = Client::new(agent_conn);
-    let mut events = client.register_agent("ch.giosuel.Vinculum").await.expect("registered");
+    let mut events = client.register_agent("ch.giosuel.Lituus").await.expect("registered");
     let calls: Vec<(u64, String, Vec<zbus::zvariant::OwnedValue>)> =
         bus.mock_at("/org/freedesktop/NetworkManager/AgentManager", "GetCalls", &()).await;
     assert!(calls.iter().any(|(_, m, _)| m == "RegisterWithCapabilities"));
@@ -413,7 +413,7 @@ agent.GetSecrets(dbus.Dictionary(settings, signature='sa{sv}'), dbus.ObjectPath(
 async fn call_agent(bus: &Bus, agent: &str, flags: u32) {
     let conn = bus.connect().await;
     conn.call_method(
-        Some(vinculum_nm::BUS_NAME),
+        Some(lituus_nm::BUS_NAME),
         MANAGER,
         Some("org.freedesktop.DBus.Mock.Test"),
         "CallAgent",
@@ -428,7 +428,7 @@ async fn agent_answer(bus: &Bus) -> String {
     let conn = bus.connect().await;
     for _ in 0..100 {
         let reply = conn
-            .call_method(Some(vinculum_nm::BUS_NAME), MANAGER, Some("org.freedesktop.DBus.Mock.Test"), "Answer", &())
+            .call_method(Some(lituus_nm::BUS_NAME), MANAGER, Some("org.freedesktop.DBus.Mock.Test"), "Answer", &())
             .await
             .unwrap();
         let text: String = reply.body().deserialize().unwrap();
@@ -443,7 +443,7 @@ async fn agent_answer(bus: &Bus) -> String {
 /// A wrong password: the device fails with "supplicant disconnected", then the attempt ends.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failed_attempt_says_why() {
-    use vinculum_nm::Outcome;
+    use lituus_nm::Outcome;
     let Some(bus) = Bus::start(true).await else { return };
     let (wifi, _) = home_setup(&bus).await;
     let cafe_conn: String = bus.mock("AddWiFiConnection", &(&wifi, "cafeconn", "Bibliothek-Free", "wpa-psk")).await;
@@ -461,7 +461,7 @@ async fn a_failed_attempt_says_why() {
             async move {
                 let conn = bus.connect().await;
                 conn.call_method(
-                    Some(vinculum_nm::BUS_NAME),
+                    Some(lituus_nm::BUS_NAME),
                     path.as_str(),
                     Some(MOCK),
                     "EmitSignal",
@@ -508,7 +508,7 @@ async fn settings_round_trip() {
     client.set_setting(&home, "connection", "autoconnect", Value::from(false)).await.unwrap();
     assert!(!client.snapshot().await.unwrap().connections[0].autoconnect);
 
-    let mut new: vinculum_nm::Settings = std::collections::HashMap::new();
+    let mut new: lituus_nm::Settings = std::collections::HashMap::new();
     for (setting, key, value) in [
         ("connection", "id", Value::from("Office dock")),
         ("connection", "type", Value::from("802-3-ethernet")),

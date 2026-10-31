@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Prints the manifest for the Flathub repository: the same as ch.giosuel.Vinculum.yml, but
+# Prints the manifest for the Flathub repository: the same as ch.giosuel.Lituus.yml, but
 # building the given release tag instead of the local checkout, with the tag's version written in
 # (the repository itself says 0.0.0-dev, and Flathub builds without git).
 #
-#   packaging/flatpak/flathub-manifest.sh v0.3.0 > ../flathub/ch.giosuel.Vinculum.yml
+#   packaging/flatpak/flathub-manifest.sh v0.3.0 > ../flathub/ch.giosuel.Lituus.yml
 set -euo pipefail
 tag="${1:?usage: flathub-manifest.sh TAG}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-url=https://github.com/giosuel/vinculum.git
+url=https://github.com/giosuel/lituus.git
 commit=$(git ls-remote "$url" "refs/tags/$tag^{}" | cut -f1)
 [[ -n "$commit" ]] || commit=$(git ls-remote "$url" "refs/tags/$tag" | cut -f1)
 [[ -n "$commit" ]] || { echo "error: tag $tag not found on $url" >&2; exit 1; }
@@ -28,4 +28,4 @@ awk -v url="$url" -v tag="$tag" -v commit="$commit" -v version="${tag#v}" '
     next
   }
   { print }
-' "$here/ch.giosuel.Vinculum.yml"
+' "$here/ch.giosuel.Lituus.yml"

@@ -1,4 +1,4 @@
-//! `~/.config/vinculum/config.toml`. Every key is optional; a missing file means the defaults.
+//! `~/.config/lituus/config.toml`. Every key is optional; a missing file means the defaults.
 
 use std::path::{Path, PathBuf};
 
@@ -17,7 +17,7 @@ pub struct Config {
 pub struct TrayConfig {
     /// Show the tray icon (when a bar with a tray runs).
     pub enabled: bool,
-    /// Closing the window keeps Vinculum running in the tray.
+    /// Closing the window keeps Lituus running in the tray.
     pub keep_running: bool,
 }
 
@@ -53,7 +53,7 @@ impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
             sources: vec![
-                ColourSource { path: "~/.config/vinculum/colors.json".into() },
+                ColourSource { path: "~/.config/lituus/colors.json".into() },
                 // ML4W writes every matugen colour role here on each wallpaper change.
                 ColourSource { path: "~/.config/ml4w/colors/colors.json".into() },
             ],
@@ -85,11 +85,11 @@ pub enum Builtin {
     Light,
 }
 
-/// `$XDG_CONFIG_HOME/vinculum`, or `~/.config/vinculum`.
+/// `$XDG_CONFIG_HOME/lituus`, or `~/.config/lituus`.
 pub fn dir() -> PathBuf {
     match std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
-        Some(config) => PathBuf::from(config).join("vinculum"),
-        None => expand_home("~/.config/vinculum"),
+        Some(config) => PathBuf::from(config).join("lituus"),
+        None => expand_home("~/.config/lituus"),
     }
 }
 
@@ -102,7 +102,7 @@ pub fn path() -> PathBuf {
 pub fn load(path: &Path) -> Config {
     match std::fs::read_to_string(path) {
         Ok(text) => parse(&text).unwrap_or_else(|error| {
-            eprintln!("vinculum: ignoring {}: {error}", path.display());
+            eprintln!("lituus: ignoring {}: {error}", path.display());
             Config::default()
         }),
         Err(_) => Config::default(),
@@ -170,7 +170,7 @@ mod tests {
         let config = parse("").unwrap();
         assert_eq!(config, Config::default());
         let paths: Vec<&str> = config.theme.sources.iter().map(|s| s.path.as_str()).collect();
-        assert_eq!(paths, ["~/.config/vinculum/colors.json", "~/.config/ml4w/colors/colors.json"]);
+        assert_eq!(paths, ["~/.config/lituus/colors.json", "~/.config/ml4w/colors/colors.json"]);
         assert_eq!(config.theme.builtin, Builtin::Auto);
     }
 

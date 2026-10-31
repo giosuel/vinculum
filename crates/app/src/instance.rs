@@ -1,6 +1,6 @@
-//! One Vinculum per user: the first one owns `ch.giosuel.Vinculum` on the session bus, and a
-//! second start passes its request on instead (`vinculum` shows the window, `vinculum --quick`
-//! the popup, `vinculum --toggle-wifi` switches Wi-Fi; from a keybind or Waybar). Only one can be
+//! One Lituus per user: the first one owns `ch.giosuel.Lituus` on the session bus, and a
+//! second start passes its request on instead (`lituus` shows the window, `lituus --quick`
+//! the popup, `lituus --toggle-wifi` switches Wi-Fi; from a keybind or Waybar). Only one can be
 //! NetworkManager's secret agent anyway.
 
 use std::sync::mpsc;
@@ -11,10 +11,10 @@ use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::message::Type as MessageType;
 use zbus::{Connection, MessageStream};
 
-const PATH: &str = "/ch/giosuel/Vinculum";
-const IFACE: &str = "ch.giosuel.Vinculum1";
+const PATH: &str = "/ch/giosuel/Lituus";
+const IFACE: &str = "ch.giosuel.Lituus1";
 
-/// What a start asks the running Vinculum for: the methods of `ch.giosuel.Vinculum1`.
+/// What a start asks the running Lituus for: the methods of `ch.giosuel.Lituus1`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Show,
@@ -45,7 +45,7 @@ pub enum Claim {
 }
 
 /// Claims the name on a thread of its own, which then keeps answering requests. If another
-/// process has it, that one gets `request` (with none, a second `vinculum --background` just
+/// process has it, that one gets `request` (with none, a second `lituus --background` just
 /// leaves). Without a session bus there's nothing to share, so this process runs.
 pub fn claim(app_id: &'static str, request: Option<Request>, handle: impl Fn(Request) + Send + 'static) -> Claim {
     let (result, claimed) = mpsc::channel();

@@ -1,28 +1,28 @@
 <div align="center">
 
-<img src="docs/assets/hero.svg" alt="The Vinculum logo, a cube of linked nodes, beside a Vinculum window where a Wi-Fi network connects" width="760">
+<img src="docs/assets/hero.svg" alt="The Lituus logo, a cube of linked nodes, beside a Lituus window where a Wi-Fi network connects" width="760">
 
-# Vinculum
+# Lituus
 
 **A network manager for Linux desktops that don't come with one.**<br>
 <sub>🦀 Powered by Rust · drives NetworkManager</sub>
 
-[![CI](https://img.shields.io/github/actions/workflow/status/giosuel/vinculum/ci.yml?branch=main&style=flat-square&label=CI&logo=githubactions&logoColor=white)](https://github.com/giosuel/vinculum/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/giosuel/vinculum?style=flat-square&color=8e4ec6&include_prereleases)](https://github.com/giosuel/vinculum/releases)
-[![License: AGPL-3.0](https://img.shields.io/github/license/giosuel/vinculum?style=flat-square&color=3e63dd)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/giosuel/lituus/ci.yml?branch=main&style=flat-square&label=CI&logo=githubactions&logoColor=white)](https://github.com/giosuel/lituus/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/giosuel/lituus?style=flat-square&color=8e4ec6&include_prereleases)](https://github.com/giosuel/lituus/releases)
+[![License: AGPL-3.0](https://img.shields.io/github/license/giosuel/lituus?style=flat-square&color=3e63dd)](LICENSE)
 [![Powered by Rust](https://img.shields.io/badge/powered_by-Rust-dea584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Slint](https://img.shields.io/badge/UI-Slint-2379f4?style=flat-square)](https://slint.dev)
 [![NetworkManager](https://img.shields.io/badge/NetworkManager-D--Bus-5cc8b0?style=flat-square)](https://networkmanager.dev)
 [![Wayland native](https://img.shields.io/badge/Wayland-native-e5484d?style=flat-square&logo=wayland&logoColor=white)](#)
 [![Hyprland ready](https://img.shields.io/badge/Hyprland-ready-58e1ff?style=flat-square&logo=hyprland&logoColor=white)](#-hyprland)
 
-[**Website**](https://vinculum.giosuel.ch/) · [**Install**](#-install) · [**Hyprland setup**](#-hyprland) · [**Shortcuts**](#%EF%B8%8F-shortcuts)
+[**Website**](https://lituus.giosuel.ch/) · [**Install**](#-install) · [**Hyprland setup**](#-hyprland) · [**Shortcuts**](#%EF%B8%8F-shortcuts)
 
 </div>
 
 ---
 
-Running Hyprland or Sway, and reaching for `nmtui` every time the Wi-Fi changes? Vinculum is the
+Running Hyprland or Sway, and reaching for `nmtui` every time the Wi-Fi changes? Lituus is the
 network window those desktops are missing: everything `nmtui` does, the settings depth of KDE's
 network panel, and a look that follows your wallpaper. It drives the NetworkManager you already
 have, so `nmcli` and everything else keep working alongside it.
@@ -60,7 +60,7 @@ Picks up the colours matugen writes for ML4W (or any `colors.json`) and recolour
 <td valign="top">
 
 **🪟 Made for tiling desktops**<br>
-A normal window with the app ID `ch.giosuel.Vinculum` for your window rules, keyboard first, a tray icon with a quick popup for Waybar, and a background mode that answers NetworkManager at login.
+A normal window with the app ID `ch.giosuel.Lituus` for your window rules, keyboard first, a tray icon with a quick popup for Waybar, and a background mode that answers NetworkManager at login.
 
 </td>
 <td valign="top">
@@ -94,27 +94,27 @@ Addresses, gateway, DNS, link speed, channel, and how much has been received and
 
 ## 🚀 Install
 
-**Arch Linux** – from the AUR: `paru -S vinculum-bin` (prebuilt) or `paru -S vinculum` (from source).
+**Arch Linux** – from the AUR: `paru -S lituus-bin` (prebuilt) or `paru -S lituus` (from source).
 
-**Debian, Ubuntu** – the `.deb` from the [latest release](https://github.com/giosuel/vinculum/releases): `sudo apt install ./vinculum_*_amd64.deb`.
+**Debian, Ubuntu** – the `.deb` from the [latest release](https://github.com/giosuel/lituus/releases): `sudo apt install ./lituus_*_amd64.deb`.
 
-**Fedora, openSUSE** – the `.rpm` from the same release: `sudo dnf install ./vinculum-*.x86_64.rpm`.
+**Fedora, openSUSE** – the `.rpm` from the same release: `sudo dnf install ./lituus-*.x86_64.rpm`.
 
-**AppImage (any distro)** – `Vinculum-*-x86_64.AppImage` from the same release, then:
+**AppImage (any distro)** – `Lituus-*-x86_64.AppImage` from the same release, then:
 
 ```sh
-chmod +x Vinculum-*-x86_64.AppImage && ./Vinculum-*-x86_64.AppImage
+chmod +x Lituus-*-x86_64.AppImage && ./Lituus-*-x86_64.AppImage
 ```
 
-**Flatpak** – `Vinculum-*-linux-x64.flatpak` from the same release (the runtime comes from Flathub):
+**Flatpak** – `Lituus-*-linux-x64.flatpak` from the same release (the runtime comes from Flathub):
 
 ```sh
-flatpak install --user ./Vinculum-*-linux-x64.flatpak && flatpak run ch.giosuel.Vinculum
+flatpak install --user ./Lituus-*-linux-x64.flatpak && flatpak run ch.giosuel.Lituus
 ```
 
 What the sandbox allows, and what works differently in it, is in [`packaging/flatpak/`](packaging/flatpak/README.md).
 
-**Nix** – `nix run github:giosuel/vinculum`, or the flake as an input ([`packaging/nix/`](packaging/nix/README.md)).
+**Nix** – `nix run github:giosuel/lituus`, or the flake as an input ([`packaging/nix/`](packaging/nix/README.md)).
 
 Every release also has ARM64 builds (except the Flatpak). All of them need NetworkManager. Optional: NetworkManager's
 OpenVPN plugin (`networkmanager-openvpn` on Arch) for OpenVPN, an XDG desktop portal with a file
@@ -125,9 +125,9 @@ BlueZ (`bluez`, with its service running) for Bluetooth, and PipeWire's PulseAud
 **From source** – with [Rust](https://rustup.rs) and fontconfig's development files:
 
 ```sh
-git clone https://github.com/giosuel/vinculum && cd vinculum
+git clone https://github.com/giosuel/lituus && cd lituus
 cargo build --release
-./target/release/vinculum
+./target/release/lituus
 ```
 
 ## 🌊 Hyprland
@@ -135,30 +135,30 @@ cargo build --release
 Add the rules from [`extras/hyprland.lua`](extras/hyprland.lua) to `~/.config/hypr/hyprland.lua`:
 
 ```lua
-local vinculum = [[^(ch\.giosuel\.Vinculum)$]]
-hl.window_rule({ match = { class = vinculum, title = "^(Vinculum)$" }, float = true, size = "1040 680", center = true })
-hl.window_rule({ match = { class = vinculum, title = "^(Vinculum quick)$" }, float = true, pin = true,
+local lituus = [[^(ch\.giosuel\.Lituus)$]]
+hl.window_rule({ match = { class = lituus, title = "^(Lituus)$" }, float = true, size = "1040 680", center = true })
+hl.window_rule({ match = { class = lituus, title = "^(Lituus quick)$" }, float = true, pin = true,
     size = { 380, 560 }, move = { "monitor_w-window_w-12", "52" } })   -- the quick popup, top right
 
-hl.on("hyprland.start", function() hl.exec_cmd("vinculum --background") end)
-hl.bind("SUPER + N", hl.dsp.exec_cmd("vinculum"))                     -- open the window
-hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("vinculum --quick"))     -- the quick popup
-hl.bind("XF86WLAN", hl.dsp.exec_cmd("vinculum --toggle-wifi"))        -- the Wi-Fi key
+hl.on("hyprland.start", function() hl.exec_cmd("lituus --background") end)
+hl.bind("SUPER + N", hl.dsp.exec_cmd("lituus"))                     -- open the window
+hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("lituus --quick"))     -- the quick popup
+hl.bind("XF86WLAN", hl.dsp.exec_cmd("lituus --toggle-wifi"))        -- the Wi-Fi key
 ```
 
 **The tray icon** shows up in Waybar's `tray` module (and any other StatusNotifierItem tray) while
-Vinculum runs: right-click for the menu, left-click for the quick popup. With a tray, closing the
-window keeps Vinculum running there; both can be turned off in Settings.
+Lituus runs: right-click for the menu, left-click for the quick popup. With a tray, closing the
+window keeps Lituus running there; both can be turned off in Settings.
 
 > [!TIP]
 > Still on `hyprland.conf` (Hyprland 0.54 or older, or not migrated yet)? Use [`extras/hyprland.conf`](extras/hyprland.conf) instead. It also has the rule syntax for Hyprland older than 0.53.
 
 **Why the background mode?** Passwords you keep "for me only" live in your keyring, and
-NetworkManager asks Vinculum for them whenever it connects, including right after you log in.
-`vinculum --background` runs without a window until then; `vinculum` opens the window of the one
+NetworkManager asks Lituus for them whenever it connects, including right after you log in.
+`lituus --background` runs without a window until then; `lituus` opens the window of the one
 that's already running, and closing the window leaves it running.
 
-When you join a network, Vinculum asks where to keep its password:
+When you join a network, Lituus asks where to keep its password:
 
 - **For me only** (the default): in your keyring (GNOME Keyring, KeePassXC or anything else that
   speaks the Secret Service, or KWallet), and the connection is yours alone. No admin password
@@ -183,17 +183,17 @@ When you join a network, Vinculum asks where to keep its password:
 
 | Command | |
 |---|---|
-| `vinculum` | Open the window (of the running one, if there is one) |
-| `vinculum --background` | Start without a window, for login |
-| `vinculum --quick` | Show the quick popup, or hide it (for a bar's `on-click` or a keybind) |
-| `vinculum --toggle-wifi` | Turn Wi-Fi on or off |
-| `vinculum --version` | The version |
+| `lituus` | Open the window (of the running one, if there is one) |
+| `lituus --background` | Start without a window, for login |
+| `lituus --quick` | Show the quick popup, or hide it (for a bar's `on-click` or a keybind) |
+| `lituus --toggle-wifi` | Turn Wi-Fi on or off |
+| `lituus --version` | The version |
 
 </details>
 
 ## 🎨 Colours
 
-Vinculum takes its colours from the first usable source in `~/.config/vinculum/config.toml`, and
+Lituus takes its colours from the first usable source in `~/.config/lituus/config.toml`, and
 recolours itself when that file changes, so it follows your wallpaper. Without a config file it
 uses these two, then its built-in theme:
 
@@ -202,7 +202,7 @@ uses these two, then its built-in theme:
 builtin = "auto"   # or "dark" / "light": used when no source is usable
 
 [[theme.sources]]
-path = "~/.config/vinculum/colors.json"
+path = "~/.config/lituus/colors.json"
 
 [[theme.sources]]
 path = "~/.config/ml4w/colors/colors.json"   # ML4W writes matugen's colours here
@@ -216,7 +216,7 @@ The Settings page writes the rest of the file (and keeps your comments in it):
 ```toml
 [tray]
 enabled = true        # the tray icon
-keep_running = true   # closing the window keeps Vinculum in the tray
+keep_running = true   # closing the window keeps Lituus in the tray
 
 [notifications]
 enabled = true        # connected, disconnected and failed, while the window is closed
@@ -231,16 +231,16 @@ scripts/test.sh
 runs every test, including the ones against a mock NetworkManager (python-dbusmock on a private
 bus, so the real one is never touched). It needs `dbus-daemon` and python-dbusmock
 (`apt install python3-dbusmock`, or `pip install python-dbusmock` in a venv with
-`VINCULUM_PYTHON` pointing at its `python`), and fails rather than skipping them when they're
+`LITUUS_PYTHON` pointing at its `python`), and fails rather than skipping them when they're
 missing. With `gnome-keyring` installed, the keyring tests also run against a real one on a
 private bus.
 
 `scripts/mock-nm.sh COMMAND` runs any command against the same mock, filled with the networks from
-the mockups, for example the debug tool that prints what Vinculum reads from NetworkManager:
+the mockups, for example the debug tool that prints what Lituus reads from NetworkManager:
 
 ```sh
-cargo build -p vinculum-cli
-scripts/mock-nm.sh target/debug/vinculum-cli list   # or: target/debug/vinculum-cli list, for the real one
+cargo build -p lituus-cli
+scripts/mock-nm.sh target/debug/lituus-cli list   # or: target/debug/lituus-cli list, for the real one
 ```
 
 ### Versions

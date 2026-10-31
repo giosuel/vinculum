@@ -2,7 +2,7 @@
 //! and airplane mode. Their rows use the main window's row IDs, so picking one runs the same
 //! action as the list does (a password dialog for a new secured network, and so on).
 
-use vinculum_nm::{ActiveState, ConnectionKind, DeviceKind, Snapshot};
+use lituus_nm::{ActiveState, ConnectionKind, DeviceKind, Snapshot};
 
 use crate::view;
 
@@ -95,7 +95,7 @@ pub fn build(snap: Option<&Snapshot>) -> Quick {
                 id: view::network_id(&n),
                 name: n.name(),
                 meta: format!("{what}{bands}"),
-                bars: vinculum_nm::bars(n.strength()),
+                bars: lituus_nm::bars(n.strength()),
                 active: n.active,
                 connecting: n.active && connecting,
             });

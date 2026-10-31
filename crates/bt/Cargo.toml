@@ -1,5 +1,5 @@
 [package]
-name = "vinculum-bt"
+name = "lituus-bt"
 description = "BlueZ over D-Bus: adapters, devices and the pairing agent"
 version.workspace = true
 edition.workspace = true

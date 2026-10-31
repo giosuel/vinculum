@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use vinculum_nm::Settings;
+use lituus_nm::Settings;
 use zbus::zvariant::{OwnedValue, Value};
 
 /// What kind of connection is edited, which decides the tabs.

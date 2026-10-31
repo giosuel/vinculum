@@ -4931,7 +4931,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "vinculum"
+name = "lituus"
 version = "0.0.0-dev"
 dependencies = [
  "base64",
@@ -4950,15 +4950,15 @@ dependencies = [
  "tokio",
  "toml",
  "toml_edit",
- "vinculum-bt",
- "vinculum-keyring",
- "vinculum-nm",
+ "lituus-bt",
+ "lituus-keyring",
+ "lituus-nm",
  "x25519-dalek",
  "zbus",
 ]
 
 [[package]]
-name = "vinculum-bt"
+name = "lituus-bt"
 version = "0.0.0-dev"
 dependencies = [
  "futures-util",
@@ -4969,17 +4969,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "vinculum-cli"
+name = "lituus-cli"
 version = "0.0.0-dev"
 dependencies = [
  "clap",
  "futures-util",
  "tokio",
- "vinculum-nm",
+ "lituus-nm",
 ]
 
 [[package]]
-name = "vinculum-keyring"
+name = "lituus-keyring"
 version = "0.0.0-dev"
 dependencies = [
  "futures-util",
@@ -4990,7 +4990,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vinculum-nm"
+name = "lituus-nm"
 version = "0.0.0-dev"
 dependencies = [
  "futures-util",

@@ -1,4 +1,4 @@
-# Vinculum for Nix, built from a source tree (the flake passes this checkout).
+# Lituus for Nix, built from a source tree (the flake passes this checkout).
 {
   lib,
   rustPlatform,
@@ -26,7 +26,7 @@ let
   ];
 in
 rustPlatform.buildRustPackage {
-  pname = "vinculum";
+  pname = "lituus";
   inherit src version;
 
   cargoLock.lockFile = ../../Cargo.lock;
@@ -44,38 +44,38 @@ rustPlatform.buildRustPackage {
 
   cargoBuildFlags = [
     "-p"
-    "vinculum"
+    "lituus"
   ];
   # The unit tests; the integration tests need D-Bus mocks of NetworkManager and BlueZ, and a
   # keyring.
   cargoTestFlags = [
     "-p"
-    "vinculum"
+    "lituus"
     "-p"
-    "vinculum-nm"
+    "lituus-nm"
     "-p"
-    "vinculum-bt"
+    "lituus-bt"
     "-p"
-    "vinculum-keyring"
+    "lituus-keyring"
     "--lib"
     "--bins"
   ];
 
   postInstall = ''
-    install -Dm644 packaging/linux/ch.giosuel.Vinculum.desktop -t $out/share/applications
-    install -Dm644 packaging/linux/ch.giosuel.Vinculum.metainfo.xml -t $out/share/metainfo
-    install -Dm644 packaging/linux/icons/ch.giosuel.Vinculum.svg -t $out/share/icons/hicolor/scalable/apps
+    install -Dm644 packaging/linux/ch.giosuel.Lituus.desktop -t $out/share/applications
+    install -Dm644 packaging/linux/ch.giosuel.Lituus.metainfo.xml -t $out/share/metainfo
+    install -Dm644 packaging/linux/icons/ch.giosuel.Lituus.svg -t $out/share/icons/hicolor/scalable/apps
   '';
 
   postFixup = ''
-    patchelf --add-rpath ${lib.makeLibraryPath runtimeLibs} $out/bin/vinculum
+    patchelf --add-rpath ${lib.makeLibraryPath runtimeLibs} $out/bin/lituus
   '';
 
   meta = {
     description = "Manage Wi-Fi, wired and VPN connections on Linux desktops";
-    homepage = "https://vinculum.giosuel.ch/";
+    homepage = "https://lituus.giosuel.ch/";
     license = lib.licenses.agpl3Plus;
-    mainProgram = "vinculum";
+    mainProgram = "lituus";
     platforms = lib.platforms.linux;
   };
 }

@@ -7,7 +7,7 @@ version = "0.0.0-dev"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 authors = ["giosuel <me@giosuel.ch>"]
-repository = "https://github.com/giosuel/vinculum"
+repository = "https://github.com/giosuel/lituus"
 publish = false
 
 [workspace.dependencies]
@@ -23,9 +23,9 @@ futures-util = { version = "0.3.34", default-features = false, features = ["std"
 serde = "1.0.229"
 thiserror = "2.0.21"
 tokio = "1.53.2"
-vinculum-bt = { path = "crates/bt" }
-vinculum-keyring = { path = "crates/keyring" }
-vinculum-nm = { path = "crates/nm" }
+lituus-bt = { path = "crates/bt" }
+lituus-keyring = { path = "crates/keyring" }
+lituus-nm = { path = "crates/nm" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 slint-build = "1.18.1"
 toml = "1.1.6"

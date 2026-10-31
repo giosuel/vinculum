@@ -1,4 +1,4 @@
-"""A python-dbusmock template for kwalletd6: the part of org.kde.KWallet that Vinculum uses,
+"""A python-dbusmock template for kwalletd6: the part of org.kde.KWallet that Lituus uses,
 with passwords kept in memory. The wallet opens without a prompt and always has handle 7."""
 
 BUS_NAME = "org.kde.kwalletd6"

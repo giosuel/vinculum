@@ -1,10 +1,10 @@
 {
-  "name": "vinculum-website",
+  "name": "lituus-website",
   "private": true,
   "version": "0.0.1",
   "license": "AGPL-3.0-or-later",
   "type": "module",
-  "description": "Vinculum website: landing page, installing, guides and developer documentation.",
+  "description": "Lituus website: landing page, installing, guides and developer documentation.",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",

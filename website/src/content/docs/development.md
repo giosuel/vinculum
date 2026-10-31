@@ -7,7 +7,7 @@ The repository is a Cargo workspace:
 
 | Path | What it is |
 |---|---|
-| `crates/app` | the Slint app, binary `vinculum` |
+| `crates/app` | the Slint app, binary `lituus` |
 | `crates/nm` | NetworkManager over D-Bus: the model, its change stream and the secret agent; no UI |
 | `crates/bt` | BlueZ over D-Bus: adapters and devices, their change stream and the pairing agent; no UI |
 | `xtask` | repository tooling (`cargo xtask dep-age`) |
@@ -61,7 +61,7 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
    `.rpm` and AppImage.
 2. It publishes them with a `SHA256SUMS` as a GitHub release. The notes are the tag message,
    followed by the list of merged PRs.
-3. For stable tags, it pushes the `vinculum` and `vinculum-bin` AUR packages.
+3. For stable tags, it pushes the `lituus` and `lituus-bin` AUR packages.
 
 A tag with a `-` (`v0.2.0-rc.1`) is a pre-release and isn't pushed to the AUR. Tag with a message,
 which becomes the release notes:

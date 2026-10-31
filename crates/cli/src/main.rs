@@ -1,14 +1,14 @@
-//! `vinculum-cli`: prints what Vinculum reads from NetworkManager, to check the `vinculum-nm`
+//! `lituus-cli`: prints what Lituus reads from NetworkManager, to check the `lituus-nm`
 //! crate against a real system. Not shipped in the packages.
 
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
-use vinculum_nm::{Client, ConnectionKind, Device, DeviceKind, Snapshot, bars, channel};
+use lituus_nm::{Client, ConnectionKind, Device, DeviceKind, Snapshot, bars, channel};
 
 #[derive(Parser)]
-#[command(name = "vinculum-cli", version = env!("CARGO_PKG_VERSION"), about = "What Vinculum sees from NetworkManager")]
+#[command(name = "lituus-cli", version = env!("CARGO_PKG_VERSION"), about = "What Lituus sees from NetworkManager")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -28,13 +28,13 @@ async fn main() -> ExitCode {
     match run(cli.command).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("vinculum-cli: {error}");
+            eprintln!("lituus-cli: {error}");
             ExitCode::FAILURE
         }
     }
 }
 
-async fn run(command: Command) -> Result<(), vinculum_nm::Error> {
+async fn run(command: Command) -> Result<(), lituus_nm::Error> {
     let client = Client::system().await?;
     match command {
         Command::List => print!("{}", render(&client.snapshot().await?)),
@@ -43,7 +43,7 @@ async fn run(command: Command) -> Result<(), vinculum_nm::Error> {
             while let Some(snapshot) = snapshots.next().await {
                 match snapshot {
                     Ok(snapshot) => print!("\x1b[2J\x1b[H{}", render(&snapshot)),
-                    Err(error) => println!("\x1b[2J\x1b[Hvinculum-cli: {error}"),
+                    Err(error) => println!("\x1b[2J\x1b[Hlituus-cli: {error}"),
                 }
             }
         }

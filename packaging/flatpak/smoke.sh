@@ -13,11 +13,11 @@ SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
 WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')
 export SWAYSOCK WAYLAND_DISPLAY
 # Its log (portal and GPU warnings, in a container without either) is shown only on failure.
-flatpak run ch.giosuel.Vinculum >/tmp/app.log 2>&1 &
+flatpak run ch.giosuel.Lituus >/tmp/app.log 2>&1 &
 app=$!
 for _ in $(seq 100); do
-  swaymsg -t get_tree | grep -q '"app_id": *"ch.giosuel.Vinculum"' && break
+  swaymsg -t get_tree | grep -q '"app_id": *"ch.giosuel.Lituus"' && break
   sleep 0.2
 done
-swaymsg -t get_tree | grep -q '"app_id": *"ch.giosuel.Vinculum"' || { echo "error: no window" >&2; tail -20 /tmp/app.log /tmp/sway.log; exit 1; }
-echo "Window open: $(swaymsg -t get_tree | grep -o '"name": *"Vinculum[^"]*"' | head -1)"
+swaymsg -t get_tree | grep -q '"app_id": *"ch.giosuel.Lituus"' || { echo "error: no window" >&2; tail -20 /tmp/app.log /tmp/sway.log; exit 1; }
+echo "Window open: $(swaymsg -t get_tree | grep -o '"name": *"Lituus[^"]*"' | head -1)"

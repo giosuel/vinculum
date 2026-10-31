@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Packs the release binary as an AppImage for this machine's architecture:
-#   packaging/linux/build-appimage.sh   →   target/dist/Vinculum-<version>-<x86_64|aarch64>.AppImage
+#   packaging/linux/build-appimage.sh   →   target/dist/Lituus-<version>-<x86_64|aarch64>.AppImage
 #
 # An AppImage only runs where glibc is at least as new as on the build machine, so the release
 # workflow runs this on Debian 12: the result runs on Debian 12, Ubuntu 22.04 and later.
@@ -17,7 +17,7 @@ case "$arch" in
   *) echo "build-appimage.sh: no linuxdeploy for $arch" >&2; exit 1 ;;
 esac
 
-cargo build --release --locked -p vinculum
+cargo build --release --locked -p lituus
 target_dir=$(cargo metadata --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
 
@@ -33,22 +33,22 @@ if [ ! -x "$linuxdeploy" ]; then
   mv "$linuxdeploy.part" "$linuxdeploy"
 fi
 
-appdir="$target_dir/appimage/Vinculum.AppDir"
+appdir="$target_dir/appimage/Lituus.AppDir"
 rm -rf "$appdir"
-install -Dm755 "$target_dir/release/vinculum" "$appdir/usr/bin/vinculum"
-install -Dm644 packaging/linux/ch.giosuel.Vinculum.desktop -t "$appdir/usr/share/applications"
-install -Dm644 packaging/linux/ch.giosuel.Vinculum.metainfo.xml -t "$appdir/usr/share/metainfo"
-install -Dm644 packaging/linux/icons/ch.giosuel.Vinculum.svg -t "$appdir/usr/share/icons/hicolor/scalable/apps"
-install -Dm644 crates/app/ui/fonts/*-LICENSE.txt -t "$appdir/usr/share/licenses/vinculum"
+install -Dm755 "$target_dir/release/lituus" "$appdir/usr/bin/lituus"
+install -Dm644 packaging/linux/ch.giosuel.Lituus.desktop -t "$appdir/usr/share/applications"
+install -Dm644 packaging/linux/ch.giosuel.Lituus.metainfo.xml -t "$appdir/usr/share/metainfo"
+install -Dm644 packaging/linux/icons/ch.giosuel.Lituus.svg -t "$appdir/usr/share/icons/hicolor/scalable/apps"
+install -Dm644 crates/app/ui/fonts/*-LICENSE.txt -t "$appdir/usr/share/licenses/lituus"
 
 mkdir -p target/dist
-out="$PWD/target/dist/Vinculum-$version-$arch.AppImage"
+out="$PWD/target/dist/Lituus-$version-$arch.AppImage"
 rm -f "$out"
 # Without FUSE: containers and CI runners often lack it.
 export APPIMAGE_EXTRACT_AND_RUN=1
 export LDAI_OUTPUT="$out" OUTPUT="$out"
 "$linuxdeploy" --appdir "$appdir" \
-  --desktop-file "$appdir/usr/share/applications/ch.giosuel.Vinculum.desktop" \
-  --icon-file "$appdir/usr/share/icons/hicolor/scalable/apps/ch.giosuel.Vinculum.svg" \
+  --desktop-file "$appdir/usr/share/applications/ch.giosuel.Lituus.desktop" \
+  --icon-file "$appdir/usr/share/icons/hicolor/scalable/apps/ch.giosuel.Lituus.svg" \
   --output appimage
 echo "$out"

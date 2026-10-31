@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use vinculum_nm::Settings;
+use lituus_nm::Settings;
 use zbus::zvariant::{OwnedValue, Value};
 
 /// `802-11-wireless.band` by the Band choice: automatic, 2.4 GHz, 5 GHz.

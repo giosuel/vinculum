@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn first_usable_source_wins() {
-        let dir = std::env::temp_dir().join(format!("vinculum-theme-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lituus-theme-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let broken = dir.join("broken.json");
         std::fs::write(&broken, "{ not json").unwrap();
