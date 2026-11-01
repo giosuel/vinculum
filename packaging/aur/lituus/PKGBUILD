@@ -2,7 +2,7 @@
 pkgname=lituus
 pkgver=0.1.0
 pkgrel=1
-pkgdesc='Manage Wi-Fi, wired and VPN connections (NetworkManager GUI)'
+pkgdesc='Settings for Hyprland: network, Bluetooth, sound and displays'
 arch=('x86_64' 'aarch64')
 url='https://github.com/giosuel/lituus'
 license=('AGPL-3.0-or-later' 'OFL-1.1')
@@ -10,9 +10,10 @@ license=('AGPL-3.0-or-later' 'OFL-1.1')
 depends=('fontconfig' 'glibc' 'hicolor-icon-theme' 'libgcc' 'libglvnd' 'libx11' 'libxcursor' 'libxi'
          'libxkbcommon' 'libxkbcommon-x11' 'libxrandr' 'networkmanager' 'wayland')
 optdepends=('networkmanager-openvpn: OpenVPN connections'
-            'bluez: Bluetooth'
-            'pipewire-pulse: Bluetooth audio profiles'
-            'xdg-desktop-portal: file dialogs for certificates and VPN files'
+            'bluez: Bluetooth, and files over Bluetooth (its obexd)'
+            'pipewire-pulse: the Sound page and Bluetooth audio profiles'
+            'hyprland: the Displays page'
+            'xdg-desktop-portal: file dialogs (certificates, VPN files, files to send)'
             'gnome-keyring: passwords kept "for me only" (or KWallet)')
 makedepends=('cargo')
 options=('!debug')

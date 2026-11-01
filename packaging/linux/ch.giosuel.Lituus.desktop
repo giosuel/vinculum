@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Lituus
-GenericName=Network Manager
-Comment=Manage Wi-Fi, wired and VPN connections
+GenericName=Settings
+Comment=Network, Bluetooth, sound and displays for Hyprland and other desktops
 Exec=lituus
 Icon=ch.giosuel.Lituus
 Terminal=false
 Categories=Settings;HardwareSettings;
-Keywords=wifi;wireless;network;ethernet;vpn;wireguard;networkmanager;
+Keywords=wifi;wireless;network;ethernet;vpn;wireguard;networkmanager;bluetooth;sound;audio;volume;pipewire;display;monitor;hyprland;settings;
 StartupWMClass=ch.giosuel.Lituus
