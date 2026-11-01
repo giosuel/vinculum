@@ -195,11 +195,14 @@ When you join a network, Lituus asks where to keep its password:
 
 Lituus takes its colours from the first usable source in `~/.config/lituus/config.toml`, and
 recolours itself when that file changes, so it follows your wallpaper. Without a config file it
-uses these two, then its built-in theme:
+uses these two, then its built-in theme. The Appearance page sets all of it but the sources:
 
 ```toml
 [theme]
-builtin = "auto"   # or "dark" / "light": used when no source is usable
+follow_wallpaper = true   # false: always the built-in theme
+builtin = "teal"          # or "blue", "lavender", "coral", "mono"
+mode = "auto"             # or "dark" / "light", for the built-in theme
+gradient = true           # the accent glow behind each page's hero
 
 [[theme.sources]]
 path = "~/.config/lituus/colors.json"

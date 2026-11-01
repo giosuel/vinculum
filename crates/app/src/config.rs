@@ -43,10 +43,16 @@ impl Default for NotificationsConfig {
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ThemeConfig {
+    /// Use the wallpaper's colours (the sources) when there are some.
+    pub follow_wallpaper: bool,
     /// Where colours come from, in order: the first that exists and is a usable palette wins.
     pub sources: Vec<ColourSource>,
-    /// The theme when no source is usable.
+    /// The theme when not following the wallpaper, or when no source is usable.
     pub builtin: Builtin,
+    /// Dark or light, for the built-in theme.
+    pub mode: Mode,
+    /// The accent glow behind each page's hero.
+    pub gradient: bool,
 }
 
 impl Default for ThemeConfig {
@@ -57,7 +63,10 @@ impl Default for ThemeConfig {
                 // ML4W writes every matugen colour role here on each wallpaper change.
                 ColourSource { path: "~/.config/ml4w/colors/colors.json".into() },
             ],
-            builtin: Builtin::Auto,
+            follow_wallpaper: true,
+            builtin: Builtin::Teal,
+            mode: Mode::Auto,
+            gradient: true,
         }
     }
 }
@@ -78,6 +87,17 @@ impl ColourSource {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Builtin {
+    #[default]
+    Teal,
+    Blue,
+    Lavender,
+    Coral,
+    Mono,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
     /// Dark or light, as the desktop prefers.
     #[default]
     Auto,
@@ -114,13 +134,45 @@ pub fn parse(text: &str) -> Result<Config, toml::de::Error> {
 }
 
 impl Builtin {
-    pub const ALL: [Builtin; 3] = [Builtin::Auto, Builtin::Dark, Builtin::Light];
+    pub const ALL: [Builtin; 5] = [Builtin::Teal, Builtin::Blue, Builtin::Lavender, Builtin::Coral, Builtin::Mono];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Teal => "teal",
+            Self::Blue => "blue",
+            Self::Lavender => "lavender",
+            Self::Coral => "coral",
+            Self::Mono => "mono",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Teal => "Teal",
+            Self::Blue => "Blue",
+            Self::Lavender => "Lavender",
+            Self::Coral => "Coral",
+            Self::Mono => "Mono",
+        }
+    }
+}
+
+impl Mode {
+    pub const ALL: [Mode; 3] = [Mode::Auto, Mode::Dark, Mode::Light];
 
     pub fn key(self) -> &'static str {
         match self {
             Self::Auto => "auto",
             Self::Dark => "dark",
             Self::Light => "light",
+        }
+    }
+
+    pub fn dark(self, prefers_dark: bool) -> bool {
+        match self {
+            Self::Auto => prefers_dark,
+            Self::Dark => true,
+            Self::Light => false,
         }
     }
 }
@@ -171,7 +223,8 @@ mod tests {
         assert_eq!(config, Config::default());
         let paths: Vec<&str> = config.theme.sources.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(paths, ["~/.config/lituus/colors.json", "~/.config/ml4w/colors/colors.json"]);
-        assert_eq!(config.theme.builtin, Builtin::Auto);
+        assert_eq!((config.theme.builtin, config.theme.mode), (Builtin::Teal, Mode::Auto));
+        assert!(config.theme.follow_wallpaper && config.theme.gradient);
     }
 
     #[test]
@@ -179,7 +232,9 @@ mod tests {
         let config = parse(
             r#"
             [theme]
-            builtin = "light"
+            builtin = "coral"
+            mode = "light"
+            follow_wallpaper = false
             [[theme.sources]]
             path = "~/wal.json"
             [[theme.sources]]
@@ -189,23 +244,25 @@ mod tests {
         .unwrap();
         let paths: Vec<&str> = config.theme.sources.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(paths, ["~/wal.json", "/etc/colors.json"]);
-        assert_eq!(config.theme.builtin, Builtin::Light);
+        assert_eq!((config.theme.builtin, config.theme.mode), (Builtin::Coral, Mode::Light));
+        assert!(!config.theme.follow_wallpaper);
     }
 
     #[test]
     fn settings_keep_the_rest_of_the_file() {
-        let text = "# my colours\n[theme]\nbuiltin = \"dark\" # night owl\n";
+        let text = "# my colours\n[theme]\nmode = \"dark\" # night owl\n";
         let text = with(text, "tray", "keep_running", false).unwrap();
-        let text = with(&text, "theme", "builtin", "light").unwrap();
-        assert_eq!(text, "# my colours\n[theme]\nbuiltin = \"light\" # night owl\n\n[tray]\nkeep_running = false\n");
+        let text = with(&text, "theme", "mode", "light").unwrap();
+        assert_eq!(text, "# my colours\n[theme]\nmode = \"light\" # night owl\n\n[tray]\nkeep_running = false\n");
         let config = parse(&text).unwrap();
-        assert_eq!(config.theme.builtin, Builtin::Light);
+        assert_eq!(config.theme.mode, Mode::Light);
         assert!(config.tray.enabled && !config.tray.keep_running && config.notifications.enabled);
     }
 
     #[test]
     fn typos_are_errors_not_silently_ignored() {
         assert!(parse("[theme]\nbuiltn = \"dark\"").is_err());
-        assert!(parse("[theme]\nbuiltin = \"blue\"").is_err());
+        assert!(parse("[theme]\nbuiltin = \"purple\"").is_err());
+        assert!(parse("[theme]\nmode = \"dim\"").is_err());
     }
 }

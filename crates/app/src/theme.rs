@@ -73,78 +73,123 @@ palette!(
     warn_bg,
     warn_border,
     warn_text,
+    glow,
 );
 
 const AMBER_DARK: (Rgb, Rgb, Rgb) = (Rgb::hex(0x2a2518), Rgb::hex(0x5a4c25), Rgb::hex(0xe9cf8f));
+const AMBER_LIGHT: (Rgb, Rgb, Rgb) = (Rgb::hex(0xfbf4e3), Rgb::hex(0xe8d49b), Rgb::hex(0x6b5410));
 
-pub const DARK: Palette = Palette {
-    bg: Rgb::hex(0x111315),
-    panel: Rgb::hex(0x17191c),
-    surface: Rgb::hex(0x1b1e21),
-    border: Rgb::hex(0x262a2f),
-    border2: Rgb::hex(0x2a2e33),
-    ctrl_border: Rgb::hex(0x353a40),
-    ctrl_bg: Rgb::hex(0x23272b),
-    input_bg: Rgb::hex(0x1f2226),
-    text: Rgb::hex(0xe8eaed),
-    muted: Rgb::hex(0xa0a7af),
-    faint: Rgb::hex(0x8b929a),
-    icon_soft: Rgb::hex(0xc9ced4),
-    accent: Rgb::hex(0x5cc8b0),
-    on_accent: Rgb::hex(0x0c1513),
-    accent_soft_bg: Rgb::hex(0x1f2a27),
-    accent_soft_border: Rgb::hex(0x2c4a42),
-    off_track: Rgb::hex(0x3a3f46),
-    knob_off: Rgb::hex(0xc9ced4),
-    bar_off: Rgb::hex(0x3a3f46),
-    sel_bg: Rgb::hex(0x23272b),
-    danger: Rgb::hex(0xf08a7a),
-    warn_bg: AMBER_DARK.0,
-    warn_border: AMBER_DARK.1,
-    warn_text: AMBER_DARK.2,
-};
+/// The Material roles a palette is made from, in the order of the tables below.
+const ROLES: [&str; 15] = [
+    "surface",
+    "surface_container_lowest",
+    "surface_container_low",
+    "surface_container",
+    "surface_container_high",
+    "surface_container_highest",
+    "on_surface",
+    "on_surface_variant",
+    "outline",
+    "outline_variant",
+    "primary",
+    "on_primary",
+    "primary_container",
+    "secondary_container",
+    "error",
+];
 
-pub const LIGHT: Palette = Palette {
-    bg: Rgb::hex(0xeef0f2),
-    panel: Rgb::hex(0xf7f8f9),
-    surface: Rgb::hex(0xffffff),
-    border: Rgb::hex(0xdde1e5),
-    border2: Rgb::hex(0xe3e6ea),
-    ctrl_border: Rgb::hex(0xcfd4da),
-    ctrl_bg: Rgb::hex(0xffffff),
-    input_bg: Rgb::hex(0xffffff),
-    text: Rgb::hex(0x1a1c1f),
-    muted: Rgb::hex(0x535a62),
-    faint: Rgb::hex(0x5f666e),
-    icon_soft: Rgb::hex(0x3d434a),
-    accent: Rgb::hex(0x0b7a66),
-    on_accent: Rgb::hex(0xffffff),
-    accent_soft_bg: Rgb::hex(0xe3f3ef),
-    accent_soft_border: Rgb::hex(0xa9d9cc),
-    off_track: Rgb::hex(0xc3c9cf),
-    knob_off: Rgb::hex(0xffffff),
-    bar_off: Rgb::hex(0xc9ced4),
-    sel_bg: Rgb::hex(0xeceef0),
-    danger: Rgb::hex(0xb3261e),
-    warn_bg: Rgb::hex(0xfbf4e3),
-    warn_border: Rgb::hex(0xe8d49b),
-    warn_text: Rgb::hex(0x6b5410),
-};
+/// The built-in themes as Material roles, so they go through the same mapping as matugen's.
+/// Made with a tonal palette per hue (CIELCh, tone = L*), as matugen does; Blue dark is the
+/// owner's ML4W palette from the mockups.
+const BUILTIN_ROLES: [(&str, [&str; 15]); 10] = [
+    (
+        "teal-dark",
+        [
+            "#0c1513", "#05100d", "#161d1b", "#1a211f", "#242c29", "#2e3634", "#dae5e2", "#b7cbc5", "#82958f",
+            "#394a45", "#64dabf", "#00382d", "#005142", "#284d44", "#ffb4ab",
+        ],
+    ),
+    (
+        "teal-light",
+        [
+            "#f1fcf8", "#ffffff", "#ebf6f3", "#e6f0ed", "#e0eae7", "#dae5e2", "#161d1b", "#394a45", "#5c6e69",
+            "#b7cbc5", "#036b59", "#ffffff", "#82f7da", "#c1ebdf", "#ba1a1a",
+        ],
+    ),
+    (
+        "blue-dark",
+        [
+            "#101418", "#0b0e12", "#191c20", "#1d2024", "#272a2f", "#32353a", "#e0e2e8", "#c2c7cf", "#8c9199",
+            "#42474e", "#9ecafc", "#003256", "#164974", "#3b4857", "#ffb4ab",
+        ],
+    ),
+    (
+        "blue-light",
+        [
+            "#f5faff", "#ffffff", "#eef4fb", "#e8eff5", "#e2e9ef", "#dde3ea", "#171c21", "#3c4852", "#606c77",
+            "#bbc8d5", "#09658f", "#ffffff", "#cbe6fe", "#cbe6fe", "#ba1a1a",
+        ],
+    ),
+    (
+        "lavender-dark",
+        [
+            "#151218", "#100d14", "#1d1b20", "#211f24", "#2b292f", "#363439", "#e4e1e9", "#cac4d3", "#948e9c",
+            "#494551", "#d2bbff", "#352661", "#4e3c7a", "#4b435b", "#ffb4ab",
+        ],
+    ),
+    (
+        "lavender-light",
+        [
+            "#fbf8fe", "#ffffff", "#f5f2fa", "#efedf4", "#eae7ee", "#e4e1e9", "#1d1b20", "#494551", "#6d6875",
+            "#cac4d3", "#675394", "#ffffff", "#e9ddff", "#e9defb", "#ba1a1a",
+        ],
+    ),
+    (
+        "coral-dark",
+        [
+            "#1a1110", "#160c09", "#211a18", "#251e1c", "#302827", "#3b3331", "#ebe0de", "#d6c2be", "#a08c89",
+            "#544340", "#ffb4a7", "#6a0002", "#8e1213", "#5f3f39", "#ffb4ab",
+        ],
+    ),
+    (
+        "coral-light",
+        [
+            "#fef8f7", "#ffffff", "#fcf1ef", "#f6ece9", "#f1e6e4", "#ebe0de", "#211a18", "#544340", "#796763",
+            "#d6c2be", "#ac3229", "#ffffff", "#ffdad4", "#ffdad4", "#ba1a1a",
+        ],
+    ),
+    (
+        "mono-dark",
+        [
+            "#131313", "#0e0e0e", "#1b1b1b", "#1f1f1f", "#2a2a2a", "#353535", "#e2e2e2", "#c6c6c6", "#919191",
+            "#474747", "#e2e2e2", "#1b1b1b", "#474747", "#424242", "#ffb4ab",
+        ],
+    ),
+    (
+        "mono-light",
+        [
+            "#f9f9f9", "#ffffff", "#f3f3f3", "#eeeeee", "#e8e8e8", "#e2e2e2", "#1b1b1b", "#474747", "#6a6a6a",
+            "#c6c6c6", "#303030", "#ffffff", "#d4d4d4", "#dddddd", "#ba1a1a",
+        ],
+    ),
+];
 
 impl Palette {
-    pub fn builtin(builtin: Builtin, prefers_dark: bool) -> Self {
-        match builtin {
-            Builtin::Dark => DARK,
-            Builtin::Light => LIGHT,
-            Builtin::Auto if prefers_dark => DARK,
-            Builtin::Auto => LIGHT,
-        }
+    pub fn builtin(builtin: Builtin, dark: bool) -> Self {
+        let key = format!("{}-{}", builtin.key(), if dark { "dark" } else { "light" });
+        let (_, values) = BUILTIN_ROLES.iter().find(|(k, _)| *k == key).expect("every built-in theme has both modes");
+        let roles: HashMap<String, String> =
+            ROLES.iter().zip(values).map(|(r, v)| ((*r).to_owned(), (*v).to_owned())).collect();
+        Self::from_material(&roles).expect("the built-in themes are readable")
     }
 
     /// From matugen's Material colour roles (as in ML4W's colors.json). `None` if a role is
     /// missing or the result isn't readable (text below 4.5:1 on its background).
     pub fn from_material(roles: &HashMap<String, String>) -> Option<Self> {
         let role = |name: &str| roles.get(name).and_then(|hex| Rgb::parse(hex));
+        // Warnings keep their amber, a dark or a light one to suit the surface.
+        let dark = role("surface")?.luminance() < 0.2;
+        let amber = if dark { AMBER_DARK } else { AMBER_LIGHT };
         let palette = Self {
             bg: role("surface")?,
             panel: role("surface_container_low")?,
@@ -167,9 +212,10 @@ impl Palette {
             bar_off: role("outline_variant")?,
             sel_bg: role("surface_container_high")?,
             danger: role("error")?,
-            warn_bg: AMBER_DARK.0,
-            warn_border: AMBER_DARK.1,
-            warn_text: AMBER_DARK.2,
+            warn_bg: amber.0,
+            warn_border: amber.1,
+            warn_text: amber.2,
+            glow: mix(role("surface_container")?, role("primary_container")?, if dark { 0.45 } else { 0.85 }),
         };
         palette.readable().then_some(palette)
     }
@@ -178,6 +224,12 @@ impl Palette {
         [self.bg, self.panel, self.surface].iter().all(|&bg| self.text.contrast(bg) >= 4.5)
             && self.on_accent.contrast(self.accent) >= 4.5
     }
+}
+
+/// `a` moved towards `b` by `f` (0–1).
+fn mix(a: Rgb, b: Rgb, f: f64) -> Rgb {
+    let m = |x: u8, y: u8| (f64::from(x) * (1.0 - f) + f64::from(y) * f).round() as u8;
+    Rgb(m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
 }
 
 /// What a colour source gave.
@@ -199,22 +251,24 @@ pub fn read_source(path: &Path) -> SourceStatus {
     Palette::from_material(&roles).map_or(SourceStatus::Unusable, SourceStatus::Used)
 }
 
-/// Each source's status, in order, and the palette of the first usable one (`None`: built-in).
-pub fn resolve(sources: &[ColourSource]) -> (Vec<SourceStatus>, Option<Palette>) {
+/// Each source's status, in order, and the palette of the first usable one; `None` (the
+/// built-in theme) when there's none, or when following the wallpaper is off.
+pub fn resolve(sources: &[ColourSource], follow: bool) -> (Vec<SourceStatus>, Option<Palette>) {
     let statuses: Vec<SourceStatus> = sources.iter().map(|s| read_source(&s.resolved())).collect();
     let palette = statuses.iter().find_map(|s| match s {
         SourceStatus::Used(p) => Some(*p),
         _ => None,
     });
-    (statuses, palette)
+    (statuses, palette.filter(|_| follow))
 }
 
-/// Why the built-in theme choice doesn't apply: the colour source in use, if there is one.
-pub fn builtin_note(sources: &[ColourSource], statuses: &[SourceStatus]) -> String {
-    let used = sources.iter().zip(statuses).find(|(_, s)| matches!(s, SourceStatus::Used(_)));
-    let Some((source, _)) = used else { return String::new() };
-    let what = if source.path.contains("ml4w") { "Your ML4W colours are" } else { "Your colour file is" };
-    format!("{what} in use. The built-in theme applies when no colour source is found.")
+/// Why the built-in themes are greyed out: wallpaper colours are in use. Empty when they aren't.
+pub fn builtin_note(follow: bool, statuses: &[SourceStatus]) -> String {
+    if follow && statuses.iter().any(|s| matches!(s, SourceStatus::Used(_))) {
+        "Wallpaper colours are in use. Turn off Follow wallpaper to pick one.".to_owned()
+    } else {
+        String::new()
+    }
 }
 
 #[cfg(test)]
@@ -222,13 +276,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_built_in_theme_is_greyed_out_while_a_colour_source_is_in_use() {
-        let sources = crate::config::ThemeConfig::default().sources;
+    fn the_built_in_themes_are_greyed_out_while_wallpaper_colours_are_in_use() {
         let used = SourceStatus::Used(Palette::from_material(&blue()).unwrap());
-        assert_eq!(builtin_note(&sources, &[SourceStatus::Missing, SourceStatus::Missing]), "");
-        let note = builtin_note(&sources, &[SourceStatus::Missing, used.clone()]);
-        assert!(note.starts_with("Your ML4W colours are in use."), "{note}");
-        assert!(builtin_note(&sources, &[used, SourceStatus::Missing]).starts_with("Your colour file is"));
+        assert_eq!(builtin_note(true, &[SourceStatus::Missing, SourceStatus::Missing]), "");
+        assert!(
+            builtin_note(true, &[SourceStatus::Missing, used.clone()]).starts_with("Wallpaper colours are in use.")
+        );
+        assert_eq!(builtin_note(false, &[used]), "");
     }
 
     /// The owner's blue ML4W palette from the mockups.
@@ -277,7 +331,7 @@ mod tests {
         assert_eq!(p.accent_soft_bg, Rgb::parse("#3b4857").unwrap());
         assert_eq!(p.danger, Rgb::parse("#ffb4ab").unwrap());
         // Warnings stay amber whatever the wallpaper.
-        assert_eq!(p.warn_text, DARK.warn_text);
+        assert_eq!(p.warn_text, AMBER_DARK.2);
     }
 
     #[test]
@@ -292,8 +346,15 @@ mod tests {
 
     #[test]
     fn built_in_palettes_are_readable() {
-        assert!(DARK.readable());
-        assert!(LIGHT.readable());
+        for builtin in Builtin::ALL {
+            for dark in [true, false] {
+                let p = Palette::builtin(builtin, dark);
+                assert!(p.readable(), "{builtin:?} dark={dark}");
+                assert_eq!(p.bg.luminance() < 0.2, dark, "{builtin:?} dark={dark}");
+            }
+        }
+        // Blue in the dark is the owner's own palette.
+        assert_eq!(Palette::builtin(Builtin::Blue, true), Palette::from_material(&blue()).unwrap());
     }
 
     #[test]
@@ -309,7 +370,8 @@ mod tests {
             ColourSource { path: broken.display().to_string() },
             ColourSource { path: good.display().to_string() },
         ];
-        let (statuses, palette) = resolve(&sources);
+        let (statuses, palette) = resolve(&sources, true);
+        assert_eq!(resolve(&sources, false).1, None);
         assert_eq!(statuses[0], SourceStatus::Missing);
         assert_eq!(statuses[1], SourceStatus::Unusable);
         assert!(matches!(statuses[2], SourceStatus::Used(_)));
