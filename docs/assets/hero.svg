@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 330" width="840" height="330" role="img" aria-labelledby="t d">
   <title id="t">Lituus</title>
-  <desc id="d">The Lituus logo, a cube of linked nodes with signals running along its edges, beside a Lituus window where a Wi-Fi network connects.</desc>
+  <desc id="d">The Lituus logo, window tiles cut in a golden spiral with the spiral drawn through them, beside a Lituus window where a Wi-Fi network connects.</desc>
   <defs>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
       <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity=".32"/>
@@ -15,10 +15,10 @@
       @keyframes float { 0%, 100% { translate: 0 0; } 50% { translate: 0 -6px; } }
       .glow { transform-box: fill-box; transform-origin: center; animation: glow 3.5s ease-in-out infinite; }
       @keyframes glow { 0%, 100% { opacity: .55; scale: .92; } 50% { opacity: 1; scale: 1.06; } }
-      .node { animation: node 3.5s ease-in-out infinite; }
-      @keyframes node { 0%, 100% { fill: #5cc8b0; } 45% { fill: #c9f3e8; } 60% { fill: #5cc8b0; } }
-      .n1 { animation-delay: -.5s; } .n2 { animation-delay: -1s; } .n3 { animation-delay: -1.5s; }
-      .n4 { animation-delay: -2s; } .n5 { animation-delay: -2.5s; } .n6 { animation-delay: -3s; }
+      .tile { animation: tile 7s ease-in-out infinite; }
+      @keyframes tile { 0%, 100% { filter: none; } 8% { filter: brightness(1.7); } 20% { filter: none; } }
+      .draw { stroke-dasharray: 1 1; animation: draw 7s ease-in-out infinite; }
+      @keyframes draw { 0% { stroke-dashoffset: 1; } 45%, 100% { stroke-dashoffset: 0; } }
       /* The café row: available, then connecting, then connected, every 9 s. */
       .s0 { animation: s0 9s infinite; } @keyframes s0 { 0%, 22% { opacity: 1; } 26%, 96% { opacity: 0; } 100% { opacity: 1; } }
       .s1 { animation: s1 9s infinite; opacity: 0; } @keyframes s1 { 0%, 24% { opacity: 0; } 28%, 52% { opacity: 1; } 56%, 100% { opacity: 0; } }
@@ -30,39 +30,24 @@
       .scan { animation: scan 2.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
       @keyframes scan { 0%, 100% { rotate: 0deg; } 50% { rotate: 180deg; } }
       @media (prefers-reduced-motion: reduce) {
-        .float, .glow, .node, .spin, .scan, .bar, .s0, .s1, .s2, .sel { animation: none; }
+        .float, .glow, .tile, .draw, .spin, .scan, .bar, .s0, .s1, .s2, .sel { animation: none; }
         .s0, .s1 { opacity: 0; } .s2, .sel { opacity: 1; } .bar { fill: #5cc8b0; }
       }
     </style>
   </defs>
   <g class="float">
-    <circle class="glow" cx="179.2" cy="165.2" r="150" fill="url(#glow)"/>
-    <line x1="179.2" y1="165.2" x2="179.2" y2="66.8" stroke="#3c5650" stroke-width="5" stroke-linecap="round" opacity=".8"/>
-    <line x1="179.2" y1="165.2" x2="94.0" y2="214.4" stroke="#3c5650" stroke-width="5" stroke-linecap="round" opacity=".8"/>
-    <line x1="179.2" y1="165.2" x2="264.4" y2="214.4" stroke="#3c5650" stroke-width="5" stroke-linecap="round" opacity=".8"/>
-    <line x1="179.2" y1="66.8" x2="94.0" y2="116.0" stroke="#5cc8b0" stroke-width="8.5" stroke-linecap="round"/>
-    <line x1="179.2" y1="66.8" x2="264.4" y2="116.0" stroke="#5cc8b0" stroke-width="8.5" stroke-linecap="round"/>
-    <line x1="94.0" y1="214.4" x2="94.0" y2="116.0" stroke="#5cc8b0" stroke-width="8.5" stroke-linecap="round"/>
-    <line x1="94.0" y1="214.4" x2="179.2" y2="263.6" stroke="#5cc8b0" stroke-width="8.5" stroke-linecap="round"/>
-    <line x1="94.0" y1="116.0" x2="179.2" y2="165.2" stroke="#5cc8b0" stroke-width="8.5" stroke-linecap="round"/>
-    <line x1="264.4" y1="214.4" x2="264.4" y2="116.0" stroke="#5cc8b0" stroke-width="8.5" stroke-linecap="round"/>
-    <line x1="264.4" y1="214.4" x2="179.2" y2="263.6" stroke="#5cc8b0" stroke-width="8.5" stroke-linecap="round"/>
-    <line x1="264.4" y1="116.0" x2="179.2" y2="165.2" stroke="#5cc8b0" stroke-width="8.5" stroke-linecap="round"/>
-    <line x1="179.2" y1="263.6" x2="179.2" y2="165.2" stroke="#5cc8b0" stroke-width="8.5" stroke-linecap="round"/>
-    <circle r="14" fill="#5cc8b0" opacity=".3"><animateMotion dur="6s" repeatCount="indefinite" path="M179.2 66.8 L264.4 116.0 L264.4 214.4 L179.2 263.6 L94.0 214.4 L94.0 116.0 L179.2 66.8"/></circle>
-    <circle r="6.5" fill="#f2fffb"><animateMotion dur="6s" repeatCount="indefinite" path="M179.2 66.8 L264.4 116.0 L264.4 214.4 L179.2 263.6 L94.0 214.4 L94.0 116.0 L179.2 66.8"/></circle>
-    <circle r="14" fill="#5cc8b0" opacity=".3"><animateMotion dur="7.5s" repeatCount="indefinite" path="M94.0 116.0 L179.2 165.2 L264.4 214.4 L264.4 116.0 L179.2 165.2 L179.2 263.6 L94.0 214.4 L94.0 116.0"/></circle>
-    <circle r="6.5" fill="#f2fffb"><animateMotion dur="7.5s" repeatCount="indefinite" path="M94.0 116.0 L179.2 165.2 L264.4 214.4 L264.4 116.0 L179.2 165.2 L179.2 263.6 L94.0 214.4 L94.0 116.0"/></circle>
-    <circle r="14" fill="#5cc8b0" opacity=".3"><animateMotion dur="5s" repeatCount="indefinite" path="M179.2 66.8 L94.0 116.0 L179.2 165.2 L264.4 116.0 L179.2 66.8"/></circle>
-    <circle r="6.5" fill="#f2fffb"><animateMotion dur="5s" repeatCount="indefinite" path="M179.2 66.8 L94.0 116.0 L179.2 165.2 L264.4 116.0 L179.2 66.8"/></circle>
-    <circle class="node n1" cx="179.2" cy="66.8" r="13" fill="#5cc8b0"/>
-    <circle class="node n2" cx="94.0" cy="116.0" r="13" fill="#5cc8b0"/>
-    <circle class="node n3" cx="264.4" cy="116.0" r="13" fill="#5cc8b0"/>
-    <circle class="node n4" cx="94.0" cy="214.4" r="13" fill="#5cc8b0"/>
-    <circle class="node n5" cx="264.4" cy="214.4" r="13" fill="#5cc8b0"/>
-    <circle class="node n6" cx="179.2" cy="263.6" r="13" fill="#5cc8b0"/>
-    <circle cx="179.2" cy="165.2" r="13.5" fill="#a6e6d6"/>
-    <circle cx="179.2" cy="165.2" r="20" fill="none" stroke="#5cc8b0" stroke-width="2.5" opacity=".55"/>
+    <circle class="glow" cx="178.8" cy="164.8" r="150" fill="url(#glow)"/>
+    <g transform="translate(38 24) scale(2.2)">
+      <rect x="4" y="4" width="120" height="120" rx="28" fill="#14171a" stroke="#262b30" stroke-width="1.2"/>
+      <rect class="tile" style="animation-delay: 0.00s" x="12.50" y="33.13" width="61.75" height="61.75" rx="6.00" fill="#24312e"/>
+      <rect class="tile" style="animation-delay: 0.45s" x="79.25" y="33.13" width="36.25" height="36.25" rx="6.00" fill="#29403a"/>
+      <rect class="tile" style="animation-delay: 0.90s" x="95.00" y="74.38" width="20.50" height="20.50" rx="6.00" fill="#2f4f47"/>
+      <rect class="tile" style="animation-delay: 1.35s" x="79.25" y="84.12" width="10.76" height="10.76" rx="3.94" fill="#376055"/>
+      <rect class="tile" style="animation-delay: 1.80s" x="79.25" y="74.38" width="4.74" height="4.74" rx="2.43" fill="#417466"/>
+      <rect class="tile" style="animation-delay: 2.25s" x="88.99" y="74.38" width="1.02" height="1.02" rx="1.50" fill="#4f9c89"/>
+      <rect class="tile" style="animation-delay: 2.70s" x="91.28" y="80.40" width="-1.28" height="-1.28" rx="0.93" fill="#5cc8b0"/>
+      <path class="draw" pathLength="1" d="M 10.00 97.37 A 66.75 66.75 0 0 1 76.75 30.63 A 41.25 41.25 0 0 1 118.00 71.88 A 25.50 25.50 0 0 1 92.50 97.37 A 15.76 15.76 0 0 1 76.75 81.62 A 9.74 9.74 0 0 1 86.49 71.88 A 6.02 6.02 0 0 1 92.50 77.90 A 3.72 3.72 0 0 1 88.78 81.62" fill="none" stroke="#e9efe9" stroke-width="3.5" stroke-linecap="round"/>
+    </g>
   </g>
   <g filter="url(#shadow)"><rect x="372" y="24" width="428" height="284" rx="16" fill="#17191c" stroke="#2a2e33" stroke-width="1.5"/></g>
   <text x="396" y="64" font-size="19" font-weight="700" fill="#e8eaed">Wi-Fi</text>
