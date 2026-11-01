@@ -22,6 +22,9 @@ fn hyprland(dir: &std::path::Path) -> Option<Command> {
         let mut c = Command::new("Hyprland");
         let runtime = dir.join("runtime");
         std::fs::create_dir_all(&runtime).unwrap();
+        // Hyprland crashes with a runtime folder others can read.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
         c.env("XDG_RUNTIME_DIR", runtime)
             .args(["--i-am-really-stupid", "--verify-config", "-c"])
             .arg(dir.join("hyprland.lua"));
@@ -64,6 +67,6 @@ fn hyprland_accepts_the_lua_file() {
     let out = verify.output().expect("Hyprland --verify-config");
     let report = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     let errors: Vec<&str> = report.lines().filter(|l| l.contains("lituus.lua")).collect();
-    assert!(errors.is_empty() && out.status.success(), "Hyprland found problems:\n{report}\n{text}");
+    assert!(errors.is_empty() && out.status.success(), "Hyprland found problems ({}):\n{report}\n{text}", out.status);
     std::fs::remove_dir_all(&dir).unwrap();
 }
