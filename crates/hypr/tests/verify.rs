@@ -19,16 +19,30 @@ fn hyprland(dir: &std::path::Path) -> Option<Command> {
         .split(':')
         .any(|p| std::path::Path::new(p).join("Hyprland").exists());
     found.then(|| {
-        let mut c = Command::new("Hyprland");
         let runtime = dir.join("runtime");
         std::fs::create_dir_all(&runtime).unwrap();
-        // Hyprland crashes with a runtime folder others can read.
+        // Hyprland crashes with a runtime folder others can read, and as root (as in CI's
+        // containers) it crashes once it's done, taking its report with it: there it runs as
+        // nobody.
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
-        // Hyprland also crashes without a home folder (CI's containers have none).
-        c.env("XDG_RUNTIME_DIR", runtime)
+        let root = std::fs::read_to_string("/proc/self/status")
+            .is_ok_and(|s| s.lines().any(|l| l.starts_with("Uid:") && l.split_whitespace().nth(1) == Some("0")));
+        let mut c = if root {
+            std::os::unix::fs::chown(&runtime, Some(65534), Some(65534)).unwrap();
+            let mut c = Command::new("setpriv");
+            c.args(["--reuid=65534", "--regid=65534", "--clear-groups", "Hyprland"]);
+            c
+        } else {
+            Command::new("Hyprland")
+        };
+        // It also crashes without a home folder (CI's containers have none): it gets only what
+        // it needs.
+        c.env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("XDG_RUNTIME_DIR", runtime)
             .env("HOME", dir)
-            .args(["--i-am-really-stupid", "--verify-config", "-c"])
+            .args(["--verify-config", "-c"])
             .arg(dir.join("hyprland.lua"));
         c
     })
@@ -69,6 +83,12 @@ fn hyprland_accepts_the_lua_file() {
     let out = verify.output().expect("Hyprland --verify-config");
     let report = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     let errors: Vec<&str> = report.lines().filter(|l| l.contains("lituus.lua")).collect();
-    assert!(errors.is_empty() && out.status.success(), "Hyprland found problems ({}):\n{report}\n{text}", out.status);
+    // Hyprland 0.57 run as root (as in CI's container) prints its verdict, then crashes on the way
+    // out; the verdict is what counts.
+    assert!(
+        errors.is_empty() && report.contains("config ok"),
+        "Hyprland found problems ({}):\n{report}\n{text}",
+        out.status
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
