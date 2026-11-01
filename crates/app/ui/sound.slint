@@ -36,6 +36,8 @@ export struct SoundView {
     /// The highest volume the sliders go to: 1.0, or 1.5 with "Louder than 100 %" on.
     max: float,
     overamplify: bool,
+    /// The last change the server turned down.
+    error: string,
     empty-title: string,
     empty-text: string,
 }
@@ -246,7 +248,7 @@ export component SoundPage inherits VerticalLayout {
             options: ["Devices", "Apps", "Cards"];
             selected <=> root.tab;
         }
-        Rectangle { horizontal-stretch: 1; }
+        Text { text: root.page.error; color: Theme.danger; font-size: 13px; horizontal-alignment: right; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
     }
 
     if root.page.state == "list" && root.tab == 0: HorizontalLayout {

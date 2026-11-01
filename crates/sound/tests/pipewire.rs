@@ -24,7 +24,13 @@ fn reads_and_changes_a_real_server() {
     session.set_sink_volume(sink.index, &before).unwrap();
     session.set_sink_mute(sink.index, sink.muted).unwrap();
     if let Some(other) = snap.sinks.iter().find(|s| s.name != sink.name) {
-        session.set_default_sink(&other.name).unwrap();
+        // Ubuntu 24.04's PipeWire 1.0 says "not supported" without a session manager's metadata.
+        if let Err(lituus_sound::Error::Protocol(pulseaudio::protocol::ProtocolError::ServerError(e))) =
+            session.set_default_sink(&other.name)
+        {
+            eprintln!("this PipeWire can't change the default output ({e:?}): skipped");
+            return;
+        }
         // The session manager (WirePlumber) makes the change, a moment later.
         let mut default = None;
         for _ in 0..40 {
