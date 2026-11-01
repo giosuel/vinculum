@@ -4,8 +4,8 @@
 
 # Lituus
 
-**A network manager for Linux desktops that don't come with one.**<br>
-<sub>🦀 Powered by Rust · drives NetworkManager</sub>
+**The settings app for Hyprland and other desktops that don't come with one.**<br>
+<sub>🦀 Powered by Rust · NetworkManager, BlueZ, PipeWire and Hyprland underneath</sub>
 
 [![CI](https://img.shields.io/github/actions/workflow/status/giosuel/lituus/ci.yml?branch=main&style=flat-square&label=CI&logo=githubactions&logoColor=white)](https://github.com/giosuel/lituus/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/giosuel/lituus?style=flat-square&color=8e4ec6&include_prereleases)](https://github.com/giosuel/lituus/releases)
@@ -13,6 +13,7 @@
 [![Powered by Rust](https://img.shields.io/badge/powered_by-Rust-dea584?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Slint](https://img.shields.io/badge/UI-Slint-2379f4?style=flat-square)](https://slint.dev)
 [![NetworkManager](https://img.shields.io/badge/NetworkManager-D--Bus-5cc8b0?style=flat-square)](https://networkmanager.dev)
+[![PipeWire](https://img.shields.io/badge/PipeWire-pulse-8e4ec6?style=flat-square)](https://pipewire.org)
 [![Wayland native](https://img.shields.io/badge/Wayland-native-e5484d?style=flat-square&logo=wayland&logoColor=white)](#)
 [![Hyprland ready](https://img.shields.io/badge/Hyprland-ready-58e1ff?style=flat-square&logo=hyprland&logoColor=white)](#-hyprland)
 
@@ -22,10 +23,11 @@
 
 ---
 
-Running Hyprland or Sway, and reaching for `nmtui` every time the Wi-Fi changes? Lituus is the
-network window those desktops are missing: everything `nmtui` does, the settings depth of KDE's
-network panel, and a look that follows your wallpaper. It drives the NetworkManager you already
-have, so `nmcli` and everything else keep working alongside it.
+Running Hyprland, and reaching for `nmtui`, `bluetoothctl`, `pavucontrol` and a text editor for
+`monitor =` lines? Lituus is the settings window those desktops are missing: network, Bluetooth,
+sound and displays in one app, with a look that follows your wallpaper. It drives the services you
+already have (NetworkManager, BlueZ, PipeWire, Hyprland), so their own tools keep working alongside
+it.
 
 ## ✨ What you get
 
@@ -33,60 +35,40 @@ have, so `nmcli` and everything else keep working alongside it.
 <tr>
 <td width="33%" valign="top">
 
-**📶 Every network at a glance**<br>
-Wi-Fi with signal, band and security, wired ports and VPNs, all live. Search with <kbd>/</kbd>, connect with <kbd>Enter</kbd>.
+**📶 Network**<br>
+Wi-Fi, wired and VPNs, all live: connect with <kbd>Enter</kbd>, a full editor for every setting (802.1X, IPv4 and IPv6, DNS, routes, VLANs, bridges, bonds), WireGuard and OpenVPN files, a hotspot with a QR code. Passwords go to your keyring.
 
 </td>
 <td width="33%" valign="top">
 
-**🔑 Passwords in your keyring**<br>
-"For me only" passwords go to GNOME Keyring or KWallet, so joining a network needs no admin password. nm-applet's saved passwords are found too.
+**🔵 Bluetooth**<br>
+Pairing with every kind of code, battery levels, headset audio (high quality or headset), sending and receiving files, and a phone's internet over Bluetooth.
 
 </td>
 <td width="33%" valign="top">
 
-**🛠️ Every setting**<br>
-A full editor for each connection: security and 802.1X (eduroam and the like), IPv4 and IPv6, DNS, routes, MAC address, MTU, Ethernet link, and VLANs, bridges and bonds with their ports. Settings it doesn't show are left alone.
+**🔊 Sound**<br>
+The output and input in use, a volume per app and the output it plays through, ports, balance and sound cards' profiles, live with PipeWire.
 
 </td>
 </tr>
 <tr>
 <td valign="top">
 
+**🖥️ Displays**<br>
+Drag your monitors into place; set the mode, scale, rotation, mirror, HDR and VRR; Apply, then keep it or it goes back by itself. Workspaces bound to monitors, and profiles that switch when you plug in. Written to its own Hyprland file.
+
+</td>
+<td valign="top">
+
 **🎨 Follows your wallpaper**<br>
-Picks up the colours matugen writes for ML4W (or any `colors.json`) and recolours itself live. A dark and a light theme otherwise.
+Picks up the colours matugen writes for ML4W (or any `colors.json`) and recolours itself live. Five built-in themes otherwise, each dark and light.
 
 </td>
 <td valign="top">
 
 **🪟 Made for tiling desktops**<br>
-A normal window with the app ID `ch.giosuel.Lituus` for your window rules, keyboard first, a tray icon with a quick popup for Waybar, and a background mode that answers NetworkManager at login.
-
-</td>
-<td valign="top">
-
-**🔍 Says what went wrong**<br>
-"The network rejected the password", "no polkit agent answered": failures come with the reason and a <b>Try again</b>.
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-**🛡️ WireGuard and OpenVPN**<br>
-Make one, or import a `.conf` or `.ovpn` file: keys, peers, certificates and all. WireGuard connections export back to `.conf`.
-
-</td>
-<td valign="top">
-
-**📱 Hotspot and QR codes**<br>
-Share your connection over Wi-Fi in one switch, and any saved network as a QR code a phone camera joins.
-
-</td>
-<td valign="top">
-
-**📊 What's going on**<br>
-Addresses, gateway, DNS, link speed, channel, and how much has been received and sent.
+A normal window with the app ID `ch.giosuel.Lituus` for your window rules, keyboard first (<kbd>Ctrl</kbd> <kbd>K</kbd> finds a setting), a tray icon with a quick popup for Waybar, and a background mode that answers NetworkManager and BlueZ at login.
 
 </td>
 </tr>
@@ -144,7 +126,15 @@ hl.on("hyprland.start", function() hl.exec_cmd("lituus --background") end)
 hl.bind("SUPER + N", hl.dsp.exec_cmd("lituus"))                     -- open the window
 hl.bind("SUPER + SHIFT + N", hl.dsp.exec_cmd("lituus --quick"))     -- the quick popup
 hl.bind("XF86WLAN", hl.dsp.exec_cmd("lituus --toggle-wifi"))        -- the Wi-Fi key
+
+require("lituus")   -- the monitors and workspaces set on the Displays page
 ```
+
+**Displays** writes its monitor and workspace rules to its own file, `~/.config/hypr/lituus.lua`,
+and never edits yours: the `require("lituus")` line above loads it. Apply sets the changes live
+and asks to keep them; with no answer in 15 seconds they go back, so a black screen fixes itself.
+Profiles and workspaces are kept in `~/.config/lituus/displays.toml`. On Hyprland 0.54 or older,
+Lituus writes `lituus.conf` instead, for a `source = ~/.config/hypr/lituus.conf` line.
 
 **The tray icon** shows up in Waybar's `tray` module (and any other StatusNotifierItem tray) while
 Lituus runs: right-click for the menu, left-click for the quick popup. With a tray, closing the
@@ -175,7 +165,8 @@ When you join a network, Lituus asks where to keep its password:
 
 | Key | Action |
 |---|---|
-| <kbd>/</kbd> | Search |
+| <kbd>Ctrl</kbd> <kbd>K</kbd> | Find a setting (the sidebar's search) |
+| <kbd>/</kbd> | Search networks |
 | <kbd>↑</kbd> <kbd>↓</kbd> | Select a network or connection |
 | <kbd>Enter</kbd> | Connect |
 | <kbd>E</kbd> | Edit the selected connection |

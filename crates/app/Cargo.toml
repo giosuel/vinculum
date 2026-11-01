@@ -1,6 +1,6 @@
 [package]
 name = "lituus"
-description = "Manage Wi-Fi, wired and VPN connections on Linux desktops"
+description = "Settings for Hyprland and other desktops without them: network, Bluetooth, sound and displays"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -49,13 +49,13 @@ maintainer = "giosuel <me@giosuel.ch>"
 section = "net"
 priority = "optional"
 extended-description = """\
-A network manager for Linux desktops that don't come with one, such as Hyprland and Sway. \
-It drives NetworkManager: connect to Wi-Fi, wired and WireGuard networks, and edit every \
-connection setting."""
+The settings app for Linux desktops that don't come with one, such as Hyprland. Network through \
+NetworkManager (Wi-Fi, wired, VPN, every connection setting), Bluetooth through BlueZ (pairing, \
+audio, files, a phone's internet), sound through PipeWire, and displays through Hyprland."""
 # $auto adds the libraries the binary links against; xkbcommon and EGL are loaded at runtime.
 depends = "$auto, network-manager, libxkbcommon0, libegl1"
 # Optional: OpenVPN, file dialogs (certificates, VPN files), and a keyring for "for me only".
-recommends = "xdg-desktop-portal, gnome-keyring | kwalletmanager, bluez, pipewire-pulse | pulseaudio"
+recommends = "xdg-desktop-portal, gnome-keyring | kwalletmanager, bluez, bluez-obexd, pipewire-pulse | pulseaudio"
 suggests = "network-manager-openvpn"
 assets = [
     ["target/release/lituus", "usr/bin/", "755"],

@@ -4,13 +4,18 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>AGPL-3.0-or-later</project_license>
   <name>Lituus</name>
-  <summary>Manage Wi-Fi, wired and VPN connections</summary>
+  <summary>Network, Bluetooth, sound and displays for Hyprland</summary>
   <description>
     <p>
-      A network manager for Linux desktops that don't come with one, such as Hyprland and Sway.
-      It drives NetworkManager: connect to Wi-Fi, wired and WireGuard networks, and edit every
-      connection setting, from security to IP addresses, DNS and routes.
+      The settings app for Linux desktops that don't come with one, such as Hyprland.
     </p>
+    <ul>
+      <li>Network, through NetworkManager: Wi-Fi, wired, WireGuard and OpenVPN, a hotspot, and every connection setting</li>
+      <li>Bluetooth, through BlueZ: pairing, devices, headset audio, files and a phone's internet</li>
+      <li>Sound, through PipeWire: outputs, inputs, a volume per app, and sound cards' profiles</li>
+      <li>Displays, through Hyprland: the layout, modes, scale, HDR, workspaces and profiles that switch on hotplug</li>
+      <li>Colours from your wallpaper (matugen), or built-in themes</li>
+    </ul>
   </description>
   <launchable type="desktop-id">ch.giosuel.Lituus.desktop</launchable>
   <url type="homepage">https://github.com/giosuel/lituus</url>

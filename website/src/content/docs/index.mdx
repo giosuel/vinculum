@@ -1,6 +1,6 @@
 ---
 title: Lituus
-description: A network manager for Hyprland, Sway and other desktops without one. Wi-Fi, wired and WireGuard on NetworkManager, written in Rust.
+description: The settings app for Hyprland and other desktops without one. Network, Bluetooth, sound and displays, written in Rust.
 template: splash
 editUrl: false
 ---
@@ -11,8 +11,8 @@ import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 
 <div class="vc-hero">
   <img class="vc-hero__mark" src="/favicon.svg" alt="" />
-  <h1>Every network,<br /><span class="vc-gradient">one window.</span></h1>
-  <p class="vc-lead">Lituus manages Wi-Fi, wired and WireGuard connections on <strong>Hyprland</strong>, Sway and other desktops that don't come with a network manager. Everything <code>nmtui</code> does, with the depth of KDE's network settings, in a native app written in Rust.</p>
+  <h1>Your desktop's settings,<br /><span class="vc-gradient">one window.</span></h1>
+  <p class="vc-lead">Lituus is the settings app <strong>Hyprland</strong> doesn't come with: network, Bluetooth, sound and displays, with the depth of KDE's settings, in a native app written in Rust. It drives NetworkManager, BlueZ, PipeWire and Hyprland, so their own tools keep working alongside it.</p>
   <div class="vc-badges">
     <a href="https://github.com/giosuel/lituus/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/giosuel/lituus/ci.yml?branch=main&label=CI" alt="CI status" /></a>
     <img src="https://img.shields.io/badge/Linux-x64%20%7C%20arm64-5cc8b0" alt="Linux, x64 and arm64" />
@@ -31,35 +31,35 @@ import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 </div>
 
 <Aside type="caution" title="In development">
-Lituus is at its very start: the window opens, but it doesn't manage connections yet. This page shows what the first versions are being built to do.
+Lituus is new: the first release, 0.1.0, is on its way. Network and Bluetooth are the most tried parts; sound and displays are newer.
 </Aside>
 
-<h2 class="vc-section">Network settings, without the desktop environment</h2>
-<p class="vc-section-lead">The settings panel GNOME and KDE users take for granted, for the desktops that leave it to you.</p>
+<h2 class="vc-section">Settings, without the desktop environment</h2>
+<p class="vc-section-lead">The settings app GNOME and KDE users take for granted, for the desktops that leave it to you.</p>
 
 <CardGrid>
-  <Card title="Connect in a keystroke" icon="rocket">
-    Search, pick, press Enter. Passwords are asked for when needed and kept in your keyring, only for you.
+  <Card title="Network" icon="rocket">
+    Wi-Fi, wired and VPNs: connect in a keystroke, and edit every setting, from WPA Enterprise to IPv6, DNS and routes. WireGuard and OpenVPN files, a hotspot, passwords in your keyring.
   </Card>
-  <Card title="Every setting" icon="setting">
-    Security up to WPA Enterprise, IPv4 and IPv6, DNS, routes, MAC address randomisation, metered, auto-connect priority.
+  <Card title="Bluetooth" icon="setting">
+    Pairing with every kind of code, battery levels, headset audio, sending and receiving files, and a phone's internet.
   </Card>
-  <Card title="WireGuard built in" icon="seti:lock">
-    Create tunnels, edit peers, or import a <code>.conf</code>. OpenVPN and others show up when their NetworkManager plugin is installed.
+  <Card title="Sound" icon="seti:audio">
+    The output and input in use, a volume per app and where it plays, ports, balance and profiles, live with PipeWire.
+  </Card>
+  <Card title="Displays" icon="laptop">
+    Drag monitors into place, set modes, scale, HDR and VRR, and keep it or it goes back by itself. Workspaces on monitors, and profiles that switch when you plug in.
   </Card>
   <Card title="Your wallpaper's colours" icon="seti:image">
-    Reads matugen palettes, ML4W's included, and recolours itself live when you change wallpaper.
+    Reads matugen palettes, ML4W's included, and recolours itself live when you change wallpaper. Five built-in themes otherwise.
   </Card>
-  <Card title="Made for Hyprland" icon="laptop">
-    A normal window with the class <code>ch.giosuel.Lituus</code> for window rules, keyboard-driven, with a tray icon and quick popup.
-  </Card>
-  <Card title="Leaves your settings alone" icon="approve-check">
-    Edits change only what you touched, so options from other tools and VPN plugins survive. Works alongside <code>nmcli</code> and <code>nmtui</code>.
+  <Card title="Made for Hyprland" icon="approve-check">
+    A normal window with the class <code>ch.giosuel.Lituus</code> for window rules, keyboard-driven (<kbd>Ctrl</kbd> <kbd>K</kbd> finds any setting), with a tray icon and quick popup. Its own Hyprland file, never yours.
   </Card>
 </CardGrid>
 
 <h2 class="vc-section">Up and running in minutes</h2>
-<p class="vc-section-lead">All it needs is NetworkManager, which your system most likely runs already.</p>
+<p class="vc-section-lead">It uses what your system most likely runs already: NetworkManager, BlueZ, PipeWire and Hyprland.</p>
 
 <div class="vc-steps">
   <div class="vc-step">
@@ -74,14 +74,14 @@ Lituus is at its very start: the window opens, but it doesn't manage connections
   </div>
   <div class="vc-step">
     <span class="vc-step__n">3</span>
-    <h3>Connect</h3>
-    <p>Pick a network, type the password once. Lituus picks up the connections you already have.</p>
+    <h3>Set it up</h3>
+    <p>Pick a network, pair your headphones, place your monitors. Lituus picks up what you already have; for Displays, add one line to your config (see <a href="/guide/displays/">Displays</a>).</p>
   </div>
 </div>
 
 <div class="vc-cta">
   <h2>Free software, for every desktop</h2>
-  <p>Lituus is free and open source under the AGPL-3.0. Built with Rust and Slint, on top of NetworkManager.</p>
+  <p>Lituus is free and open source under the AGPL-3.0. Built with Rust and Slint, on top of NetworkManager, BlueZ, PipeWire and Hyprland.</p>
   <div class="vc-actions">
     <a class="vc-button vc-button--primary" href="/install/">Install Lituus →</a>
     <a class="vc-button" href="https://github.com/giosuel/lituus">Star on GitHub</a>

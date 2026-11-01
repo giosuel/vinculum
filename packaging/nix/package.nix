@@ -72,7 +72,7 @@ rustPlatform.buildRustPackage {
   '';
 
   meta = {
-    description = "Manage Wi-Fi, wired and VPN connections on Linux desktops";
+    description = "Settings for Hyprland and other desktops without them: network, Bluetooth, sound and displays";
     homepage = "https://lituus.giosuel.ch/";
     license = lib.licenses.agpl3Plus;
     mainProgram = "lituus";
