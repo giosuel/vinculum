@@ -667,6 +667,7 @@ fn connection_kind_label(c: &SavedConnection) -> String {
     match &c.kind {
         ConnectionKind::Wifi { .. } => "Wi-Fi".into(),
         ConnectionKind::Ethernet => "Wired".into(),
+        ConnectionKind::Bluetooth { .. } => "Bluetooth".into(),
         ConnectionKind::WireGuard => "WireGuard".into(),
         ConnectionKind::Vpn { service } => vpn_service_label(service),
         ConnectionKind::Bridge { .. } => "Bridge".into(),
@@ -693,6 +694,7 @@ fn icon_for(c: &SavedConnection) -> &'static str {
     match c.kind {
         ConnectionKind::Wifi { .. } => "wifi",
         ConnectionKind::Ethernet => "wired",
+        ConnectionKind::Bluetooth { .. } => "bluetooth",
         ConnectionKind::WireGuard | ConnectionKind::Vpn { .. } => "vpn",
         ConnectionKind::Bridge { .. } => "bridge",
         ConnectionKind::Bond { .. } => "bond",
@@ -939,7 +941,7 @@ fn saved_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String,
     view.show_add = true;
     view.search_placeholder = "Search saved connections".into();
     view.bottom_label = "Import a connection file…".into();
-    let groups: [(&str, KindFilter); 4] = [
+    let groups: [(&str, KindFilter); 5] = [
         ("Wi-Fi", |k| matches!(k, ConnectionKind::Wifi { .. })),
         ("Wired", |k| {
             matches!(
@@ -951,6 +953,7 @@ fn saved_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String,
             )
         }),
         ("VPN", |k| matches!(k, ConnectionKind::WireGuard | ConnectionKind::Vpn { .. })),
+        ("Bluetooth", |k| matches!(k, ConnectionKind::Bluetooth { .. })),
         ("Other", |k| matches!(k, ConnectionKind::Other(_))),
     ];
     groups
@@ -1264,6 +1267,12 @@ pub enum Command {
     },
     Forget {
         connection: String,
+    },
+    /// A phone's internet over Bluetooth: a new connection on NetworkManager's device for it.
+    Tether {
+        device: String,
+        address: String,
+        name: String,
     },
 }
 

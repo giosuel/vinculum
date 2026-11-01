@@ -219,6 +219,30 @@ impl Client {
         Ok((connection.to_string(), active.to_string()))
     }
 
+    /// Uses a phone's internet over Bluetooth (PAN): makes a connection for it on NetworkManager's
+    /// Bluetooth device for the phone, and activates it. Returns the new connection's and the
+    /// active connection's paths.
+    pub async fn tether(&self, device: &str, address: &str, name: &str) -> Result<(String, String), Error> {
+        let bdaddr: Vec<u8> = address.split(':').filter_map(|b| u8::from_str_radix(b, 16).ok()).collect::<Vec<u8>>();
+        let settings: HashMap<&str, HashMap<&str, Value>> = HashMap::from([
+            (
+                "connection",
+                HashMap::from([
+                    ("type", Value::from("bluetooth")),
+                    ("id", Value::from(format!("{name} (Bluetooth)"))),
+                    ("autoconnect", Value::from(false)),
+                ]),
+            ),
+            ("bluetooth", HashMap::from([("bdaddr", Value::from(bdaddr)), ("type", Value::from("panu"))])),
+            ("ipv4", HashMap::from([("method", Value::from("auto"))])),
+            ("ipv6", HashMap::from([("method", Value::from("auto"))])),
+        ]);
+        let body = (settings, object_path(device)?, object_path("/")?);
+        let (connection, active): (OwnedObjectPath, OwnedObjectPath) =
+            self.call(MANAGER, IFACE, "AddAndActivateConnection", &body).await.map_err(Error::from_dbus)?;
+        Ok((connection.to_string(), active.to_string()))
+    }
+
     /// Disconnects an active connection; the device stays available for others.
     pub async fn deactivate(&self, active_connection: &str) -> Result<(), Error> {
         self.call::<_, ()>(MANAGER, IFACE, "DeactivateConnection", &(object_path(active_connection)?,))
@@ -292,6 +316,15 @@ impl Client {
                         speed: wired.u32("Speed").unwrap_or(0),
                     }),
                 )
+            }
+            DeviceKind::Bluetooth => {
+                // The phone's Bluetooth address.
+                if hw_address.is_empty() {
+                    let bt =
+                        Props::get_all(&self.conn, path, "org.freedesktop.NetworkManager.Device.Bluetooth").await?;
+                    hw_address = bt.string("HwAddress").unwrap_or_default();
+                }
+                (None, None)
             }
             _ => (None, None),
         };
@@ -389,6 +422,11 @@ impl Client {
                 ConnectionKind::Wifi { ssid: get("802-11-wireless", "ssid").map(|v| bytes(v)).unwrap_or_default() }
             }
             "802-3-ethernet" => ConnectionKind::Ethernet,
+            "bluetooth" => ConnectionKind::Bluetooth {
+                address: get("bluetooth", "bdaddr")
+                    .map(|v| bytes(v).iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":"))
+                    .unwrap_or_default(),
+            },
             "wireguard" => ConnectionKind::WireGuard,
             "vpn" => ConnectionKind::Vpn { service: string("vpn", "service-type").unwrap_or_default() },
             // NetworkManager turns spanning tree on unless told otherwise.

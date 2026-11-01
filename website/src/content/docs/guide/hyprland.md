@@ -25,7 +25,7 @@ hl.window_rule({
     match = { class = lituus, title = "^(Lituus quick)$" },
     float = true,
     pin = true,
-    size = { 380, 560 },
+    size = { 380, 600 },
     move = { "monitor_w-window_w-12", "52" },
 })
 
@@ -50,7 +50,7 @@ windowrule = size 1200 760, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(L
 windowrule = center on, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus)$
 windowrule = float on, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus quick)$
 windowrule = pin on, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus quick)$
-windowrule = size 380 560, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus quick)$
+windowrule = size 380 600, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus quick)$
 windowrule = move (monitor_w-window_w-12) 52, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus quick)$
 
 exec-once = lituus --background

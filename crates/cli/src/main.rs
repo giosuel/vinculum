@@ -101,6 +101,7 @@ fn render(s: &Snapshot) -> String {
         let kind = match &c.kind {
             ConnectionKind::Wifi { .. } => "wifi".to_owned(),
             ConnectionKind::Ethernet => "ethernet".to_owned(),
+            ConnectionKind::Bluetooth { address } => format!("bluetooth ({address})"),
             ConnectionKind::WireGuard => "wireguard".to_owned(),
             ConnectionKind::Vpn { service } => format!("vpn ({})", service.rsplit('.').next().unwrap_or(service)),
             ConnectionKind::Bridge { .. } => "bridge".to_owned(),

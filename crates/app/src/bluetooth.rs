@@ -164,6 +164,20 @@ pub struct State {
     pub row_ids: Vec<String>,
     /// The Bluetooth sound cards PipeWire has.
     pub audio: Vec<audio::Card>,
+    /// What NetworkManager offers for phones' internet, by Bluetooth address (upper case).
+    pub tether: std::collections::HashMap<String, Tether>,
+}
+
+/// A phone's internet over Bluetooth, as NetworkManager has it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Tether {
+    /// NetworkManager's Bluetooth device for the phone.
+    pub device: String,
+    /// A saved connection for it, to use again.
+    pub connection: Option<String>,
+    /// While it's on: the active connection, and a line about it.
+    pub active: Option<String>,
+    pub status: String,
 }
 
 impl State {
@@ -298,6 +312,29 @@ pub fn nav(state: &State, current: bool) -> NavItem {
         }
     };
     NavItem { id: s("bluetooth"), label: s("Bluetooth"), sub: s(sub), icon: s("bluetooth"), current }
+}
+
+/// The paired devices for the tray's popup (three at most), connected first: (id "bt:path", name, meta, connected).
+pub fn quick(state: &State) -> Vec<(String, String, String, bool)> {
+    let (Some(snap), Some(adapter)) = (state.snapshot.as_ref(), state.adapter()) else { return Vec::new() };
+    if !adapter.powered {
+        return Vec::new();
+    }
+    let mut devices: Vec<&Device> = snap.devices_of(&adapter.path).filter(|d| d.paired && !d.blocked).collect();
+    devices.sort_by_key(|d| (!d.connected, d.alias.to_lowercase()));
+    devices
+        .into_iter()
+        .take(3)
+        .map(|d| {
+            let kind = capitalised(kind_label(d.kind()));
+            let meta = match (d.connected, d.battery) {
+                (true, Some(b)) => format!("Bluetooth · {kind} · battery {b} %"),
+                (true, None) => format!("Bluetooth · {kind}"),
+                (false, _) => format!("Bluetooth · {kind} · not connected"),
+            };
+            (format!("bt:{}", d.path), d.alias.clone(), meta, d.connected)
+        })
+        .collect()
 }
 
 /// The empty state for a page that has no list: (state, icon, title, text, command, action).
@@ -509,7 +546,21 @@ fn details(device: &Device, adapter: &Adapter, state: &State) -> Details {
         }
         actions.push(action("forget", "Forget", "danger", true));
         d.actions = model(actions);
-        d.toggles = model(vec![
+        let mut toggles = Vec::new();
+        if device.uuids.iter().any(|u| u == lituus_bt::uuid::NAP) {
+            let tether = state.tether.get(&device.address.to_ascii_uppercase());
+            toggles.push(Toggle {
+                id: s("tether"),
+                label: s("Use the phone's internet"),
+                sub: s(match tether {
+                    Some(t) if t.active.is_some() => t.status.clone(),
+                    Some(_) => "Bluetooth network (PAN), through NetworkManager".to_owned(),
+                    None => "Turn on Bluetooth tethering on the phone and connect it first".to_owned(),
+                }),
+                on: tether.is_some_and(|t| t.active.is_some()),
+            });
+        }
+        toggles.extend([
             Toggle {
                 id: s("trusted"),
                 label: s("Trusted"),
@@ -523,6 +574,7 @@ fn details(device: &Device, adapter: &Adapter, state: &State) -> Details {
                 on: device.blocked,
             },
         ]);
+        d.toggles = model(toggles);
         items.push(item("Address", &device.address, true));
         items.push(item("Type", kind, false));
         items.push(item("Adapter", &adapter.name, false));
@@ -1009,6 +1061,8 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
         window.set_bt_rename_name(alias.into());
     }
     update(&weak, |app| {
+        // A NetworkManager command (a phone's internet), sent once the Bluetooth state is done with.
+        let mut pending_nm: Option<crate::view::Command> = None;
         let state = &mut app.bt;
         let adapter = state.adapter().map(|a| (a.path.clone(), a.powered, a.discoverable, a.pairable, a.alias.clone()));
         let selected = state.selected.as_deref().and_then(|id| state.device(id)).cloned();
@@ -1079,6 +1133,30 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
                 let Some(device) = selected else { return };
                 match argument {
                     "trusted" => state.send(Command::Trust { device: device.path, on: !device.trusted }),
+                    "tether" => {
+                        let tether = state.tether.get(&device.address.to_ascii_uppercase()).cloned();
+                        let command = match tether {
+                            Some(Tether { active: Some(active), .. }) => {
+                                Some(crate::view::Command::Deactivate { active })
+                            }
+                            Some(Tether { connection: Some(connection), device: nm_device, .. }) => {
+                                Some(crate::view::Command::Activate {
+                                    connection,
+                                    device: Some(nm_device),
+                                    access_point: None,
+                                })
+                            }
+                            Some(t) => Some(crate::view::Command::Tether {
+                                device: t.device,
+                                address: device.address.clone(),
+                                name: device.alias.clone(),
+                            }),
+                            None => None,
+                        };
+                        if let Some(command) = command {
+                            pending_nm = Some(command);
+                        }
+                    }
                     "blocked" => state.send(Command::Block { device: device.path, on: !device.blocked }),
                     _ => {}
                 }
@@ -1121,6 +1199,9 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
             "pair-accept" => answer_prompt(state, true, &code, always),
             "pair-cancel" => answer_prompt(state, false, &code, always),
             _ => {}
+        }
+        if let Some(command) = pending_nm {
+            crate::send(app, command);
         }
     });
 }
@@ -1371,6 +1452,47 @@ mod tests {
             }),
             ..State::default()
         }
+    }
+
+    #[test]
+    fn the_tray_lists_paired_devices_connected_first() {
+        let q = quick(&state());
+        let names: Vec<(&str, bool)> = q.iter().map(|(_, n, _, on)| (n.as_str(), *on)).collect();
+        assert_eq!(names, [("Sony WH-1000XM5", true), ("Pixel 8", false)]);
+        assert_eq!(q[0].2, "Bluetooth · Headphones · battery 82 %");
+        assert!(q[0].0.starts_with("bt:"));
+    }
+
+    #[test]
+    fn a_phone_offers_files_and_its_internet() {
+        let mut state = state();
+        let phone = state.snapshot.as_mut().unwrap().devices.iter_mut().find(|d| d.alias == "Pixel 8").unwrap();
+        phone.uuids = vec![uuid::NAP.into(), uuid::OBEX_PUSH.into()];
+        let (path, address) = (phone.path.clone(), phone.address.clone());
+        state.selected = Some(path);
+        let toggles = |state: &State| {
+            let (page, ..) = page(state, Instant::now());
+            page.details.toggles.iter().map(|t| (t.id.to_string(), t.sub.to_string(), t.on)).collect::<Vec<_>>()
+        };
+        let (page, ..) = page(&state, Instant::now());
+        let actions: Vec<String> = page.details.actions.iter().map(|a| a.label.to_string()).collect();
+        assert_eq!(actions, ["Connect", "Send files…", "Forget"]);
+        // NetworkManager has no device for it yet: the phone must share and be connected.
+        assert_eq!(
+            toggles(&state)[0],
+            ("tether".into(), "Turn on Bluetooth tethering on the phone and connect it first".into(), false)
+        );
+        state.tether.insert(
+            address,
+            Tether {
+                device: "/nm/Devices/7".into(),
+                connection: None,
+                active: Some("/nm/Active/3".into()),
+                status: "Connected · 192.168.44.12 · metered".into(),
+            },
+        );
+        assert_eq!(toggles(&state)[0], ("tether".into(), "Connected · 192.168.44.12 · metered".into(), true));
+        assert_eq!(toggles(&state)[1].0, "trusted");
     }
 
     fn rows(page: &BtPage) -> Vec<(String, Vec<String>)> {

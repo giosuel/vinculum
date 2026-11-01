@@ -20,7 +20,7 @@ hl.window_rule({
     match = { class = lituus, title = "^(Lituus quick)$" },
     float = true,
     pin = true,
-    size = { 380, 560 },
+    size = { 380, 600 },
     move = { "monitor_w-window_w-12", "52" },
 })
 

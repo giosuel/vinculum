@@ -65,6 +65,8 @@ pub struct Device {
 pub enum DeviceKind {
     Ethernet,
     Wifi,
+    /// A paired phone that shares its internet (PAN, or DUN).
+    Bluetooth,
     WireGuard,
     Bridge,
     Bond,
@@ -79,6 +81,7 @@ impl From<u32> for DeviceKind {
         match value {
             1 => Self::Ethernet,
             2 => Self::Wifi,
+            5 => Self::Bluetooth,
             10 => Self::Bond,
             11 => Self::Vlan,
             13 => Self::Bridge,
@@ -220,6 +223,10 @@ pub enum ConnectionKind {
         ssid: Vec<u8>,
     },
     Ethernet,
+    /// A phone's internet over Bluetooth, by the phone's address ("58:24:29:B1:0E:77").
+    Bluetooth {
+        address: String,
+    },
     WireGuard,
     /// A NetworkManager VPN plugin, e.g. `org.freedesktop.NetworkManager.openvpn`.
     Vpn {
