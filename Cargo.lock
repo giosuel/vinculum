@@ -2676,6 +2676,7 @@ dependencies = [
  "lituus-bt",
  "lituus-keyring",
  "lituus-nm",
+ "lituus-sound",
  "pulseaudio",
  "qrcodegen",
  "resvg",
@@ -2732,6 +2733,14 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "zbus",
+]
+
+[[package]]
+name = "lituus-sound"
+version = "0.0.0-dev"
+dependencies = [
+ "pulseaudio",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

@@ -1,0 +1,441 @@
+// The Sound page, following the "Lituus: Sound" mockups: the output in use is the hero, with a
+// big volume slider; then devices, apps and cards in tabs. What it shows comes from Rust
+// (src/sound.rs); everything the user does goes back through `act(verb, id, value)`.
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+import { Button, IconButton, Switch, SectionLabel } from "controls.slint";
+import { Segmented, Select } from "dialogs.slint";
+import { Hero, HeroInfo, Card } from "shell.slint";
+
+/// An output or input. id: its name on the server.
+export struct SoundDevice { id: string, name: string, sub: string, icon: string, in-use: bool }
+/// An app playing. output: its output's place in `outputs`.
+export struct SoundApp { id: string, name: string, sub: string, volume: float, muted: bool, output: int }
+/// A sound card and its profiles.
+export struct SoundCard { id: string, name: string, profiles: [string], selected: int }
+/// state: "list", "loading" or "not-running" (the empty-* fields say why).
+export struct SoundView {
+    state: string,
+    sub: string,
+    hero: HeroInfo,
+    /// The output in use: volume (1.0 is 100 %), mute, ports and balance.
+    out-volume: float,
+    out-muted: bool,
+    out-ports: [string],
+    out-port: int,
+    out-balance: float,
+    has-balance: bool,
+    outputs: [SoundDevice],
+    /// The outputs' names, for the apps' choice of output.
+    outputs-names: [string],
+    inputs: [SoundDevice],
+    in-volume: float,
+    in-muted: bool,
+    apps: [SoundApp],
+    cards: [SoundCard],
+    /// The highest volume the sliders go to: 1.0, or 1.5 with "Louder than 100 %" on.
+    max: float,
+    overamplify: bool,
+    /// The last change the server turned down.
+    error: string,
+    empty-title: string,
+    empty-text: string,
+}
+
+/// A volume slider: drags and arrow keys move it; while it's dragged it shows its own value
+/// rather than the server's, which lags behind.
+export component Slider inherits Rectangle {
+    in property <float> value;
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <bool> big;
+    in property <string> label;
+    in property <bool> enabled: true;
+    /// A mark across the track, such as 100 % when it goes higher, or the centre of a balance.
+    in property <float> mark: -1;
+    callback moved(float);
+    property <float> local: value;
+    property <bool> dragging: touch.pressed;
+    property <float> shown: dragging ? local : value;
+    property <length> knob: big ? 22px : 16px;
+    property <float> fraction: (clamp(shown, minimum, maximum) - minimum) / (maximum - minimum);
+    height: big ? 28px : 20px;
+    min-width: 80px;
+    opacity: enabled ? 1 : 0.5;
+    accessible-role: slider;
+    accessible-label: label;
+    accessible-value: round(shown * 100) + " %";
+    accessible-value-minimum: minimum * 100;
+    accessible-value-maximum: maximum * 100;
+    accessible-action-increment => { root.moved(min(root.maximum, root.value + 0.05)); }
+    accessible-action-decrement => { root.moved(max(root.minimum, root.value - 0.05)); }
+    forward-focus: focus;
+    track := Rectangle {
+        x: root.knob / 2;
+        width: parent.width - root.knob;
+        height: root.big ? 8px : 4px;
+        border-radius: self.height / 2;
+        background: Theme.off-track;
+        if root.minimum >= 0: Rectangle {
+            x: 0;
+            width: parent.width * root.fraction;
+            border-radius: parent.border-radius;
+            background: Theme.accent;
+        }
+        if root.mark >= 0: Rectangle {
+            x: parent.width * (root.mark - root.minimum) / (root.maximum - root.minimum) - 1px;
+            width: 2px;
+            height: parent.height + 8px;
+            y: -4px;
+            background: Theme.faint;
+        }
+    }
+    Rectangle {
+        x: track.x + track.width * root.fraction - root.knob / 2;
+        width: root.knob;
+        height: root.knob;
+        border-radius: root.knob / 2;
+        background: Theme.accent;
+        border-width: 3px;
+        border-color: Theme.surface;
+    }
+    // Under the touch area, which would otherwise not get the presses.
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.RightArrow || event.text == Key.UpArrow { root.moved(min(root.maximum, root.value + 0.05)); return accept; }
+            if event.text == Key.LeftArrow || event.text == Key.DownArrow { root.moved(max(root.minimum, root.value - 0.05)); return accept; }
+            reject
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            // A press moves the knob there at once; a drag carries on from it (moved below).
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                focus.focus();
+                root.local = root.minimum + clamp((self.mouse-x - track.x) / track.width, 0, 1) * (root.maximum - root.minimum);
+                root.moved(root.local);
+            }
+        }
+        moved => {
+            if self.pressed {
+                root.local = root.minimum + clamp((self.mouse-x - track.x) / track.width, 0, 1) * (root.maximum - root.minimum);
+                root.moved(root.local);
+            }
+        }
+    }
+}
+
+component Percent inherits Text {
+    in property <float> value;
+    in property <bool> muted;
+    text: muted ? "Muted" : round(value * 100) + " %";
+    color: Theme.muted;
+    font-size: 12px;
+    font-family: "JetBrains Mono";
+    horizontal-alignment: right;
+    vertical-alignment: center;
+    width: 52px;
+}
+
+component DeviceRow inherits Rectangle {
+    in property <SoundDevice> device;
+    in property <bool> first;
+    callback use();
+    min-height: 50px;
+    accessible-role: list-item;
+    accessible-label: device.name + ", " + device.sub;
+    Rectangle { y: 0; height: 1px; background: root.first ? transparent : Theme.border; }
+    HorizontalLayout {
+        spacing: 12px;
+        Icon { name: root.device.icon; tint: root.device.in-use ? Theme.accent : Theme.muted; size: 17px; y: (parent.height - 17px) / 2; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: root.device.name; color: Theme.text; font-size: 13px; font-weight: root.device.in-use ? 600 : 400; overflow: elide; }
+            if root.device.sub != "": Text { text: root.device.sub; color: Theme.faint; font-size: 12px; overflow: elide; }
+        }
+        if root.device.in-use: Text { text: "In use"; color: Theme.accent; font-size: 12px; vertical-alignment: center; }
+        if !root.device.in-use: Button {
+            label: "Use";
+            button-height: 28px;
+            min-width: self.preferred-width;
+            y: (parent.height - self.height) / 2;
+            clicked => { root.use(); }
+        }
+    }
+}
+
+component SettingRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> sub;
+    in property <bool> first;
+    min-height: 48px;
+    spacing: 14px;
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        horizontal-stretch: 1;
+        Text { text: root.label; color: Theme.text; font-size: 13px; }
+        if root.sub != "": Text { text: root.sub; color: Theme.faint; font-size: 12px; }
+    }
+    @children
+}
+
+export component SoundPage inherits VerticalLayout {
+    in property <SoundView> page;
+    in-out property <int> tab;
+    callback act(string, string, float);
+    spacing: 14px;
+
+    Hero {
+        title: "Sound";
+        sub: root.page.sub;
+        hero-height: 206px;
+        if root.page.state == "list": HorizontalLayout {
+            x: 24px;
+            y: parent.height - self.height - 22px;
+            width: parent.width - 48px;
+            height: 96px;
+            spacing: 20px;
+            Rectangle {
+                width: 88px;
+                height: 88px;
+                y: parent.height - self.height;
+                border-radius: 44px;
+                background: Theme.accent-soft-bg;
+                Icon { name: root.page.hero.icon; tint: Theme.accent; size: 42px; stroke-width: 1.3px; }
+            }
+            VerticalLayout {
+                alignment: end;
+                spacing: 10px;
+                padding-bottom: 2px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: root.page.hero.name; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; vertical-alignment: bottom; }
+                    Text { text: root.page.hero.meta; color: Theme.muted; font-size: 13px; overflow: elide; vertical-alignment: bottom; horizontal-stretch: 1; }
+                }
+                HorizontalLayout {
+                    spacing: 12px;
+                    IconButton {
+                        icon: root.page.out-muted ? "volume-off" : "volume";
+                        label: root.page.out-muted ? "Unmute" : "Mute";
+                        clicked => { root.act("out-mute", "", 0); }
+                    }
+                    Slider {
+                        big: true;
+                        label: "Output volume";
+                        value: root.page.out-volume;
+                        maximum: root.page.max;
+                        mark: root.page.max > 1 ? 1 : -1;
+                        y: (parent.height - self.height) / 2;
+                        horizontal-stretch: 1;
+                        moved(v) => { root.act("out-volume", "", v); }
+                    }
+                    Percent { value: root.page.out-volume; muted: root.page.out-muted; font-size: 14px; color: Theme.text; }
+                }
+            }
+        }
+    }
+
+    if root.page.state == "list": HorizontalLayout {
+        height: 40px;
+        Segmented {
+            label: "Sound";
+            horizontal-stretch: 0;
+            options: ["Devices", "Apps", "Cards"];
+            selected <=> root.tab;
+        }
+        Text { text: root.page.error; color: Theme.danger; font-size: 13px; horizontal-alignment: right; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+    }
+
+    if root.page.state == "list" && root.tab == 0: HorizontalLayout {
+        spacing: 14px;
+        vertical-stretch: 1;
+        Card {
+            horizontal-stretch: 1;
+            Flickable {
+                content-height: outputs.preferred-height;
+                outputs := VerticalLayout {
+                    padding: 18px;
+                    padding-top: 14px;
+                    spacing: 0;
+                    alignment: start;
+                    Text { text: "Output"; color: Theme.text; font-weight: 600; height: 30px; }
+                    for d[i] in root.page.outputs: DeviceRow {
+                        device: d;
+                        first: i == 0;
+                        use => { root.act("default-sink", d.id, 0); }
+                    }
+                    if root.page.out-ports.length > 1: SettingRow {
+                        label: "Port";
+                        sub: "Where the output in use plays";
+                        Select {
+                            width: 200px;
+                            select-height: 32px;
+                            label: "Port";
+                            options: root.page.out-ports;
+                            selected: root.page.out-port;
+                            y: (parent.height - self.height) / 2;
+                            chosen(i) => { root.act("out-port", "" + i, 0); }
+                        }
+                    }
+                    if root.page.has-balance: SettingRow {
+                        label: "Balance";
+                        Text { text: "L"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+                        Slider {
+                            width: 180px;
+                            label: "Balance";
+                            minimum: -1;
+                            maximum: 1;
+                            mark: 0;
+                            value: root.page.out-balance;
+                            y: (parent.height - self.height) / 2;
+                            moved(v) => { root.act("balance", "", abs(v) < 0.06 ? 0 : v); }
+                        }
+                        Text { text: "R"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+        Card {
+            horizontal-stretch: 1;
+            Flickable {
+                content-height: inputs.preferred-height;
+                inputs := VerticalLayout {
+                    padding: 18px;
+                    padding-top: 14px;
+                    spacing: 0;
+                    alignment: start;
+                    Text { text: "Input"; color: Theme.text; font-weight: 600; height: 30px; }
+                    if root.page.inputs.length == 0: Text { text: "No microphone or other input."; color: Theme.faint; font-size: 12px; height: 40px; vertical-alignment: center; }
+                    for d[i] in root.page.inputs: DeviceRow {
+                        device: d;
+                        first: i == 0;
+                        use => { root.act("default-source", d.id, 0); }
+                    }
+                    if root.page.inputs.length > 0: SettingRow {
+                        label: "Volume";
+                        Slider {
+                            width: 180px;
+                            label: "Input volume";
+                            value: root.page.in-volume;
+                            maximum: root.page.max;
+                            mark: root.page.max > 1 ? 1 : -1;
+                            y: (parent.height - self.height) / 2;
+                            moved(v) => { root.act("in-volume", "", v); }
+                        }
+                        Percent { value: root.page.in-volume; muted: false; }
+                    }
+                    if root.page.inputs.length > 0: SettingRow {
+                        label: "Mute the input";
+                        sub: "Nobody hears you, in any app";
+                        Switch { on: root.page.in-muted; label: "Mute the input"; y: (parent.height - self.height) / 2; toggled => { root.act("in-mute", "", 0); } }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.page.state == "list" && root.tab == 1: Card {
+        vertical-stretch: 1;
+        Flickable {
+            content-height: apps.preferred-height;
+            apps := VerticalLayout {
+                padding: 18px;
+                padding-top: 14px;
+                spacing: 0;
+                alignment: start;
+                HorizontalLayout {
+                    height: 30px;
+                    Text { text: "Apps"; color: Theme.text; font-weight: 600; horizontal-stretch: 1; }
+                    Text { text: root.page.apps.length == 1 ? "1 playing" : root.page.apps.length + " playing"; color: Theme.muted; font-size: 12px; }
+                }
+                if root.page.apps.length == 0: Text { text: "No app is playing sound."; color: Theme.faint; font-size: 13px; height: 48px; vertical-alignment: center; }
+                for a[i] in root.page.apps: HorizontalLayout {
+                    min-height: 56px;
+                    spacing: 12px;
+                    Icon { name: "app"; tint: Theme.muted; size: 17px; y: (parent.height - 17px) / 2; }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        width: 200px;
+                        Text { text: a.name; color: Theme.text; font-size: 13px; overflow: elide; }
+                        if a.sub != "": Text { text: a.sub; color: Theme.faint; font-size: 12px; overflow: elide; }
+                    }
+                    IconButton {
+                        icon: a.muted ? "volume-off" : "volume";
+                        label: a.muted ? "Unmute " + a.name : "Mute " + a.name;
+                        y: (parent.height - self.height) / 2;
+                        clicked => { root.act("app-mute", a.id, 0); }
+                    }
+                    Slider {
+                        horizontal-stretch: 1;
+                        label: a.name + " volume";
+                        value: a.volume;
+                        maximum: root.page.max;
+                        mark: root.page.max > 1 ? 1 : -1;
+                        y: (parent.height - self.height) / 2;
+                        moved(v) => { root.act("app-volume", a.id, v); }
+                    }
+                    Percent { value: a.volume; muted: a.muted; }
+                    Select {
+                        width: 190px;
+                        select-height: 32px;
+                        label: "Output for " + a.name;
+                        options: root.page.outputs-names;
+                        selected: a.output;
+                        y: (parent.height - self.height) / 2;
+                        chosen(i) => { root.act("app-output", a.id, i); }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.page.state == "list" && root.tab == 2: Card {
+        vertical-stretch: 1;
+        Flickable {
+            content-height: cards.preferred-height;
+            cards := VerticalLayout {
+                padding: 18px;
+                padding-top: 14px;
+                spacing: 0;
+                alignment: start;
+                Text { text: "Sound cards"; color: Theme.text; font-weight: 600; height: 30px; }
+                if root.page.cards.length == 0: Text { text: "No sound card with a choice of profiles."; color: Theme.faint; font-size: 13px; height: 40px; vertical-alignment: center; }
+                for c[i] in root.page.cards: SettingRow {
+                    label: c.name;
+                    sub: "Profile: which outputs and inputs it offers";
+                    Select {
+                        width: 300px;
+                        select-height: 32px;
+                        label: "Profile for " + c.name;
+                        options: c.profiles;
+                        selected: c.selected;
+                        y: (parent.height - self.height) / 2;
+                        chosen(p) => { root.act("profile", c.id, p); }
+                    }
+                }
+                SettingRow {
+                    label: "Louder than 100 %";
+                    sub: "Lets the sliders go to 150 %; sound may distort";
+                    Switch { on: root.page.overamplify; label: "Louder than 100 %"; y: (parent.height - self.height) / 2; toggled => { root.act("overamplify", "", 0); } }
+                }
+            }
+        }
+    }
+
+    if root.page.state != "list": Card {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: center;
+            spacing: 12px;
+            Icon { name: "volume-off"; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+            Text { text: root.page.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+            Text { text: root.page.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
+        }
+    }
+}

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/app", "crates/bt", "crates/cli", "crates/keyring", "crates/nm", "xtask"]
+members = ["crates/app", "crates/bt", "crates/cli", "crates/keyring", "crates/nm", "crates/sound", "xtask"]
 
 [workspace.package]
 version = "0.0.0-dev"
@@ -26,6 +26,7 @@ tokio = "1.53.2"
 lituus-bt = { path = "crates/bt" }
 lituus-keyring = { path = "crates/keyring" }
 lituus-nm = { path = "crates/nm" }
+lituus-sound = { path = "crates/sound" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 slint-build = "1.18.1"
 toml = "1.1.6"

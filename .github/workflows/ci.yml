@@ -62,9 +62,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - name: Mock NetworkManager (python-dbusmock) and a real keyring (gnome-keyring)
-        run: sudo apt-get install -y --no-install-recommends dbus python3-dbusmock gnome-keyring
-      - name: test (including the mock NetworkManager tests)
+      - name: Mock NetworkManager (python-dbusmock), a real keyring (gnome-keyring) and PipeWire
+        run: sudo apt-get install -y --no-install-recommends dbus python3-dbusmock gnome-keyring pipewire pipewire-pulse wireplumber pipewire-bin
+      - name: test (including the mock NetworkManager and the PipeWire tests)
         run: scripts/test.sh
         env:
           LITUUS_REQUIRE_KEYRING: 1

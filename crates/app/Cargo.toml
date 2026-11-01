@@ -29,6 +29,7 @@ resvg.workspace = true
 lituus-bt.workspace = true
 lituus-keyring.workspace = true
 lituus-nm.workspace = true
+lituus-sound.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
@@ -53,7 +54,7 @@ connection setting."""
 # $auto adds the libraries the binary links against; xkbcommon and EGL are loaded at runtime.
 depends = "$auto, network-manager, libxkbcommon0, libegl1"
 # Optional: OpenVPN, file dialogs (certificates, VPN files), and a keyring for "for me only".
-recommends = "xdg-desktop-portal, gnome-keyring | kwalletmanager, bluez"
+recommends = "xdg-desktop-portal, gnome-keyring | kwalletmanager, bluez, pipewire-pulse | pulseaudio"
 suggests = "network-manager-openvpn"
 assets = [
     ["target/release/lituus", "usr/bin/", "755"],

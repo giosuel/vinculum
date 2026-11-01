@@ -20,6 +20,7 @@ mod portal;
 mod qr;
 mod quick;
 mod secrets;
+mod sound;
 mod theme;
 mod tray;
 mod view;
@@ -138,6 +139,8 @@ struct App {
     notifier: Option<notify::Notifier>,
     /// The Bluetooth page.
     bt: bluetooth::State,
+    /// The Sound page.
+    sound: sound::State,
     /// The sidebar's search.
     nav_query: String,
     /// The Network tab last open, for coming back to it from the sidebar.
@@ -234,6 +237,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let (bt_commands, bt_receiver) = tokio::sync::mpsc::unbounded_channel();
     APP.with(|app| app.borrow_mut().bt.commands = Some(bt_commands));
     bluetooth::spawn(window.as_weak(), bt_receiver);
+    sound::spawn(window.as_weak());
     // The Bluetooth page's "Visible · 2:41" counts down.
     let countdown = slint::Timer::default();
     let weak = window.as_weak();
@@ -592,6 +596,17 @@ fn connect_callbacks(window: &MainWindow) {
             let on = *on;
             // The file watcher starts or stops the tray once it sees the change.
             if let Err(error) = config::set(&config::path(), table, key, on) {
+                app.message_title.clear();
+                app.message = Some((format!("Couldn't save the setting: {error}."), "danger"));
+            }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_sound_act(move |verb, id, value| {
+        update(&weak, |app| {
+            if let Some((table, key, on)) = sound::act(&mut app.sound, &verb, &id, value)
+                && let Err(error) = config::set(&config::path(), table, key, on)
+            {
                 app.message_title.clear();
                 app.message = Some((format!("Couldn't save the setting: {error}."), "danger"));
             }
@@ -1062,6 +1077,14 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             status: bluetooth::nav(&app.bt, false).sub.to_string(),
         },
         nav::Entry {
+            id: "sound",
+            label: "Sound",
+            icon: "volume",
+            group: "DEVICES",
+            keywords: "audio volume speakers headphones microphone input output pipewire mute apps",
+            status: sound::status(&app.sound),
+        },
+        nav::Entry {
             id: "appearance",
             label: "Appearance",
             icon: "palette",
@@ -1184,6 +1207,7 @@ fn render(window: &MainWindow) {
             ),
         ]));
         render_appearance(window, &app);
+        sound::render(window, &app.sound);
         render_quick(&mut app);
     });
 }
@@ -1910,6 +1934,7 @@ fn spawn_theme_watcher(weak: slint::Weak<MainWindow>) {
                 let wallpaper = theme::resolve(&config.theme.sources, true).1;
                 let rows = source_rows(&config, &statuses, follow);
                 let (builtin, mode, gradient) = (config.theme.builtin, config.theme.mode, config.theme.gradient);
+                let overamplify = config.sound.overamplify;
                 let settings = Settings::from(&config);
                 let config_path = path.display().to_string();
                 let _ = weak.upgrade_in_event_loop(move |window| {
@@ -1921,6 +1946,7 @@ fn spawn_theme_watcher(weak: slint::Weak<MainWindow>) {
                         app.mode = mode;
                         app.follow_wallpaper = follow;
                         app.gradient = gradient;
+                        app.sound.overamplify = overamplify;
                     });
                     apply_theme(&window);
                     apply_settings(&window, settings);

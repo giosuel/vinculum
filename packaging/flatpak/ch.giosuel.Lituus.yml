@@ -15,7 +15,7 @@ finish-args:
   - --system-talk-name=org.freedesktop.NetworkManager
   # BlueZ, on the system bus: Bluetooth adapters, devices and pairing.
   - --system-talk-name=org.bluez
-  # PipeWire's PulseAudio socket: a Bluetooth headset's audio profile (high quality or headset).
+  # PipeWire's PulseAudio socket: the Sound page, and a Bluetooth headset's audio profile.
   - --socket=pulseaudio
   # Passwords kept "for me only": GNOME Keyring (Secret Service), or KWallet.
   - --talk-name=org.freedesktop.secrets

@@ -10,6 +10,14 @@ pub struct Config {
     pub theme: ThemeConfig,
     pub tray: TrayConfig,
     pub notifications: NotificationsConfig,
+    pub sound: SoundConfig,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct SoundConfig {
+    /// Volume sliders go to 150 %.
+    pub overamplify: bool,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
