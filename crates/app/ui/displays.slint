@@ -1,0 +1,486 @@
+// The Displays page, following the "Displays (Speculum)" and "Hero" mockups: the monitors' layout
+// is the hero, the selected monitor's settings are below in tabs, and a bar at the bottom says
+// what's applied and saved. What it shows comes from Rust (src/displays.rs).
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+import { Button, IconButton, Switch, SectionLabel } from "controls.slint";
+import { Segmented, Select, TextField, CheckBox } from "dialogs.slint";
+import { Hero, Card } from "shell.slint";
+import { Slider } from "sound.slint";
+
+/// A monitor on the layout, in layout pixels.
+export struct LayoutMonitor { n: int, port: string, name: string, sub: string, x: float, y: float, w: float, h: float, selected: bool, disabled: bool, mirrored: bool }
+/// state: "list", "loading" or "not-running".
+export struct DisplaysView {
+    state: string,
+    sub: string,
+    empty-title: string,
+    empty-text: string,
+    monitors: [LayoutMonitor],
+    bounds-x: float,
+    bounds-y: float,
+    bounds-w: float,
+    bounds-h: float,
+    logical: string,
+    sel-n: int,
+    sel-title: string,
+    sel-sub: string,
+    sel-enabled: bool,
+    resolutions: [string],
+    resolution: int,
+    rates: [string],
+    rate: int,
+    scale-text: string,
+    scale-valid: bool,
+    scale-hint: string,
+    scale-chips: [string],
+    scale-chip: int,
+    rotation: int,
+    flipped: bool,
+    x-text: string,
+    y-text: string,
+    mirrors: [string],
+    mirror: int,
+    colour-modes: [string],
+    colour-mode: int,
+    hdr: bool,
+    hdr-capable: bool,
+    ten-bit: bool,
+    sdr-brightness: float,
+    sdr-saturation: float,
+    vrr-options: [string],
+    vrr: int,
+    vrr-capable: bool,
+    reserved: [string],
+    status: string,
+    status-tone: string,
+    can-apply: bool,
+    can-revert: bool,
+    can-save: bool,
+    keep-open: bool,
+    keep-seconds: int,
+    keep-fraction: float,
+    not-loaded: bool,
+    load-line: string,
+    config-path: string,
+    config-main: string,
+    config-open: bool,
+    config-text: string,
+}
+
+component Badge inherits Rectangle {
+    in property <int> n;
+    in property <bool> on;
+    width: 22px;
+    height: 22px;
+    border-radius: 11px;
+    background: on ? Theme.accent : Theme.ctrl-bg;
+    border-width: on ? 0 : 1px;
+    border-color: Theme.ctrl-border;
+    Text { text: root.n; color: root.on ? Theme.on-accent : Theme.muted; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+/// The monitors to scale, draggable.
+component Layout inherits Rectangle {
+    in property <DisplaysView> view;
+    callback select(int);
+    callback drag(int, float, float, bool);
+    property <length> margin: 18px;
+    // Layout pixels to screen.
+    property <float> k: min((self.width - 2 * margin) / 1px / max(1, view.bounds-w), (self.height - 2 * margin) / 1px / max(1, view.bounds-h));
+    property <length> ox: (self.width - view.bounds-w * k * 1px) / 2;
+    property <length> oy: (self.height - view.bounds-h * k * 1px) / 2;
+    for m[i] in root.view.monitors: Rectangle {
+        property <length> dx: touch.pressed ? touch.mouse-x - touch.pressed-x : 0;
+        property <length> dy: touch.pressed ? touch.mouse-y - touch.pressed-y : 0;
+        x: root.ox + (m.x - root.view.bounds-x) * root.k * 1px + 1.5px + dx;
+        y: root.oy + (m.y - root.view.bounds-y) * root.k * 1px + 1.5px + dy;
+        width: m.w * root.k * 1px - 3px;
+        height: m.h * root.k * 1px - 3px;
+        border-radius: 8px;
+        border-width: m.selected ? 2px : 1px;
+        border-color: m.selected ? Theme.accent : Theme.ctrl-border;
+        background: m.selected ? Theme.accent-soft-bg : Theme.ctrl-bg;
+        opacity: m.disabled || m.mirrored ? 0.55 : 1;
+        clip: true;
+        accessible-role: button;
+        accessible-label: m.port + ", " + m.name + ", " + m.sub;
+        accessible-action-default => { root.select(i); }
+        VerticalLayout {
+            padding: 10px;
+            spacing: 2px;
+            HorizontalLayout {
+                spacing: 7px;
+                alignment: start;
+                Badge { n: m.n; on: m.selected; }
+                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: 11px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+            }
+            Rectangle { vertical-stretch: 1; }
+            Text { text: m.name; color: Theme.text; font-size: 12px; font-weight: 600; overflow: elide; }
+            Text { text: m.sub; color: Theme.muted; font-size: 11px; overflow: elide; }
+        }
+        touch := TouchArea {
+            mouse-cursor: m.disabled || m.mirrored ? pointer : move;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down { root.select(i); }
+                if event.kind == PointerEventKind.up && !m.disabled && !m.mirrored && (abs(self.mouse-x - self.pressed-x) > 2px || abs(self.mouse-y - self.pressed-y) > 2px) {
+                    root.drag(i, m.x + (self.mouse-x - self.pressed-x) / 1px / root.k, m.y + (self.mouse-y - self.pressed-y) / 1px / root.k, true);
+                }
+            }
+        }
+    }
+}
+
+component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> hint;
+    in property <bool> bad;
+    spacing: 6px;
+    alignment: start;
+    Text { text: root.label; color: Theme.muted; font-size: 12px; }
+    @children
+    if root.hint != "": Text { text: root.hint; color: root.bad ? Theme.danger : Theme.faint; font-size: 12px; wrap: word-wrap; }
+}
+
+export component DisplaysPage inherits VerticalLayout {
+    in property <DisplaysView> view;
+    in-out property <int> tab;
+    callback act(string, string, float);
+    callback drag(int, float, float, bool);
+    spacing: 14px;
+
+    if root.view.not-loaded && root.view.state == "list": Rectangle {
+        height: banner.preferred-height;
+        border-radius: 12px;
+        border-width: 1px;
+        border-color: Theme.warn-border;
+        background: Theme.warn-bg;
+        copy-field := TextInput { visible: false; text: root.view.load-line; read-only: true; }
+        banner := HorizontalLayout {
+            padding: 6px;
+            padding-left: 14px;
+            spacing: 10px;
+            Icon { name: "warning"; tint: Theme.warn-text; y: (parent.height - 16px) / 2; }
+            Text {
+                text: "Your Hyprland config doesn't load Lituus's file yet, so changes are lost when Hyprland restarts.";
+                color: Theme.warn-text;
+                font-size: 13px;
+                wrap: word-wrap;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Button {
+                label: "Copy " + root.view.load-line;
+                button-height: 30px;
+                min-width: self.preferred-width;
+                y: (parent.height - self.height) / 2;
+                clicked => { copy-field.select-all(); copy-field.copy(); }
+            }
+        }
+    }
+
+    Hero {
+        title: "Displays";
+        sub: root.view.sub;
+        hero-height: root.view.state != "list" ? 140px : root.view.not-loaded ? 286px : 330px;
+        if root.view.state == "list": Layout {
+            x: 20px;
+            y: 76px;
+            width: parent.width - 40px;
+            height: parent.height - 76px - 28px;
+            view: root.view;
+            select(i) => { root.act("select", "" + i, 0); }
+            drag(i, x, y, done) => { root.drag(i, x, y, done); }
+        }
+        if root.view.state == "list": Text {
+            x: 24px;
+            y: parent.height - 24px;
+            text: root.view.logical;
+            color: Theme.faint;
+            font-size: 11px;
+        }
+        if root.view.state == "list": HorizontalLayout {
+            x: parent.width - self.width - 18px;
+            y: 18px;
+            width: self.preferred-width;
+            height: 34px;
+            Button { label: "View config"; button-height: 34px; clicked => { root.act("view-config", "", 0); } }
+        }
+    }
+
+    if root.view.state == "list": Card {
+        vertical-stretch: 1;
+        VerticalLayout {
+            padding: 18px;
+            padding-top: 14px;
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 10px;
+                Badge { n: root.view.sel-n; on: true; y: (parent.height - self.height) / 2; }
+                VerticalLayout {
+                    spacing: 1px;
+                    horizontal-stretch: 1;
+                    Text { text: root.view.sel-title; color: Theme.text; font-size: 15px; font-weight: 600; overflow: elide; }
+                    Text { text: root.view.sel-sub; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+                }
+                Segmented {
+                    label: "Monitor settings";
+                    horizontal-stretch: 0;
+                    options: ["Display", "Colour and HDR", "Advanced"];
+                    selected <=> root.tab;
+                }
+                Text { text: "Enabled"; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
+                Switch { on: root.view.sel-enabled; label: "Enabled"; switch-width: 40px; y: (parent.height - self.height) / 2; toggled => { root.act("enabled", "", 0); } }
+            }
+            Rectangle { height: 1px; background: Theme.border; }
+            if root.tab == 0: GridLayout {
+                spacing-horizontal: 22px;
+                spacing-vertical: 14px;
+                Field {
+                    label: "Resolution";
+                    Select { options: root.view.resolutions; selected: root.view.resolution; label: "Resolution"; select-height: 34px; chosen(i) => { root.act("resolution", "" + i, 0); } }
+                }
+                Field {
+                    label: "Refresh rate";
+                    Select { options: root.view.rates; selected: root.view.rate; label: "Refresh rate"; select-height: 34px; chosen(i) => { root.act("rate", "" + i, 0); } }
+                }
+                Field {
+                    label: "Scale";
+                    hint: root.view.scale-hint;
+                    bad: !root.view.scale-valid;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+                        IconButton { icon: "minus"; label: "Smaller scale"; width: 34px; height: 34px; clicked => { root.act("scale-step", "", -1); } }
+                        Rectangle {
+                            width: 52px;
+                            height: 34px;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: root.view.scale-valid ? Theme.ctrl-border : Theme.danger;
+                            Text { text: root.view.scale-text; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        IconButton { icon: "plus"; label: "Larger scale"; width: 34px; height: 34px; clicked => { root.act("scale-step", "", 1); } }
+                        for c[k] in root.view.scale-chips: Rectangle {
+                            width: chip.preferred-width + 18px;
+                            height: 26px;
+                            y: 4px;
+                            border-radius: 13px;
+                            border-width: 1px;
+                            border-color: k == root.view.scale-chip ? Theme.accent-soft-border : Theme.ctrl-border;
+                            background: k == root.view.scale-chip ? Theme.accent-soft-bg : transparent;
+                            accessible-role: button;
+                            accessible-label: "Scale " + c;
+                            accessible-action-default => { root.act("scale", "", c.to-float()); }
+                            chip := Text { text: c; color: Theme.text; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { mouse-cursor: pointer; clicked => { root.act("scale", "", c.to-float()); } }
+                        }
+                    }
+                }
+                Field {
+                    row: 1;
+                    label: "Rotation";
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+                        Segmented {
+                            label: "Rotation";
+                            height: 34px;
+                            options: ["0°", "90°", "180°", "270°"];
+                            selected: root.view.rotation;
+                            changed(i) => { root.act("rotation", "" + i, 0); }
+                        }
+                        CheckBox { checked: root.view.flipped; text: "Flip"; y: (parent.height - self.height) / 2; toggled(on) => { root.act("flip", "", 0); } }
+                    }
+                }
+                Field {
+                    label: "Position";
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text { text: "X"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+                        TextField { text: root.view.x-text; mono: true; label: "X"; height: 34px; accepted => { root.act("x", self.text, 0); } }
+                        Text { text: "Y"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+                        TextField { text: root.view.y-text; mono: true; label: "Y"; height: 34px; accepted => { root.act("y", self.text, 0); } }
+                    }
+                }
+                Field {
+                    label: "Mirror";
+                    Select { options: root.view.mirrors; selected: root.view.mirror; label: "Mirror"; select-height: 34px; chosen(i) => { root.act("mirror", "" + i, 0); } }
+                }
+            }
+            if root.tab == 1: GridLayout {
+                spacing-horizontal: 22px;
+                spacing-vertical: 14px;
+                Field {
+                    label: "Colour mode";
+                    hint: root.view.hdr-capable ? "HDR needs a monitor and apps that support it." : "This monitor doesn't say it supports HDR.";
+                    Select { options: root.view.colour-modes; selected: root.view.colour-mode; label: "Colour mode"; select-height: 34px; chosen(i) => { root.act("colour", "" + i, 0); } }
+                }
+                Field {
+                    label: "Bit depth";
+                    hint: "Some apps can't share a 10-bit screen.";
+                    HorizontalLayout {
+                        alignment: start;
+                        Segmented { label: "Bit depth"; height: 34px; options: ["8-bit", "10-bit"]; selected: root.view.ten-bit ? 1 : 0; changed(i) => { root.act("bitdepth", "" + i, 0); } }
+                    }
+                }
+                Rectangle { }
+                Field {
+                    row: 1;
+                    label: "SDR brightness in HDR";
+                    hint: root.view.hdr ? "1.0 to 2.0 is typical." : "Only in HDR.";
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Slider { label: "SDR brightness"; minimum: 0.5; maximum: 2.5; value: root.view.sdr-brightness; enabled: root.view.hdr; y: (parent.height - self.height) / 2; moved(v) => { root.act("sdr-brightness", "", v); } }
+                        Text { text: round(root.view.sdr-brightness * 100) / 100; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; width: 36px; vertical-alignment: center; }
+                    }
+                }
+                Field {
+                    label: "SDR saturation in HDR";
+                    hint: root.view.hdr ? "1.0 keeps colours as they are." : "Only in HDR.";
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Slider { label: "SDR saturation"; minimum: 0.5; maximum: 1.5; value: root.view.sdr-saturation; enabled: root.view.hdr; y: (parent.height - self.height) / 2; moved(v) => { root.act("sdr-saturation", "", v); } }
+                        Text { text: round(root.view.sdr-saturation * 100) / 100; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; width: 36px; vertical-alignment: center; }
+                    }
+                }
+            }
+            if root.tab == 2: GridLayout {
+                spacing-horizontal: 22px;
+                spacing-vertical: 14px;
+                Field {
+                    label: "Variable refresh rate";
+                    hint: root.view.vrr-capable ? "Off, on, or only for fullscreen apps." : "This monitor doesn't say it supports VRR.";
+                    Select { options: root.view.vrr-options; selected: root.view.vrr; label: "Variable refresh rate"; select-height: 34px; chosen(i) => { root.act("vrr", "" + i, 0); } }
+                }
+                Field {
+                    label: "Reserved area";
+                    hint: "Space tiled windows keep free, besides bars: top, right, bottom, left.";
+                    HorizontalLayout {
+                        spacing: 6px;
+                        for r[k] in root.view.reserved: TextField { text: r; mono: true; label: "Reserved " + k; height: 34px; accepted => { root.act("reserved", k + ":" + self.text, 0); } }
+                    }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+
+    if root.view.state == "list": HorizontalLayout {
+        height: 34px;
+        spacing: 8px;
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            y: (parent.height - 8px) / 2;
+            border-radius: 4px;
+            background: root.view.status-tone == "danger" ? Theme.danger : root.view.status-tone == "warn" ? Theme.warn-text : root.view.status-tone == "accent" ? Theme.accent : Theme.faint;
+        }
+        Text { text: root.view.status; color: root.view.status-tone == "danger" ? Theme.danger : Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        if root.view.can-save: Button { label: "Save"; button-height: 34px; horizontal-stretch: 0; min-width: 84px; clicked => { root.act("save", "", 0); } }
+        Button { label: "Revert"; button-height: 34px; horizontal-stretch: 0; min-width: 84px; enabled: root.view.can-revert; clicked => { root.act("revert", "", 0); } }
+        Button { label: "Apply"; kind: "primary"; button-height: 34px; horizontal-stretch: 0; min-width: 96px; enabled: root.view.can-apply; clicked => { root.act("apply", "", 0); } }
+    }
+
+    if root.view.state != "list": Card {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: center;
+            spacing: 12px;
+            Icon { name: "monitor"; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+            Text { text: root.view.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+            Text { text: root.view.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
+        }
+    }
+}
+
+/// After Apply: keep the new settings, or they go back by themselves.
+export component KeepDialog inherits Rectangle {
+    in property <DisplaysView> view;
+    callback keep();
+    callback revert();
+    background: #05060799;
+    TouchArea { }
+    Rectangle {
+        width: 440px;
+        height: body.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Theme.ctrl-border;
+        background: Theme.surface;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: #00000080;
+        accessible-role: groupbox;
+        accessible-label: "Keep these display settings?";
+        body := VerticalLayout {
+            padding: 24px;
+            spacing: 14px;
+            Text { text: "Keep these display settings?"; color: Theme.text; font-size: 17px; font-weight: 600; }
+            Text { text: "If a screen stays black, do nothing: the old settings come back by themselves."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+            Rectangle {
+                height: 6px;
+                border-radius: 3px;
+                background: Theme.off-track;
+                Rectangle { x: 0; width: parent.width * root.view.keep-fraction; border-radius: 3px; background: Theme.accent; }
+            }
+            Text { text: "Going back in " + root.view.keep-seconds + " s"; color: Theme.muted; font-size: 12px; }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                Button { label: "Go back now"; button-height: 36px; clicked => { root.revert(); } }
+                Button { label: "Keep"; kind: "primary"; button-height: 36px; clicked => { root.keep(); } }
+            }
+        }
+    }
+}
+
+/// The file Lituus writes, to look at and copy.
+export component ConfigDialog inherits Rectangle {
+    in property <DisplaysView> view;
+    callback closed();
+    background: #05060799;
+    TouchArea { clicked => { root.closed(); } }
+    Rectangle {
+        width: min(parent.width - 80px, 820px);
+        height: body.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Theme.ctrl-border;
+        background: Theme.surface;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: #00000080;
+        TouchArea { }
+        body := VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            Text { text: "Config file"; color: Theme.text; font-size: 17px; font-weight: 600; }
+            Text { text: root.view.config-path + ", with the changes not applied yet"; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; }
+            Rectangle {
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: Theme.input-bg;
+                height: min(code.preferred-height + 24px, 360px);
+                Flickable {
+                    x: 12px;
+                    y: 12px;
+                    width: parent.width - 24px;
+                    height: parent.height - 24px;
+                    viewport-width: max(self.width, code.preferred-width);
+                    viewport-height: code.preferred-height;
+                    code := TextInput { text: root.view.config-text; read-only: true; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; wrap: no-wrap; }
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                Button { label: "Copy"; button-height: 36px; clicked => { code.select-all(); code.copy(); } }
+                Button { label: "Close"; kind: "primary"; button-height: 36px; clicked => { root.closed(); } }
+            }
+        }
+    }
+}

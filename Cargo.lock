@@ -2674,6 +2674,7 @@ dependencies = [
  "i-slint-backend-testing",
  "ksni",
  "lituus-bt",
+ "lituus-hypr",
  "lituus-keyring",
  "lituus-nm",
  "lituus-sound",
