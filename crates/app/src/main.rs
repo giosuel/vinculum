@@ -139,6 +139,8 @@ struct App {
     quick: quick::Quick,
     /// The popup was just made, and needs everything once.
     quick_new: bool,
+    /// The Bluetooth devices the popup shows: (id, name, meta, connected).
+    quick_bt: Vec<(String, String, String, bool)>,
     notifier: Option<notify::Notifier>,
     /// The Bluetooth page.
     bt: bluetooth::State,
@@ -425,6 +427,15 @@ fn toggle_quick(window: &MainWindow) {
             let main = window.as_weak();
             move |id| {
                 if let Some(window) = main.upgrade() {
+                    if let Some(device) = id.strip_prefix("bt:") {
+                        // A Bluetooth device: connect or disconnect it.
+                        let device = device.to_owned();
+                        update(&main, |app| {
+                            app.bt.selected = Some(device);
+                            bluetooth::activate(&mut app.bt);
+                        });
+                        return;
+                    }
                     let event = if id == "airplane" {
                         let on = APP.with(|app| app.borrow().quick.airplane);
                         tray::Event::SetAirplane(!on)
@@ -463,7 +474,8 @@ fn toggle_quick(window: &MainWindow) {
 /// The tray and the popup show what changed.
 fn render_quick(app: &mut App) {
     let q = quick::build(app.snapshot.as_ref());
-    if q == app.quick && !std::mem::take(&mut app.quick_new) {
+    let bt = bluetooth::quick(&app.bt);
+    if q == app.quick && bt == app.quick_bt && !std::mem::take(&mut app.quick_new) {
         return;
     }
     if let Some(tray) = &app.tray {
@@ -499,6 +511,12 @@ fn render_quick(app: &mut App) {
                 on: v.on,
             })
             .collect();
+        toggles.extend(bt.iter().map(|(id, name, meta, on)| QuickToggle {
+            id: id.as_str().into(),
+            name: name.as_str().into(),
+            meta: meta.as_str().into(),
+            on: *on,
+        }));
         toggles.push(QuickToggle {
             id: "airplane".into(),
             name: "Airplane mode".into(),
@@ -508,6 +526,7 @@ fn render_quick(app: &mut App) {
         popup.set_toggles(model(toggles));
     });
     app.quick = q;
+    app.quick_bt = bt;
 }
 
 fn connect_callbacks(window: &MainWindow) {
@@ -1123,6 +1142,41 @@ fn render_appearance(window: &MainWindow, app: &App) {
     window.set_ap_gradient(app.gradient);
 }
 
+/// The phones NetworkManager can use the internet of, by Bluetooth address, for the Bluetooth
+/// page.
+fn tether_offers(snapshot: Option<&lituus_nm::Snapshot>) -> std::collections::HashMap<String, bluetooth::Tether> {
+    let Some(snap) = snapshot else { return Default::default() };
+    snap.devices
+        .iter()
+        .filter(|d| d.kind == lituus_nm::DeviceKind::Bluetooth)
+        .map(|d| {
+            let address = d.hw_address.to_ascii_uppercase();
+            let connection = snap
+                .connections
+                .iter()
+                .find(|c| matches!(&c.kind, lituus_nm::ConnectionKind::Bluetooth { address: a } if a.eq_ignore_ascii_case(&address)));
+            let active = d.active_connection.clone().filter(|a| {
+                snap.active_connection(a).is_some_and(|a| a.state != lituus_nm::ActiveState::Deactivated)
+            });
+            let ip = d.ip4.as_ref().and_then(|ip| ip.addresses.first()).map(|(a, _)| a.clone());
+            let connecting = active.as_deref().and_then(|a| snap.active_connection(a)).is_some_and(|a| a.state != lituus_nm::ActiveState::Activated);
+            let metered = connection.and_then(|c| c.metered).unwrap_or(true);
+            let mut status = vec![if connecting { "Connecting…".to_owned() } else { "Connected".to_owned() }];
+            status.extend(ip);
+            if metered {
+                status.push("metered".to_owned());
+            }
+            let tether = bluetooth::Tether {
+                device: d.path.clone(),
+                connection: connection.map(|c| c.path.clone()),
+                active,
+                status: status.join(" · "),
+            };
+            (address, tether)
+        })
+        .collect()
+}
+
 /// The sidebar's pages; the Network item's status is filled in from the view.
 fn nav_entries(app: &App) -> Vec<nav::Entry> {
     vec![
@@ -1204,6 +1258,7 @@ fn render(window: &MainWindow) {
         if let Some(note) = app.files.note.take() {
             app.bt.message = Some(bluetooth::Message { title: String::new(), text: note, tone: "info", retry: None });
         }
+        app.bt.tether = tether_offers(app.snapshot.as_ref());
         bluetooth::render(window, &mut app);
         window.set_page(app.ui.page.id().into());
         window.set_page_title(v.page_title.into());
@@ -1658,6 +1713,7 @@ async fn run(
         Rescan { device } => return client.request_scan(device).await.map(|()| None),
         Deactivate { active } => return client.deactivate(active).await.map(|()| None),
         Forget { connection } => return client.forget(connection).await.map(|()| None),
+        Tether { device, address, name } => return client.tether(device, address, name).await.map(|_| None),
         Activate { connection, device, access_point } => {
             let active = client.activate(connection, device.as_deref(), access_point.as_deref()).await?;
             (active, device.clone(), command.clone())
@@ -1936,6 +1992,7 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituu
         StopHotspot { .. } => "Couldn't stop the hotspot",
         Deactivate { .. } => "Couldn't disconnect",
         Forget { .. } => "Couldn't forget the connection",
+        Tether { .. } => "Couldn't use the phone's internet",
     };
     let (text, tone) = match error {
         lituus_nm::Error::Denied(_) => (

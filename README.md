@@ -138,7 +138,7 @@ Add the rules from [`extras/hyprland.lua`](extras/hyprland.lua) to `~/.config/hy
 local lituus = [[^(ch\.giosuel\.Lituus)$]]
 hl.window_rule({ match = { class = lituus, title = "^(Lituus)$" }, float = true, size = "1200 760", center = true })
 hl.window_rule({ match = { class = lituus, title = "^(Lituus quick)$" }, float = true, pin = true,
-    size = { 380, 560 }, move = { "monitor_w-window_w-12", "52" } })   -- the quick popup, top right
+    size = { 380, 600 }, move = { "monitor_w-window_w-12", "52" } })   -- the quick popup, top right
 
 hl.on("hyprland.start", function() hl.exec_cmd("lituus --background") end)
 hl.bind("SUPER + N", hl.dsp.exec_cmd("lituus"))                     -- open the window
