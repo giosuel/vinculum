@@ -118,6 +118,9 @@ fn serve(
             }
         }
         first = false;
+        if !commands.is_empty() {
+            post(weak, |s| s.error = None);
+        }
         for command in commands {
             if let Err(e) = execute(session, &command) {
                 if matches!(e, lituus_sound::Error::Io(_)) {
@@ -252,6 +255,7 @@ pub fn view(state: &State) -> SoundView {
         return v;
     };
     v.state = s("list");
+    v.error = s(state.error.clone().unwrap_or_default());
     let playing = snap.streams.iter().filter(|s| !s.corked).count();
     // "PulseAudio (on PipeWire 1.6.2) 15.0.0" is PipeWire 1.6.2 to the user.
     let server = match snap.server.split_once("(on ").and_then(|(_, r)| r.split_once(')')) {
