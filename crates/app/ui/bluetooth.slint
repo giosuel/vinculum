@@ -256,7 +256,7 @@ export component BluetoothPage inherits HorizontalLayout {
                 spacing: 14px;
                 padding-bottom: 40px;
                 if root.page.state == "loading": HorizontalLayout { alignment: center; Spinner { size: 20px; } }
-                if root.page.empty-icon != "": Icon { name: root.page.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+                if root.page.empty-icon != "": HorizontalLayout { alignment: center; Icon { name: root.page.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
                 Text { text: root.page.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
                 if root.page.empty-text != "": HorizontalLayout {
                     alignment: center;
