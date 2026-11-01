@@ -16,7 +16,7 @@ local lituus = [[^(ch\.giosuel\.Lituus)$]]
 hl.window_rule({
     match = { class = lituus, title = "^(Lituus)$" },
     float = true,
-    size = "1040 680",
+    size = "1200 760",
     center = true,
 })
 
@@ -46,7 +46,7 @@ For a bar at the bottom, or to open the popup at the pointer, use
 ```ini
 # ~/.config/hypr/hyprland.conf, Hyprland 0.53 and newer
 windowrule = float on, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus)$
-windowrule = size 1040 680, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus)$
+windowrule = size 1200 760, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus)$
 windowrule = center on, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus)$
 windowrule = float on, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus quick)$
 windowrule = pin on, match:class ^(ch\.giosuel\.Lituus)$, match:title ^(Lituus quick)$

@@ -13,6 +13,7 @@ mod editing;
 mod editor;
 mod hotspot;
 mod instance;
+mod nav;
 mod notify;
 mod openvpn;
 mod portal;
@@ -131,6 +132,10 @@ struct App {
     notifier: Option<notify::Notifier>,
     /// The Bluetooth page.
     bt: bluetooth::State,
+    /// The sidebar's search.
+    nav_query: String,
+    /// The Network tab last open, for coming back to it from the sidebar.
+    net_page: view::Page,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -477,14 +482,44 @@ fn render_quick(app: &mut App) {
 fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_navigate(move |id| {
+        let id = if id == "network" { APP.with(|app| app.borrow().net_page.id().into()) } else { id };
         if let Some(page) = view::Page::from_id(&id) {
             update(&weak, |app| {
+                if page.is_network() {
+                    app.net_page = page;
+                }
                 app.ui = view::UiState { page, ..view::UiState::default() };
                 if page == view::Page::Hotspot {
                     open_hotspot(app);
                 }
             });
         }
+    });
+    let weak = window.as_weak();
+    window.on_nav_search(move |text| update(&weak, |app| app.nav_query = text.to_string()));
+    let weak = window.as_weak();
+    window.on_nav_search_accepted(move || {
+        let Some(window) = weak.upgrade() else { return };
+        let target = APP.with(|app| {
+            let app = app.borrow();
+            nav::first_match(&nav_entries(&app), &app.nav_query).map(str::to_owned)
+        });
+        if let Some(id) = target {
+            window.invoke_navigate(id.into());
+        }
+    });
+    let weak = window.as_weak();
+    window.on_hero_action(move |verb| {
+        update(&weak, |app| {
+            let hero = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui).net_hero;
+            let Some(row) = hero.row else { return };
+            if app.ui.page != hero.page {
+                app.ui = view::UiState { page: hero.page, ..view::UiState::default() };
+                app.net_page = hero.page;
+            }
+            app.ui.selected = Some(row);
+            act(app, &verb);
+        })
     });
     let weak = window.as_weak();
     window.on_select(move |id| update(&weak, |app| app.ui.selected = Some(id.to_string())));
@@ -926,14 +961,57 @@ fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(items))
 }
 
+/// The sidebar's pages; the Network item's status is filled in from the view.
+fn nav_entries(app: &App) -> Vec<nav::Entry> {
+    vec![
+        nav::Entry {
+            id: "network",
+            label: "Network",
+            icon: "wifi",
+            group: "CONNECTIONS",
+            keywords: "wi-fi wifi wired ethernet vpn wireguard openvpn hotspot internet saved connections hostname",
+            status: String::new(),
+        },
+        nav::Entry {
+            id: "bluetooth",
+            label: "Bluetooth",
+            icon: "bluetooth",
+            group: "CONNECTIONS",
+            keywords: "pair pairing headphones headset keyboard mouse speaker devices",
+            status: bluetooth::nav(&app.bt, false).sub.to_string(),
+        },
+    ]
+}
+
 fn render(window: &MainWindow) {
     APP.with(|app| {
         let mut app = app.borrow_mut();
         let v = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui);
-        // Bluetooth goes between Hotspot and Saved connections.
-        let mut nav = v.nav;
-        nav.insert(nav.len().min(4), bluetooth::nav(&app.bt, app.ui.page == view::Page::Bluetooth));
-        window.set_nav(model(nav));
+        let current = if app.ui.page.is_network() { "network" } else { app.ui.page.id() };
+        let mut entries = nav_entries(&app);
+        entries[0].status = v.net_status.clone();
+        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, current)));
+        window.set_net_sub(v.net_sub.as_str().into());
+        window.set_net_hero(HeroInfo {
+            icon: v.net_hero.icon.into(),
+            name: v.net_hero.name.as_str().into(),
+            meta: v.net_hero.meta.as_str().into(),
+            tone: v.net_hero.tone.into(),
+            detail: v.net_hero.detail.as_str().into(),
+        });
+        window.set_net_hero_actions(model(
+            v.net_hero
+                .actions
+                .iter()
+                .map(|&(id, label, kind)| Action {
+                    id: id.into(),
+                    label: label.into(),
+                    kind: kind.into(),
+                    enabled: true,
+                })
+                .collect(),
+        ));
+        window.set_wifi_available(v.wifi_available);
         let on_bluetooth = app.ui.page == view::Page::Bluetooth && window.window().is_visible();
         bluetooth::set_open(&mut app.bt, on_bluetooth);
         bluetooth::render(window, &mut app);

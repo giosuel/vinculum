@@ -6,6 +6,7 @@ import { Icon, SignalBars, Battery, Spinner } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel } from "controls.slint";
 import { TextField, Segmented, CheckBox } from "dialogs.slint";
 import { Details, DetailsPane } from "details.slint";
+import { HeroInfo } from "shell.slint";
 
 /// battery and bars: -1 when not shown. button: the label of the button on the row, if any.
 export struct BtRow { id: string, name: string, meta: string, tone: string, icon: string, battery: int, bars: int, button: string, selected: bool }
@@ -24,6 +25,9 @@ export struct BtPage {
     visible: bool,
     visible-label: string,
     pairable: bool,
+    /// The hero: the connected device (or the adapter), and the line under the page title.
+    hero: HeroInfo,
+    hero-sub: string,
     sections: [BtSection],
     has-details: bool,
     details: Details,
@@ -131,6 +135,7 @@ component Pill inherits Rectangle {
 }
 
 export component BluetoothPage inherits HorizontalLayout {
+    spacing: 14px;
     in property <BtPage> page;
     /// Moves the keyboard focus back to the window after a click.
     callback act(string, string);
@@ -138,31 +143,18 @@ export component BluetoothPage inherits HorizontalLayout {
     Rectangle {
         // The command in the "service not running" state, for Copy.
         copy-field := TextInput { visible: false; text: root.page.empty-command; read-only: true; }
-        // As the other list pages: 384 px next to the details pane, otherwise all the room.
-        min-width: root.page.has-details ? 384px : 0px;
-        max-width: root.page.has-details ? 384px : 100000px;
-        preferred-width: root.page.has-details ? 384px : 844px;
-        horizontal-stretch: root.page.has-details ? 0 : 1;
-        background: Theme.panel;
+        // As the Network lists: a card beside the details card.
+        min-width: 330px;
+        preferred-width: 440px;
+        horizontal-stretch: 1;
+        background: Theme.surface;
+        border-radius: 16px;
+        border-width: 1px;
+        border-color: Theme.border;
+        clip: true;
         VerticalLayout {
-            padding: 12px;
-            padding-top: 16px;
-            spacing: 12px;
-            HorizontalLayout {
-                padding-left: 4px;
-                padding-right: 4px;
-                spacing: 10px;
-                height: 32px;
-                Text { text: "Bluetooth"; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
-                if root.page.state == "list": IconButton { icon: "rescan"; label: "Look for devices again"; clicked => { root.act("rescan", ""); } }
-                if root.page.state == "list" || root.page.state == "off": Switch {
-                    on: root.page.powered;
-                    label: "Bluetooth";
-                    switch-width: 40px;
-                    y: (parent.height - self.height) / 2;
-                    toggled => { root.act("power", ""); }
-                }
-            }
+            padding: 10px;
+            spacing: 10px;
             if root.page.state == "list": Rectangle {
                 border-radius: 10px;
                 border-width: 1px;
@@ -178,18 +170,6 @@ export component BluetoothPage inherits HorizontalLayout {
                         height: 30px;
                         Text { text: "Visible as"; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
                         Text { text: root.page.alias; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                        Rectangle {
-                            width: 28px;
-                            height: 28px;
-                            y: (parent.height - self.height) / 2;
-                            border-radius: 6px;
-                            background: gear.has-hover ? Theme.sel-bg : transparent;
-                            accessible-role: button;
-                            accessible-label: "Adapter settings";
-                            accessible-action-default => { root.act("adapter", ""); }
-                            Icon { name: "gear"; tint: Theme.icon-soft; }
-                            gear := TouchArea { mouse-cursor: pointer; clicked => { root.act("adapter", ""); } }
-                        }
                     }
                     HorizontalLayout {
                         spacing: 6px;
@@ -317,7 +297,6 @@ export component BluetoothPage inherits HorizontalLayout {
                 }
             }
         }
-        Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; visible: root.page.has-details; }
     }
     if root.page.state == "list" && root.page.has-details: DetailsPane {
         horizontal-stretch: 1;

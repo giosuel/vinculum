@@ -11,8 +11,8 @@ use slint::{ComponentHandle, SharedString};
 
 use crate::audio;
 use crate::{
-    APP, Action, App, BtAudio, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, DetailItem, Details, MainWindow,
-    NavItem, Toggle, model, update,
+    APP, Action, App, BtAudio, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, DetailItem, Details, HeroInfo,
+    MainWindow, NavItem, Toggle, model, update,
 };
 
 /// How long "Look for devices" looks before it stops by itself (discovery costs battery).
@@ -282,19 +282,18 @@ fn pairing_method(device: &Device) -> (&'static str, &'static str) {
 
 /// The sidebar's entry.
 pub fn nav(state: &State, current: bool) -> NavItem {
-    let sub = if state.not_running {
-        "Service not running".to_owned()
-    } else if state.error.is_some() {
-        "Not available".to_owned()
+    // Short: it's the status on the right of the sidebar item.
+    let sub = if state.not_running || state.error.is_some() {
+        "—".to_owned()
     } else {
         match (state.snapshot.as_ref(), state.adapter()) {
             (None, _) => String::new(),
-            (Some(_), None) => "No adapter".to_owned(),
+            (Some(_), None) => "None".to_owned(),
             (Some(_), Some(a)) if a.blocked() => "Blocked".to_owned(),
             (Some(_), Some(a)) if !a.powered => "Off".to_owned(),
             (Some(snap), Some(a)) => match snap.devices_of(&a.path).filter(|d| d.connected).count() {
                 0 => "On".to_owned(),
-                n => format!("{n} connected"),
+                n => format!("{n} on"),
             },
         }
     };
@@ -579,6 +578,34 @@ pub fn page(state: &State, now: Instant) -> (BtPage, Vec<String>, Option<String>
     page.visible = adapter.discoverable;
     page.visible_label = s(visible_label(adapter, state.visible_until, now));
     page.pairable = adapter.pairable;
+    let connected: Vec<&Device> = snap.devices_of(&adapter.path).filter(|d| d.connected).collect();
+    let visibility = if adapter.discoverable { format!("visible as {}", adapter.alias) } else { "hidden".to_owned() };
+    page.hero_sub = s(match connected.len() {
+        0 => format!("On · {visibility}"),
+        n => format!("On · {n} connected · {visibility}"),
+    });
+    // The hero: a connected device, audio first (it's what one most often comes here for).
+    let shown =
+        connected.iter().min_by_key(|d| (!matches!(icon(d.kind()), "headphones" | "speaker"), d.alias.to_lowercase()));
+    page.hero = match shown {
+        Some(d) => HeroInfo {
+            icon: s(icon(d.kind())),
+            name: s(&d.alias),
+            meta: s(match d.battery {
+                Some(b) => format!("Connected · {} · battery {b} %", kind_label(d.kind())),
+                None => format!("Connected · {}", kind_label(d.kind())),
+            }),
+            tone: s("accent"),
+            detail: s(&d.address),
+        },
+        None => HeroInfo {
+            icon: s("bluetooth"),
+            name: s(&adapter.alias),
+            meta: s("No device connected"),
+            tone: s("muted"),
+            detail: s(&adapter.address),
+        },
+    };
 
     let mut mine: Vec<&Device> = snap.devices_of(&adapter.path).filter(|d| d.paired).collect();
     mine.sort_by_key(|d| (!d.connected, d.alias.to_lowercase()));
@@ -1451,10 +1478,10 @@ mod tests {
             State { not_running: true, error: Some("Bluetooth isn't running".into()), ..State::default() };
         let page = state_of(&not_running);
         assert_eq!((page.state.as_str(), page.empty_command.as_str()), ("no-service", NOT_RUNNING_COMMAND));
-        assert_eq!(nav(&not_running, false).sub, "Service not running");
+        assert_eq!(nav(&not_running, false).sub, "—");
 
         assert_eq!(state_of(&State::default()).state, "loading");
-        assert_eq!(nav(&super::tests::state(), false).sub, "1 connected");
+        assert_eq!(nav(&super::tests::state(), false).sub, "1 on");
     }
 
     #[test]

@@ -35,13 +35,17 @@ export component DetailsPane inherits Rectangle {
     callback toggle(string);
     callback rename();
     background: Theme.surface;
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: Theme.border;
+    clip: true;
     // Its content would cap it at the content's width, and Slint shrinks the window to match.
     max-width: 100000px;
     // Slint sizes the window to the layout's preferred size when the layout changes; a fixed one
-    // here keeps that at 1040 px (with the sidebar and list) instead of following the content.
-    preferred-width: 460px;
+    // here keeps that at the window's preferred width instead of following the content.
+    preferred-width: 440px;
     VerticalLayout {
-        padding: 28px;
+        padding: 22px;
         padding-bottom: 20px;
         spacing: 22px;
         alignment: start;

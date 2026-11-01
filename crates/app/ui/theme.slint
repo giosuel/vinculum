@@ -26,6 +26,9 @@ export global Theme {
     in-out property <color> warn-bg: #2a2518;
     in-out property <color> warn-border: #5a4c25;
     in-out property <color> warn-text: #e9cf8f;
+    /// The accent glow behind a page's hero, and whether to draw it.
+    in-out property <color> glow: #173a33;
+    in-out property <bool> gradient: true;
 
     // A tone name from Rust ("accent", "danger", "muted", "faint") as a colour.
     public pure function tone(name: string) -> color {

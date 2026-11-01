@@ -1,0 +1,224 @@
+// The frame every page shares, following the "Hero" mockups: the sidebar with its groups, status
+// and search, the hero at the top of a page (a big live picture of what the page is about), and
+// the cards below it.
+import { Theme } from "theme.slint";
+import { Icon, Logo } from "icons.slint";
+import { Switch, SectionLabel } from "controls.slint";
+
+/// sub: a short status on the right ("Home", "2 on", "45%").
+export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool }
+export struct NavGroup { title: string, items: [NavItem] }
+/// What a page's hero shows: a big icon, a name, a line under it and a monospaced line.
+/// tone: the colour of `meta` ("accent", "muted", "danger", "faint").
+export struct HeroInfo { icon: string, name: string, meta: string, tone: string, detail: string }
+
+component NavButton inherits Rectangle {
+    in property <NavItem> item;
+    callback clicked();
+    height: 36px;
+    border-radius: 10px;
+    background: item.current ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    accessible-role: button;
+    accessible-label: item.sub == "" ? item.label : item.label + ", " + item.sub;
+    accessible-action-default => { clicked(); }
+    // The accent bar on the current page's left edge.
+    if root.item.current: Rectangle { x: 0; width: 3px; height: parent.height - 12px; y: 6px; border-radius: 1.5px; background: Theme.accent; }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 11px;
+        Icon { name: root.item.icon; tint: root.item.current ? Theme.accent : Theme.muted; size: 17px; y: (parent.height - 17px) / 2; }
+        Text { text: root.item.label; color: Theme.text; font-weight: root.item.current ? 600 : 400; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        Text {
+            text: root.item.sub;
+            color: root.item.current ? Theme.accent : Theme.faint;
+            font-size: 12px;
+            font-family: "JetBrains Mono";
+            vertical-alignment: center;
+            overflow: elide;
+            max-width: 90px;
+        }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component Sidebar inherits Rectangle {
+    in property <[NavGroup]> groups;
+    in property <bool> settings-current;
+    in property <bool> airplane;
+    in property <string> hostname;
+    /// Incremented to move the keyboard focus into the search field (Ctrl+K).
+    in property <int> focus-requests;
+    callback navigate(string);
+    callback search(string);
+    /// Enter in the search field: go to the first page found.
+    callback search-accepted();
+    /// Esc in the search field, to give the focus back to the window.
+    callback search-left();
+    callback airplane-toggled();
+    callback hostname-clicked();
+    width: 250px;
+    background: Theme.panel;
+    VerticalLayout {
+        padding: 12px;
+        padding-top: 14px;
+        spacing: 1px;
+        HorizontalLayout {
+            padding-left: 8px;
+            height: 44px;
+            spacing: 10px;
+            alignment: start;
+            Logo { size: 26px; y: (parent.height - 26px) / 2; }
+            Text { text: "Lituus"; color: Theme.text; font-size: 15px; font-weight: 700; vertical-alignment: center; }
+        }
+        Rectangle {
+            property <int> requests: root.focus-requests;
+            changed requests => { input.focus(); }
+            height: 34px;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: input.has-focus ? Theme.accent : Theme.border;
+            background: Theme.input-bg;
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 6px;
+                spacing: 8px;
+                Icon { name: "search"; tint: Theme.muted; size: 14px; y: (parent.height - 14px) / 2; }
+                Rectangle {
+                    horizontal-stretch: 1;
+                    input := TextInput {
+                        color: Theme.text;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        single-line: true;
+                        accessible-label: "Search settings";
+                        edited => { root.search(self.text); }
+                        accepted => { root.search-accepted(); self.text = ""; root.search(""); root.search-left(); }
+                        key-pressed(event) => {
+                            if event.text == Key.Escape { self.text = ""; root.search(""); root.search-left(); return accept; }
+                            reject
+                        }
+                    }
+                    if input.text == "": Text { x: 0; text: "Search"; color: Theme.faint; font-size: 13px; vertical-alignment: center; }
+                }
+                Rectangle {
+                    width: kbd.preferred-width + 10px;
+                    height: 18px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: Theme.ctrl-border;
+                    kbd := Text { text: "Ctrl K"; color: Theme.faint; font-size: 11px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+        }
+        for group in root.groups: VerticalLayout {
+            spacing: 1px;
+            SectionLabel { text: group.title; height: 30px; vertical-alignment: bottom; x: 12px; }
+            Rectangle { height: 4px; }
+            for item in group.items: NavButton {
+                item: item;
+                clicked => { root.navigate(item.id); }
+            }
+        }
+        if root.groups.length == 0: Text { text: "No setting matches the search."; color: Theme.faint; font-size: 12px; wrap: word-wrap; x: 12px; width: parent.width - 24px; height: 40px; vertical-alignment: center; }
+        Rectangle { vertical-stretch: 1; }
+        NavButton {
+            item: { id: "settings", label: "Settings", sub: "", icon: "settings", current: root.settings-current };
+            clicked => { root.navigate("settings"); }
+        }
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            height: 36px;
+            spacing: 11px;
+            Icon { name: "plane"; tint: Theme.muted; size: 17px; y: (parent.height - 17px) / 2; }
+            Text { text: "Airplane mode"; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+            Switch { on: root.airplane; label: "Airplane mode"; y: (parent.height - self.height) / 2; toggled => { root.airplane-toggled(); } }
+        }
+        if root.hostname != "": Rectangle {
+            height: host-row.preferred-height;
+            border-radius: 8px;
+            background: host-touch.has-hover ? Theme.sel-bg : transparent;
+            accessible-role: button;
+            accessible-label: "Change the hostname";
+            accessible-action-default => { root.hostname-clicked(); }
+            host-row := HorizontalLayout {
+                padding: 10px;
+                padding-top: 6px;
+                padding-bottom: 6px;
+                spacing: 6px;
+                Text { text: "Hostname"; color: Theme.faint; font-size: 12px; }
+                Text { text: root.hostname; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; horizontal-stretch: 1; }
+            }
+            host-touch := TouchArea { mouse-cursor: pointer; clicked => { root.hostname-clicked(); } }
+        }
+    }
+    Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; }
+}
+
+/// The top of a page: its title, a line under it, and a big picture placed by the page (its
+/// children). Behind it, a glow in the accent colour from the top right.
+export component Hero inherits Rectangle {
+    in property <string> title;
+    in property <string> sub;
+    in property <length> hero-height: 230px;
+    height: hero-height;
+    border-radius: 20px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: Theme.surface;
+    clip: true;
+    if Theme.gradient: Rectangle {
+        // A circle twice the hero's height, centred on its top edge at 70 % of its width; the
+        // gradient fades from the glow to the surface colour within it.
+        width: root.height * 2.6;
+        height: self.width;
+        x: root.width * 0.7 - self.width / 2;
+        y: -self.height / 2;
+        background: @radial-gradient(circle, Theme.glow 0%, Theme.surface 70%);
+    }
+    VerticalLayout {
+        x: 24px;
+        y: 18px;
+        width: parent.width - 48px;
+        height: self.preferred-height;
+        spacing: 4px;
+        Text { text: root.title; color: Theme.text; font-size: 30px; font-weight: 600; }
+        if root.sub != "": Text { text: root.sub; color: Theme.muted; font-size: 13px; overflow: elide; }
+    }
+    @children
+}
+
+/// The subject of a hero, in its bottom left: a round icon, a name, and two lines.
+export component HeroSubject inherits HorizontalLayout {
+    in property <HeroInfo> info;
+    in property <length> circle: 88px;
+    spacing: 20px;
+    alignment: start;
+    Rectangle {
+        width: root.circle;
+        height: root.circle;
+        y: parent.height - self.height;
+        border-radius: self.width / 2;
+        background: Theme.accent-soft-bg;
+        Icon { name: root.info.icon; tint: Theme.accent; size: root.circle * 0.48; stroke-width: 1.3px; }
+    }
+    VerticalLayout {
+        alignment: end;
+        spacing: 5px;
+        padding-bottom: 4px;
+        Text { text: root.info.name; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; }
+        if root.info.meta != "": Text { text: root.info.meta; color: Theme.tone(root.info.tone); font-size: 13px; overflow: elide; }
+        if root.info.detail != "": Text { text: root.info.detail; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+    }
+}
+
+/// A panel on a page: the list, the details, a group of settings.
+export component Card inherits Rectangle {
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: Theme.surface;
+    clip: true;
+}

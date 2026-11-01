@@ -2665,6 +2665,76 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
+name = "lituus"
+version = "0.0.0-dev"
+dependencies = [
+ "base64",
+ "clap",
+ "futures-util",
+ "i-slint-backend-testing",
+ "ksni",
+ "lituus-bt",
+ "lituus-keyring",
+ "lituus-nm",
+ "pulseaudio",
+ "qrcodegen",
+ "resvg",
+ "serde",
+ "serde_json",
+ "slint",
+ "slint-build",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
+ "toml_edit",
+ "x25519-dalek",
+ "zbus",
+]
+
+[[package]]
+name = "lituus-bt"
+version = "0.0.0-dev"
+dependencies = [
+ "futures-util",
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
+name = "lituus-cli"
+version = "0.0.0-dev"
+dependencies = [
+ "clap",
+ "futures-util",
+ "lituus-nm",
+ "tokio",
+]
+
+[[package]]
+name = "lituus-keyring"
+version = "0.0.0-dev"
+dependencies = [
+ "futures-util",
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
+name = "lituus-nm"
+version = "0.0.0-dev"
+dependencies = [
+ "futures-util",
+ "serde",
+ "thiserror 2.0.21",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4929,76 +4999,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "lituus"
-version = "0.0.0-dev"
-dependencies = [
- "base64",
- "clap",
- "futures-util",
- "i-slint-backend-testing",
- "ksni",
- "pulseaudio",
- "qrcodegen",
- "resvg",
- "serde",
- "serde_json",
- "slint",
- "slint-build",
- "thiserror 2.0.21",
- "tokio",
- "toml",
- "toml_edit",
- "lituus-bt",
- "lituus-keyring",
- "lituus-nm",
- "x25519-dalek",
- "zbus",
-]
-
-[[package]]
-name = "lituus-bt"
-version = "0.0.0-dev"
-dependencies = [
- "futures-util",
- "serde",
- "thiserror 2.0.21",
- "tokio",
- "zbus",
-]
-
-[[package]]
-name = "lituus-cli"
-version = "0.0.0-dev"
-dependencies = [
- "clap",
- "futures-util",
- "tokio",
- "lituus-nm",
-]
-
-[[package]]
-name = "lituus-keyring"
-version = "0.0.0-dev"
-dependencies = [
- "futures-util",
- "serde",
- "thiserror 2.0.21",
- "tokio",
- "zbus",
-]
-
-[[package]]
-name = "lituus-nm"
-version = "0.0.0-dev"
-dependencies = [
- "futures-util",
- "serde",
- "thiserror 2.0.21",
- "tokio",
- "zbus",
-]
 
 [[package]]
 name = "vtable"
