@@ -37,6 +37,14 @@ pub async fn open_file(title: &str, filters: &[Filter<'_>]) -> Result<Option<Pat
     request("OpenFile", title, options).await
 }
 
+/// Asks for files to open (one or more). Empty when the user cancelled.
+pub async fn open_files(title: &str) -> Result<Vec<PathBuf>, Error> {
+    let mut options: HashMap<&str, Value> = HashMap::new();
+    options.insert("multiple", Value::from(true));
+    options.insert("modal", Value::from(true));
+    request_all("OpenFile", title, options).await
+}
+
 /// Asks where to save a file, suggesting `name`.
 pub async fn save_file(title: &str, name: &str) -> Result<Option<PathBuf>, Error> {
     let mut options: HashMap<&str, Value> = HashMap::new();
@@ -45,7 +53,11 @@ pub async fn save_file(title: &str, name: &str) -> Result<Option<PathBuf>, Error
     request("SaveFile", title, options).await
 }
 
-async fn request(method: &str, title: &str, mut options: HashMap<&str, Value<'_>>) -> Result<Option<PathBuf>, Error> {
+async fn request(method: &str, title: &str, options: HashMap<&str, Value<'_>>) -> Result<Option<PathBuf>, Error> {
+    Ok(request_all(method, title, options).await?.into_iter().next())
+}
+
+async fn request_all(method: &str, title: &str, mut options: HashMap<&str, Value<'_>>) -> Result<Vec<PathBuf>, Error> {
     let conn = Connection::session().await.map_err(|_| Error::NoPortal)?;
     // The request object's path is known before the call, so the answer can't be missed.
     let token = format!(
@@ -76,13 +88,13 @@ async fn request(method: &str, title: &str, mut options: HashMap<&str, Value<'_>
         }
         Err(e) => return Err(e.into()),
     }
-    let Some(message) = responses.next().await else { return Ok(None) };
+    let Some(message) = responses.next().await else { return Ok(Vec::new()) };
     let (response, results): (u32, HashMap<String, OwnedValue>) = message?.body().deserialize()?;
     if response != 0 {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let uris = results.get("uris").and_then(|v| <Vec<String>>::try_from(v.clone()).ok()).unwrap_or_default();
-    Ok(uris.first().and_then(|uri| uri.strip_prefix("file://")).map(|p| PathBuf::from(unescape(p))))
+    Ok(uris.iter().filter_map(|uri| uri.strip_prefix("file://")).map(|p| PathBuf::from(unescape(p))).collect())
 }
 
 /// `file://` URIs escape spaces and the like as `%20`.

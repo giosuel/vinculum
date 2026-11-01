@@ -15,12 +15,13 @@ import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
 import { Sidebar, Hero, HeroSubject, Card, NavItem, NavGroup, HeroInfo } from "shell.slint";
 import { AppearancePage, ThemeSwatch, ColourChip, SourceRow } from "appearance.slint";
+import { SendFilesDialog, IncomingFileDialog, FilesView, FileRow } from "files.slint";
 import { DisplaysPage, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, KeepDialog, ConfigDialog } from "displays.slint";
 import { SoundPage, SoundView, SoundDevice, SoundApp, SoundCard } from "sound.slint";
 import { BluetoothPage, BtAudio, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, FilesView, FileRow, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -88,6 +89,11 @@ export component MainWindow inherits Window {
     in property <string> banner;
     // Settings page.
     in property <string> config-path;
+    // Files over Bluetooth (see files.slint).
+    in property <FilesView> files;
+    in-out property <bool> files-always;
+    /// "cancel", "hide", "accept", "decline".
+    callback files-act(string);
     // Displays page (see displays.slint).
     in property <DisplaysView> displays;
     in-out property <int> displays-tab;
@@ -1056,6 +1062,17 @@ export component MainWindow inherits Window {
     if root.page == "displays" && root.displays.config-open: ConfigDialog {
         view: root.displays;
         closed => { root.displays-act("close-config", "", 0); keys.focus(); }
+    }
+    if root.files.sending: SendFilesDialog {
+        view: root.files;
+        cancel => { root.files-act("cancel"); keys.focus(); }
+        hide => { root.files-act("hide"); keys.focus(); }
+    }
+    if root.files.incoming: IncomingFileDialog {
+        view: root.files;
+        always <=> root.files-always;
+        accept => { root.files-act("accept"); keys.focus(); }
+        decline => { root.files-act("decline"); keys.focus(); }
     }
     if root.bt-pair-open: BtPairDialog {
         pair: root.bt-pair;

@@ -11,6 +11,14 @@ pub struct Config {
     pub tray: TrayConfig,
     pub notifications: NotificationsConfig,
     pub sound: SoundConfig,
+    pub bluetooth: BluetoothConfig,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct BluetoothConfig {
+    /// Devices (by address) whose files are saved without asking.
+    pub accept_files_from: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq)]
@@ -193,6 +201,12 @@ pub fn set(path: &Path, table: &str, key: &str, value: impl Into<toml_edit::Valu
         std::fs::create_dir_all(dir)?;
     }
     std::fs::write(path, text)
+}
+
+/// Sets one key to a list of strings, keeping the rest of the file.
+pub fn set_list(path: &Path, table: &str, key: &str, values: &[String]) -> std::io::Result<()> {
+    let array: toml_edit::Array = values.iter().map(String::as_str).collect();
+    set(path, table, key, array)
 }
 
 fn with(

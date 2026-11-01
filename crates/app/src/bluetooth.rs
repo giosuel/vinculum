@@ -503,7 +503,12 @@ fn details(device: &Device, adapter: &Adapter, state: &State) -> Details {
         } else {
             action("connect", "Connect", "primary", !busy && !device.blocked)
         };
-        d.actions = model(vec![connect, action("forget", "Forget", "danger", true)]);
+        let mut actions = vec![connect];
+        if device.uuids.iter().any(|u| u == lituus_bt::uuid::OBEX_PUSH) && !device.blocked {
+            actions.push(action("send-files", "Send files…", "secondary", true));
+        }
+        actions.push(action("forget", "Forget", "danger", true));
+        d.actions = model(actions);
         d.toggles = model(vec![
             Toggle {
                 id: s("trusted"),
@@ -1058,6 +1063,10 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
                 let Some(device) = selected else { return };
                 match argument {
                     "connect" | "disconnect" | "pair" => activate(state),
+                    "send-files" => {
+                        let (address, name) = (device.address.clone(), device.alias.clone());
+                        crate::files::choose_and_send(window.as_weak(), address, name);
+                    }
                     "forget" => {
                         if let Some((adapter, ..)) = adapter {
                             state.send(Command::Forget { adapter, device: device.path });
