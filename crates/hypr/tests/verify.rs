@@ -25,7 +25,9 @@ fn hyprland(dir: &std::path::Path) -> Option<Command> {
         // Hyprland crashes with a runtime folder others can read.
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Hyprland also crashes without a home folder (CI's containers have none).
         c.env("XDG_RUNTIME_DIR", runtime)
+            .env("HOME", dir)
             .args(["--i-am-really-stupid", "--verify-config", "-c"])
             .arg(dir.join("hyprland.lua"));
         c
