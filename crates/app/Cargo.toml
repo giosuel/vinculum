@@ -27,6 +27,7 @@ toml_edit.workspace = true
 ksni.workspace = true
 resvg.workspace = true
 lituus-bt.workspace = true
+lituus-hypr.workspace = true
 lituus-keyring.workspace = true
 lituus-nm.workspace = true
 lituus-sound.workspace = true

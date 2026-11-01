@@ -9,6 +9,7 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 mod audio;
 mod bluetooth;
 mod config;
+mod displays;
 mod editing;
 mod editor;
 mod hotspot;
@@ -139,6 +140,8 @@ struct App {
     notifier: Option<notify::Notifier>,
     /// The Bluetooth page.
     bt: bluetooth::State,
+    /// The Displays page.
+    displays: displays::State,
     /// The Sound page.
     sound: sound::State,
     /// The sidebar's search.
@@ -238,6 +241,19 @@ fn main() -> Result<(), slint::PlatformError> {
     APP.with(|app| app.borrow_mut().bt.commands = Some(bt_commands));
     bluetooth::spawn(window.as_weak(), bt_receiver);
     sound::spawn(window.as_weak());
+    displays::refresh(&window.as_weak());
+    spawn_hyprland_watcher(window.as_weak());
+    // The Displays page's countdown after Apply.
+    let weak = window.as_weak();
+    let countdown = slint::Timer::default();
+    countdown.start(slint::TimerMode::Repeated, Duration::from_millis(250), move || {
+        let keeping = APP.with(|app| app.borrow().displays.keep_pending());
+        if keeping {
+            let w = weak.clone();
+            update(&weak, |app| displays::tick(&w, &mut app.displays));
+        }
+    });
+    std::mem::forget(countdown);
     // The Bluetooth page's "Visible · 2:41" counts down.
     let countdown = slint::Timer::default();
     let weak = window.as_weak();
@@ -600,6 +616,15 @@ fn connect_callbacks(window: &MainWindow) {
                 app.message = Some((format!("Couldn't save the setting: {error}."), "danger"));
             }
         })
+    });
+    let weak = window.as_weak();
+    window.on_displays_act(move |verb, arg, value| {
+        let w = weak.clone();
+        update(&weak, |app| displays::act(&w, &mut app.displays, &verb, &arg, value))
+    });
+    let weak = window.as_weak();
+    window.on_displays_drag(move |i, x, y, done| {
+        update(&weak, |app| displays::drag(&mut app.displays, i.max(0) as usize, x, y, done))
     });
     let weak = window.as_weak();
     window.on_sound_act(move |verb, id, value| {
@@ -1000,6 +1025,24 @@ fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(items))
 }
 
+/// Reads the monitors again whenever Hyprland says one came or went; when Hyprland isn't there,
+/// looks again now and then.
+fn spawn_hyprland_watcher(weak: slint::Weak<MainWindow>) {
+    std::thread::spawn(move || {
+        loop {
+            if let Ok(h) = lituus_hypr::Hyprland::from_env() {
+                let _ = h.events(|name, _| {
+                    if matches!(name, "monitoraddedv2" | "monitorremovedv2" | "configreloaded") {
+                        displays::refresh(&weak);
+                    }
+                    true
+                });
+            }
+            std::thread::sleep(Duration::from_secs(5));
+        }
+    });
+}
+
 /// The Appearance page.
 fn render_appearance(window: &MainWindow, app: &App) {
     let in_use = app.palette.is_some();
@@ -1075,6 +1118,14 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             group: "CONNECTIONS",
             keywords: "pair pairing headphones headset keyboard mouse speaker devices",
             status: bluetooth::nav(&app.bt, false).sub.to_string(),
+        },
+        nav::Entry {
+            id: "displays",
+            label: "Displays",
+            icon: "monitor",
+            group: "DEVICES",
+            keywords: "monitors screens resolution refresh rate scale hdr vrr rotation mirror hyprland layout",
+            status: displays::status(&app.displays),
         },
         nav::Entry {
             id: "sound",
@@ -1208,6 +1259,7 @@ fn render(window: &MainWindow) {
         ]));
         render_appearance(window, &app);
         sound::render(window, &app.sound);
+        displays::render(window, &app.displays);
         render_quick(&mut app);
     });
 }

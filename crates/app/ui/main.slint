@@ -15,11 +15,12 @@ import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
 import { Sidebar, Hero, HeroSubject, Card, NavItem, NavGroup, HeroInfo } from "shell.slint";
 import { AppearancePage, ThemeSwatch, ColourChip, SourceRow } from "appearance.slint";
+import { DisplaysPage, DisplaysView, LayoutMonitor, KeepDialog, ConfigDialog } from "displays.slint";
 import { SoundPage, SoundView, SoundDevice, SoundApp, SoundCard } from "sound.slint";
 import { BluetoothPage, BtAudio, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, DisplaysView, LayoutMonitor, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -87,6 +88,11 @@ export component MainWindow inherits Window {
     in property <string> banner;
     // Settings page.
     in property <string> config-path;
+    // Displays page (see displays.slint).
+    in property <DisplaysView> displays;
+    in-out property <int> displays-tab;
+    callback displays-act(string, string, float);
+    callback displays-drag(int, float, float, bool);
     // Sound page (see sound.slint).
     in property <SoundView> sound;
     in-out property <int> sound-tab;
@@ -697,6 +703,13 @@ export component MainWindow inherits Window {
                         page: root.bt;
                         act(verb, argument) => { root.bt-act(verb, argument); keys.focus(); }
                     }
+                    if root.page == "displays": DisplaysPage {
+                        vertical-stretch: 1;
+                        view: root.displays;
+                        tab <=> root.displays-tab;
+                        act(verb, arg, value) => { root.displays-act(verb, arg, value); }
+                        drag(i, x, y, done) => { root.displays-drag(i, x, y, done); }
+                    }
                     if root.page == "sound": SoundPage {
                         vertical-stretch: 1;
                         page: root.sound;
@@ -1033,6 +1046,15 @@ export component MainWindow inherits Window {
         }
     }
 
+    if root.page == "displays" && root.displays.keep-open: KeepDialog {
+        view: root.displays;
+        keep => { root.displays-act("keep", "", 0); keys.focus(); }
+        revert => { root.displays-act("revert-now", "", 0); keys.focus(); }
+    }
+    if root.page == "displays" && root.displays.config-open: ConfigDialog {
+        view: root.displays;
+        closed => { root.displays-act("close-config", "", 0); keys.focus(); }
+    }
     if root.bt-pair-open: BtPairDialog {
         pair: root.bt-pair;
         code <=> root.bt-pair-code;
