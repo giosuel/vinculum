@@ -1,0 +1,292 @@
+[
+    {
+        "id": 0,
+        "name": "DP-3",
+        "description": "Samsung Electric Company Odyssey G61SH HNAL600836",
+        "make": "Samsung Electric Company",
+        "model": "Odyssey G61SH",
+        "serial": "HNAL600836",
+        "width": 2560,
+        "height": 1440,
+        "physicalWidth": 600,
+        "physicalHeight": 340,
+        "refreshRate": 239.76,
+        "x": 1218,
+        "y": 2393,
+        "activeWorkspace": {
+            "address": "0x0",
+            "id": 4,
+            "type": "regular",
+            "name": "4"
+        },
+        "specialWorkspace": {
+            "address": "",
+            "type": "",
+            "name": ""
+        },
+        "reserved": [
+            0,
+            0,
+            0,
+            0
+        ],
+        "scale": 1.0,
+        "transform": 0,
+        "focused": false,
+        "dpmsStatus": true,
+        "vrr": false,
+        "solitary": "0",
+        "solitaryBlockedBy": [
+            "NO_CANDIDATE"
+        ],
+        "activelyTearing": false,
+        "tearingBlockedBy": [
+            "NOT_TORN"
+        ],
+        "directScanoutTo": "0",
+        "directScanoutBlockedBy": [
+            "NO_CANDIDATE"
+        ],
+        "disabled": false,
+        "currentFormat": "XRGB8888",
+        "mirrorOf": "none",
+        "availableModes": [
+            "2560x1440@239.76Hz",
+            "2560x1440@143.97Hz",
+            "2560x1440@119.88Hz",
+            "2560x1440@59.95Hz",
+            "1920x1080@60.00Hz",
+            "1280x720@60.00Hz"
+        ],
+        "colorManagementPreset": "srgb",
+        "sdrBrightness": 1.0,
+        "sdrSaturation": 1.0,
+        "sdrMinLuminance": 0.2,
+        "sdrMaxLuminance": 80,
+        "hardwareCursorsInUse": true,
+        "hardwareDetails": {
+            "backend": "drm",
+            "hdr": false,
+            "chroma": true,
+            "bt2020": false,
+            "vrrCapable": true
+        }
+    },
+    {
+        "id": 1,
+        "name": "DP-5",
+        "description": "Samsung Electric Company Odyssey G81SF HNAY500052",
+        "make": "Samsung Electric Company",
+        "model": "Odyssey G81SF",
+        "serial": "HNAY500052",
+        "width": 3840,
+        "height": 2160,
+        "physicalWidth": 600,
+        "physicalHeight": 340,
+        "refreshRate": 240.0,
+        "x": 3778,
+        "y": 2393,
+        "activeWorkspace": {
+            "address": "0x0",
+            "id": 1,
+            "type": "regular",
+            "name": "1"
+        },
+        "specialWorkspace": {
+            "address": "",
+            "type": "",
+            "name": ""
+        },
+        "reserved": [
+            0,
+            40,
+            0,
+            0
+        ],
+        "scale": 1.5,
+        "transform": 0,
+        "focused": true,
+        "dpmsStatus": true,
+        "vrr": true,
+        "solitary": "0",
+        "solitaryBlockedBy": [
+            "NO_CANDIDATE"
+        ],
+        "activelyTearing": false,
+        "tearingBlockedBy": [
+            "NOT_TORN"
+        ],
+        "directScanoutTo": "0",
+        "directScanoutBlockedBy": [
+            "NO_CANDIDATE"
+        ],
+        "disabled": false,
+        "currentFormat": "XRGB8888",
+        "mirrorOf": "none",
+        "availableModes": [
+            "3840x2160@240.00Hz",
+            "3840x2160@144.00Hz",
+            "3840x2160@120.00Hz",
+            "3840x2160@60.00Hz",
+            "2560x1440@240.00Hz",
+            "1920x1080@240.00Hz"
+        ],
+        "colorManagementPreset": "srgb",
+        "sdrBrightness": 1.0,
+        "sdrSaturation": 1.0,
+        "sdrMinLuminance": 0.2,
+        "sdrMaxLuminance": 80,
+        "hardwareCursorsInUse": true,
+        "hardwareDetails": {
+            "backend": "drm",
+            "hdr": true,
+            "chroma": true,
+            "bt2020": true,
+            "vrrCapable": true
+        }
+    },
+    {
+        "id": 2,
+        "name": "DP-4",
+        "description": "Samsung Electric Company Odyssey G61SH HNAL600234",
+        "make": "Samsung Electric Company",
+        "model": "Odyssey G61SH",
+        "serial": "HNAL600234",
+        "width": 2560,
+        "height": 1440,
+        "physicalWidth": 600,
+        "physicalHeight": 340,
+        "refreshRate": 59.95,
+        "x": 6338,
+        "y": 2393,
+        "activeWorkspace": {
+            "address": "0x0",
+            "id": 6,
+            "type": "regular",
+            "name": "6"
+        },
+        "specialWorkspace": {
+            "address": "",
+            "type": "",
+            "name": ""
+        },
+        "reserved": [
+            0,
+            0,
+            0,
+            0
+        ],
+        "scale": 1.0,
+        "transform": 0,
+        "focused": false,
+        "dpmsStatus": true,
+        "vrr": false,
+        "solitary": "0",
+        "solitaryBlockedBy": [
+            "NO_CANDIDATE"
+        ],
+        "activelyTearing": false,
+        "tearingBlockedBy": [
+            "NOT_TORN"
+        ],
+        "directScanoutTo": "0",
+        "directScanoutBlockedBy": [
+            "NO_CANDIDATE"
+        ],
+        "disabled": false,
+        "currentFormat": "XRGB8888",
+        "mirrorOf": "none",
+        "availableModes": [
+            "2560x1440@239.76Hz",
+            "2560x1440@143.97Hz",
+            "2560x1440@119.88Hz",
+            "2560x1440@59.95Hz",
+            "1920x1080@60.00Hz",
+            "1280x720@60.00Hz"
+        ],
+        "colorManagementPreset": "srgb",
+        "sdrBrightness": 1.0,
+        "sdrSaturation": 1.0,
+        "sdrMinLuminance": 0.2,
+        "sdrMaxLuminance": 80,
+        "hardwareCursorsInUse": true,
+        "hardwareDetails": {
+            "backend": "drm",
+            "hdr": false,
+            "chroma": true,
+            "bt2020": false,
+            "vrrCapable": true
+        }
+    },
+    {
+        "id": 3,
+        "name": "HDMI-A-3",
+        "description": "Samsung Electric Company SAMSUNG 0x01000E00",
+        "make": "Samsung Electric Company",
+        "model": "SAMSUNG",
+        "serial": "0x01000E00",
+        "width": 3840,
+        "height": 2160,
+        "physicalWidth": 1210,
+        "physicalHeight": 680,
+        "refreshRate": 60.0,
+        "x": 3778,
+        "y": 953,
+        "activeWorkspace": {
+            "address": "0x0",
+            "id": 8,
+            "type": "regular",
+            "name": "8"
+        },
+        "specialWorkspace": {
+            "address": "",
+            "type": "",
+            "name": ""
+        },
+        "reserved": [
+            0,
+            0,
+            0,
+            0
+        ],
+        "scale": 1.5,
+        "transform": 0,
+        "focused": false,
+        "dpmsStatus": true,
+        "vrr": false,
+        "solitary": "0",
+        "solitaryBlockedBy": [
+            "NO_CANDIDATE"
+        ],
+        "activelyTearing": false,
+        "tearingBlockedBy": [
+            "NOT_TORN"
+        ],
+        "directScanoutTo": "0",
+        "directScanoutBlockedBy": [
+            "NO_CANDIDATE"
+        ],
+        "disabled": false,
+        "currentFormat": "XRGB8888",
+        "mirrorOf": "none",
+        "availableModes": [
+            "3840x2160@60.00Hz",
+            "3840x2160@30.00Hz",
+            "1920x1080@120.00Hz",
+            "1920x1080@60.00Hz"
+        ],
+        "colorManagementPreset": "srgb",
+        "sdrBrightness": 1.0,
+        "sdrSaturation": 1.0,
+        "sdrMinLuminance": 0.2,
+        "sdrMaxLuminance": 80,
+        "hardwareCursorsInUse": true,
+        "hardwareDetails": {
+            "backend": "drm",
+            "hdr": false,
+            "chroma": true,
+            "bt2020": false,
+            "vrrCapable": true
+        }
+    }
+]
