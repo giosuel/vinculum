@@ -1,17 +1,16 @@
-# Generates hero.svg for the README: the node-cube logo with signals running along its edges,
-# beside a small Lituus window where a network connects. Works on light and dark pages.
-import sys
+# Generates hero.svg for the README: the Dwindle logo, its tiles lighting up in turn and its spiral
+# drawing itself, beside a small Lituus window where a network connects. Works on light and dark pages.
+import os, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from logo import radius, spiral, split
 out = sys.argv[1]
-A = '#5cc8b0'; DIM = '#3c5650'
-top=(32,8); ul=(11.22,20); ur=(52.78,20); hub=(32,32); ll=(11.22,44); lr=(52.78,44); bot=(32,56)
-front=[(top,ul),(top,ur),(ll,ul),(ll,bot),(ul,hub),(lr,ur),(lr,bot),(ur,hub),(bot,hub)]
-spokes=[(hub,top),(hub,ll),(hub,lr)]
-S=4.1; OX=48; OY=34
-def P(p): return (OX+p[0]*S, OY+p[1]*S)
+A = '#5cc8b0'
+S=2.2; OX=38; OY=24
 L=[]
 L.append('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 330" width="840" height="330" role="img" aria-labelledby="t d">')
 L.append('  <title id="t">Lituus</title>')
-L.append('  <desc id="d">The Lituus logo, a cube of linked nodes with signals running along its edges, beside a Lituus window where a Wi-Fi network connects.</desc>')
+L.append('  <desc id="d">The Lituus logo, window tiles cut in a golden spiral with the spiral drawn through them, beside a Lituus window where a Wi-Fi network connects.</desc>')
 L.append('''  <defs>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
       <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000" flood-opacity=".32"/>
@@ -26,10 +25,10 @@ L.append('''  <defs>
       @keyframes float { 0%, 100% { translate: 0 0; } 50% { translate: 0 -6px; } }
       .glow { transform-box: fill-box; transform-origin: center; animation: glow 3.5s ease-in-out infinite; }
       @keyframes glow { 0%, 100% { opacity: .55; scale: .92; } 50% { opacity: 1; scale: 1.06; } }
-      .node { animation: node 3.5s ease-in-out infinite; }
-      @keyframes node { 0%, 100% { fill: #5cc8b0; } 45% { fill: #c9f3e8; } 60% { fill: #5cc8b0; } }
-      .n1 { animation-delay: -.5s; } .n2 { animation-delay: -1s; } .n3 { animation-delay: -1.5s; }
-      .n4 { animation-delay: -2s; } .n5 { animation-delay: -2.5s; } .n6 { animation-delay: -3s; }
+      .tile { animation: tile 7s ease-in-out infinite; }
+      @keyframes tile { 0%, 100% { filter: none; } 8% { filter: brightness(1.7); } 20% { filter: none; } }
+      .draw { stroke-dasharray: 1 1; animation: draw 7s ease-in-out infinite; }
+      @keyframes draw { 0% { stroke-dashoffset: 1; } 45%, 100% { stroke-dashoffset: 0; } }
       /* The café row: available, then connecting, then connected, every 9 s. */
       .s0 { animation: s0 9s infinite; } @keyframes s0 { 0%, 22% { opacity: 1; } 26%, 96% { opacity: 0; } 100% { opacity: 1; } }
       .s1 { animation: s1 9s infinite; opacity: 0; } @keyframes s1 { 0%, 24% { opacity: 0; } 28%, 52% { opacity: 1; } 56%, 100% { opacity: 0; } }
@@ -41,31 +40,22 @@ L.append('''  <defs>
       .scan { animation: scan 2.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
       @keyframes scan { 0%, 100% { rotate: 0deg; } 50% { rotate: 180deg; } }
       @media (prefers-reduced-motion: reduce) {
-        .float, .glow, .node, .spin, .scan, .bar, .s0, .s1, .s2, .sel { animation: none; }
+        .float, .glow, .tile, .draw, .spin, .scan, .bar, .s0, .s1, .s2, .sel { animation: none; }
         .s0, .s1 { opacity: 0; } .s2, .sel { opacity: 1; } .bar { fill: #5cc8b0; }
       }
     </style>
   </defs>''')
 L.append('  <g class="float">')
-cx,cy=P(hub)
-L.append(f'    <circle class="glow" cx="{cx:.1f}" cy="{cy:.1f}" r="150" fill="url(#glow)"/>')
-for a,b in spokes:
-    (x1,y1),(x2,y2)=P(a),P(b)
-    L.append(f'    <line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{DIM}" stroke-width="5" stroke-linecap="round" opacity=".8"/>')
-for a,b in front:
-    (x1,y1),(x2,y2)=P(a),P(b)
-    L.append(f'    <line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{A}" stroke-width="8.5" stroke-linecap="round"/>')
-loops=[[top,ur,lr,bot,ll,ul,top],[ul,hub,lr,ur,hub,bot,ll,ul],[top,ul,hub,ur,top]]
-for i,loop in enumerate(loops):
-    d='M'+' L'.join(f'{x:.1f} {y:.1f}' for x,y in (P(p) for p in loop))
-    dur=[6,7.5,5][i]
-    L.append(f'    <circle r="14" fill="{A}" opacity=".3"><animateMotion dur="{dur}s" repeatCount="indefinite" path="{d}"/></circle>')
-    L.append(f'    <circle r="6.5" fill="#f2fffb"><animateMotion dur="{dur}s" repeatCount="indefinite" path="{d}"/></circle>')
-for i,n in enumerate([top,ul,ur,ll,lr,bot]):
-    x,y=P(n)
-    L.append(f'    <circle class="node n{i+1}" cx="{x:.1f}" cy="{y:.1f}" r="13" fill="{A}"/>')
-L.append(f'    <circle cx="{cx:.1f}" cy="{cy:.1f}" r="13.5" fill="#a6e6d6"/>')
-L.append(f'    <circle cx="{cx:.1f}" cy="{cy:.1f}" r="20" fill="none" stroke="{A}" stroke-width="2.5" opacity=".55"/>')
+L.append(f'    <circle class="glow" cx="{OX+64*S:.1f}" cy="{OY+64*S:.1f}" r="150" fill="url(#glow)"/>')
+L.append(f'    <g transform="translate({OX} {OY}) scale({S})">')
+L.append('      <rect x="4" y="4" width="120" height="120" rx="28" fill="#14171a" stroke="#262b30" stroke-width="1.2"/>')
+tiles, arcs = split(108, 7)
+shades = ["#24312e", "#29403a", "#2f4f47", "#376055", "#417466", "#4f9c89", "#5cc8b0"]
+g = 2.5
+for i, ((x, y, w, h), c) in enumerate(zip(tiles, shades)):
+    L.append(f'      <rect class="tile" style="animation-delay: {i * 0.45:.2f}s" x="{x + g:.2f}" y="{y + g:.2f}" width="{w - 2 * g:.2f}" height="{h - 2 * g:.2f}" rx="{radius(w, h, 6):.2f}" fill="{c}"/>')
+L.append(f'      <path class="draw" pathLength="1" d="{spiral(arcs)}" fill="none" stroke="#e9efe9" stroke-width="3.5" stroke-linecap="round"/>')
+L.append('    </g>')
 L.append('  </g>')
 WX,WY,WW,WH=372,24,428,284
 L.append(f'  <g filter="url(#shadow)"><rect x="{WX}" y="{WY}" width="{WW}" height="{WH}" rx="16" fill="#17191c" stroke="#2a2e33" stroke-width="1.5"/></g>')

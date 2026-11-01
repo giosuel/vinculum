@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/hero.svg" alt="The Lituus logo, a cube of linked nodes, beside a Lituus window where a Wi-Fi network connects" width="760">
+<img src="docs/assets/hero.svg" alt="The Lituus logo, window tiles cut in a golden spiral, beside a Lituus window where a Wi-Fi network connects" width="760">
 
 # Lituus
 
