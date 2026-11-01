@@ -7,7 +7,7 @@ use lituus_nm::{
 };
 use slint::{ModelRc, SharedString, VecModel};
 
-use crate::{Action, DetailItem, Details, NavItem, Row, Section, Toggle};
+use crate::{Action, DetailItem, Details, Row, Section, Toggle};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
@@ -33,6 +33,11 @@ impl Page {
             "settings" => Self::Settings,
             _ => return None,
         })
+    }
+
+    /// A tab of the Network page.
+    pub fn is_network(self) -> bool {
+        matches!(self, Self::Wifi | Self::Wired | Self::Vpn | Self::Hotspot | Self::Saved)
     }
 
     pub fn id(self) -> &'static str {
@@ -70,7 +75,12 @@ pub struct Empty {
 /// Everything the window shows.
 #[derive(Default)]
 pub struct View {
-    pub nav: Vec<NavItem>,
+    /// The Network item's short status in the sidebar ("Home", "Off").
+    pub net_status: String,
+    /// The line under the Network page's title.
+    pub net_sub: String,
+    pub net_hero: NetHero,
+    pub wifi_available: bool,
     pub page_title: String,
     pub show_wifi_switch: bool,
     pub wifi_on: bool,
@@ -89,6 +99,22 @@ pub struct View {
     pub placeholder: String,
     pub hostname: String,
     pub hotspot: Option<HotspotView>,
+}
+
+/// The Network page's hero: the connection the computer is online through.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NetHero {
+    pub icon: &'static str,
+    pub name: String,
+    pub meta: String,
+    pub tone: &'static str,
+    /// Addresses and traffic, in monospace.
+    pub detail: String,
+    /// Where its row is, for the buttons: they act on it as on a selected row.
+    pub page: Page,
+    pub row: Option<String>,
+    /// (id, label, kind)
+    pub actions: Vec<(&'static str, &'static str, &'static str)>,
 }
 
 /// The hotspot page.
@@ -235,7 +261,7 @@ fn ip_items(device: &Device) -> Vec<DetailItem> {
 
 pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) -> View {
     let mut view = View { show_search: true, wifi_on: true, ..View::default() };
-    view.nav = nav(snapshot, state.page);
+    network_summary(snapshot, &mut view);
     view.hostname = snapshot.map(|s| s.hostname.clone()).unwrap_or_default();
     let Some(snapshot) = snapshot else {
         view.page_title = page_title(state.page).into();
@@ -412,48 +438,39 @@ pub(crate) fn wifi_device(snapshot: &Snapshot) -> Option<&Device> {
     snapshot.devices.iter().find(|d| d.kind == DeviceKind::Wifi)
 }
 
-fn nav(snapshot: Option<&Snapshot>, page: Page) -> Vec<NavItem> {
-    let item = |id: Page, icon: &str, sub: String| NavItem {
-        id: s(id.id()),
-        label: s(page_title(id)),
-        sub: s(sub),
-        icon: s(icon),
-        current: id == page,
-    };
+/// The Network item's sidebar status, the line under the page title, and the hero.
+fn network_summary(snapshot: Option<&Snapshot>, view: &mut View) {
     let Some(snap) = snapshot else {
-        return [
-            (Page::Wifi, "wifi"),
-            (Page::Wired, "wired"),
-            (Page::Vpn, "vpn"),
-            (Page::Hotspot, "hotspot"),
-            (Page::Saved, "saved"),
-        ]
-        .into_iter()
-        .map(|(p, i)| item(p, i, String::new()))
-        .collect();
+        view.net_hero = NetHero { icon: "wifi", name: "Network".into(), tone: "muted", ..NetHero::default() };
+        return;
     };
+    view.wifi_available = wifi_device(snap).is_some();
     let active_on = |kind: DeviceKind| {
         snap.devices
             .iter()
             .filter(|d| d.kind == kind)
-            .find_map(|d| d.active_connection.as_deref().and_then(|a| snap.active_connection(a)))
-            .map(|a| a.id.clone())
+            .find_map(|d| d.active_connection.as_deref().and_then(|a| snap.active_connection(a)).map(|a| (d, a)))
     };
-    let wifi = if wifi_device(snap).is_none() {
-        "No device".into()
+    let wifi = if !view.wifi_available {
+        None
     } else if !snap.wireless_hardware_enabled {
-        "Blocked".into()
+        Some("Wi-Fi blocked".to_owned())
     } else if !snap.wireless_enabled {
-        "Off".into()
+        Some("Wi-Fi off".to_owned())
     } else {
-        active_on(DeviceKind::Wifi).unwrap_or_else(|| "Not connected".into())
+        Some(match active_on(DeviceKind::Wifi) {
+            Some((_, a)) => format!("Wi-Fi: {}", a.id),
+            None => "Wi-Fi not connected".to_owned(),
+        })
     };
     let wired_devices: Vec<&Device> = snap.devices.iter().filter(|d| d.kind == DeviceKind::Ethernet).collect();
     let wired = match active_on(DeviceKind::Ethernet) {
-        Some(id) => id,
-        None if wired_devices.is_empty() => "No device".into(),
-        None if wired_devices.iter().all(|d| d.wired.as_ref().is_some_and(|w| !w.carrier)) => "Cable unplugged".into(),
-        None => "Not connected".into(),
+        Some((_, a)) => Some(format!("wired: {}", a.id)),
+        None if wired_devices.is_empty() => None,
+        None if wired_devices.iter().all(|d| d.wired.as_ref().is_some_and(|w| !w.carrier)) => {
+            Some("cable unplugged".to_owned())
+        }
+        None => Some("wired not connected".to_owned()),
     };
     let vpns: Vec<String> = snap
         .active
@@ -467,17 +484,101 @@ fn nav(snapshot: Option<&Snapshot>, page: Page) -> Vec<NavItem> {
         })
         .map(|a| a.id.clone())
         .collect();
-    let saved = match snap.connections.len() {
-        1 => "1 connection".to_owned(),
-        n => format!("{n} connections"),
+    let vpn = if vpns.is_empty() { "VPN off".to_owned() } else { format!("VPN: {}", vpns.join(", ")) };
+    view.net_sub = wifi.into_iter().chain(wired).chain(std::iter::once(vpn)).collect::<Vec<_>>().join(" · ");
+    view.net_hero = network_hero(snap);
+    view.net_status = if snap.airplane() {
+        "Off".to_owned()
+    } else if view.net_hero.row.is_some() {
+        view.net_hero.name.clone()
+    } else {
+        "Offline".to_owned()
     };
-    vec![
-        item(Page::Wifi, "wifi", wifi),
-        item(Page::Wired, "wired", wired),
-        item(Page::Vpn, "vpn", if vpns.is_empty() { "Off".into() } else { vpns.join(", ") }),
-        item(Page::Hotspot, "hotspot", if hotspot_page(snap).active.is_some() { "On".into() } else { "Off".into() }),
-        item(Page::Saved, "saved", saved),
-    ]
+}
+
+/// What the computer is online through: the primary connection, or else any device's.
+fn network_hero(snap: &Snapshot) -> NetHero {
+    let active =
+        snap.primary_connection.as_deref().and_then(|p| snap.active_connection(p)).filter(|a| !a.vpn).or_else(|| {
+            snap.devices
+                .iter()
+                .filter(|d| matches!(d.kind, DeviceKind::Wifi | DeviceKind::Ethernet))
+                .find_map(|d| d.active_connection.as_deref().and_then(|a| snap.active_connection(a)))
+        });
+    let Some(active) = active else {
+        let (meta, icon) = if wifi_device(snap).is_some() && !snap.wireless_enabled {
+            ("Wi-Fi is off", "wifi-off")
+        } else if wifi_device(snap).is_some() {
+            ("Pick a network below to connect", "wifi")
+        } else {
+            ("Plug in a cable or add a connection", "wired")
+        };
+        return NetHero { icon, name: "Not connected".into(), meta: meta.into(), tone: "muted", ..NetHero::default() };
+    };
+    let device = active.devices.first().and_then(|d| snap.device(d));
+    let connecting = active.state != ActiveState::Activated;
+    let ip = device
+        .and_then(|d| d.ip4.as_ref())
+        .and_then(|ip| ip.addresses.first())
+        .map(|(a, _)| a.clone())
+        .unwrap_or_default();
+    let traffic =
+        device.and_then(|d| d.traffic).map(|(rx, tx)| format!("↓ {}  ↑ {}", bytes(rx), bytes(tx))).unwrap_or_default();
+    let detail = [ip, traffic].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("   ");
+    let state = if connecting { "Connecting…" } else { "Connected" };
+    let mut hero = NetHero {
+        name: active.id.clone(),
+        tone: "accent",
+        detail,
+        actions: vec![("edit", "Edit", "secondary"), ("disconnect", "Disconnect", "secondary")],
+        ..NetHero::default()
+    };
+    match device.map(|d| d.kind) {
+        Some(DeviceKind::Wifi) => {
+            let d = device.unwrap();
+            let ap = d.wifi.as_ref().and_then(|w| {
+                w.active_access_point.as_deref().and_then(|p| w.access_points.iter().find(|ap| ap.path == p))
+            });
+            let networks = snap.networks().into_iter().find(|(p, _)| *p == d.path).map(|(_, n)| n).unwrap_or_default();
+            let network = networks.iter().find(|n| n.active);
+            // NetworkManager names the access point in use; failing that, the network's strongest.
+            let ap = ap.or_else(|| network.map(|n| n.strongest()));
+            let mut meta = vec![state.to_owned()];
+            if let Some(band) = ap.and_then(|ap| Band::from_mhz(ap.frequency)) {
+                meta.push(band.label().to_owned());
+            }
+            if let Some(w) = d.wifi.as_ref().filter(|w| w.bitrate > 0) {
+                meta.push(format!("{} Mbit/s", w.bitrate / 1000));
+            }
+            hero.icon = "wifi";
+            hero.meta = meta.join(" · ");
+            hero.page = Page::Wifi;
+            hero.row = network.map(network_id);
+            hero.actions.insert(0, ("share", "Share", "secondary"));
+        }
+        _ => {
+            let speed = device.and_then(|d| d.wired.as_ref()).map(|w| w.speed).filter(|&s| s > 0);
+            hero.icon = "wired";
+            hero.meta = match speed {
+                Some(speed) => format!("{state} · {speed} Mbit/s"),
+                None => state.to_owned(),
+            };
+            hero.page = Page::Wired;
+            hero.row = Some(format!("conn:{}", active.uuid));
+        }
+    }
+    if hero.row.is_none() {
+        hero.actions.clear();
+    }
+    hero
+}
+
+fn bytes(n: u64) -> String {
+    match n {
+        n if n >= 1 << 30 => format!("{:.1} GB", n as f64 / f64::from(1u32 << 30)),
+        n if n >= 1 << 20 => format!("{:.1} MB", n as f64 / f64::from(1u32 << 20)),
+        n => format!("{} KB", n >> 10),
+    }
 }
 
 pub(crate) fn network_id(n: &Network) -> String {
@@ -1492,8 +1593,13 @@ pub(crate) mod tests {
         assert_eq!(detail(&view, "IPv6 address").as_deref(), Some("fd12:3a::42/64"));
         let actions: Vec<String> = d.actions.iter().map(|a| a.label.to_string()).collect();
         assert_eq!(actions, ["Disconnect", "Edit", "Share", "Forget"]);
-        assert_eq!(view.nav[0].sub, "Lumen Home");
-        assert_eq!(view.nav[1].sub, "Cable unplugged");
+        assert_eq!(view.net_status, "Lumen Home");
+        assert_eq!(view.net_sub, "Wi-Fi: Lumen Home · cable unplugged · VPN off");
+        assert_eq!(view.net_hero.name, "Lumen Home");
+        assert_eq!(view.net_hero.meta, "Connected · 5 GHz · 866 Mbit/s");
+        assert_eq!(view.net_hero.row.as_deref(), Some(view.row_ids[0].as_str()));
+        let hero_actions: Vec<&str> = view.net_hero.actions.iter().map(|a| a.1).collect();
+        assert_eq!(hero_actions, ["Share", "Edit", "Disconnect"]);
         assert_eq!(view.hostname, "thinkpad-x1");
     }
 
@@ -1588,7 +1694,7 @@ pub(crate) mod tests {
         snap.wireless_enabled = false;
         let view = build(Some(&snap), None, &UiState::default());
         assert_eq!(view.empty.as_ref().map(|e| e.action.as_str()), Some("Turn on Wi-Fi"));
-        assert_eq!(view.nav[0].sub, "Off");
+        assert!(view.net_sub.starts_with("Wi-Fi off"), "{}", view.net_sub);
         snap.wireless_hardware_enabled = false;
         let view = build(Some(&snap), None, &UiState::default());
         assert_eq!(view.empty.as_ref().map(|e| e.title.as_str()), Some("Wi-Fi is blocked"));
@@ -1615,7 +1721,6 @@ pub(crate) mod tests {
         let state = UiState { page: Page::Saved, ..UiState::default() };
         let view = build(Some(&home()), None, &state);
         assert_eq!(rows(&view), [("WI-FI".into(), vec!["Lumen Home".into()])]);
-        assert_eq!(view.nav[4].sub, "1 connection");
     }
 
     #[test]

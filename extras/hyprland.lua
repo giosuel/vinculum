@@ -9,7 +9,7 @@ local lituus = [[^(ch\.giosuel\.Lituus)$]]
 hl.window_rule({
     match = { class = lituus, title = "^(Lituus)$" },
     float = true,
-    size = "1040 680",
+    size = "1200 760",
     center = true,
 })
 
