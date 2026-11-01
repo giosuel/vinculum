@@ -1,0 +1,133 @@
+// Files over Bluetooth, following the "Sending files (OBEX)" and "Incoming file" mockups. What
+// they show comes from Rust (src/files.rs).
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+import { Button } from "controls.slint";
+import { CheckBox } from "dialogs.slint";
+
+/// tone: the status's colour ("accent" sent, "danger" failed, "muted").
+export struct FileRow { name: string, size: string, status: string, fraction: float, active: bool, tone: string }
+export struct FilesView {
+    sending: bool,
+    send-title: string,
+    send-summary: string,
+    send-fraction: float,
+    send-done: bool,
+    files: [FileRow],
+    incoming: bool,
+    in-title: string,
+    in-name: string,
+    in-meta: string,
+    in-folder: string,
+    in-always-label: string,
+    in-always: bool,
+    note: string,
+}
+
+component Dialog inherits Rectangle {
+    in property <length> dialog-width: 480px;
+    background: #05060799;
+    TouchArea { }
+    Rectangle {
+        width: root.dialog-width;
+        height: body.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Theme.ctrl-border;
+        background: Theme.surface;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: #00000080;
+        body := VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            @children
+        }
+    }
+}
+
+export component SendFilesDialog inherits Dialog {
+    in property <FilesView> view;
+    callback cancel();
+    callback hide();
+    dialog-width: 500px;
+    accessible-role: groupbox;
+    accessible-label: view.send-title;
+    Text { text: root.view.send-title; color: Theme.text; font-size: 17px; font-weight: 600; }
+    Text { text: "Keep the device unlocked; it may ask you to accept each file."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+    for f in root.view.files: VerticalLayout {
+        spacing: 4px;
+        HorizontalLayout {
+            height: 30px;
+            spacing: 10px;
+            Icon { name: "file"; tint: Theme.muted; y: (parent.height - 16px) / 2; }
+            Text { text: f.name; color: Theme.text; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+            Text { text: f.size; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+            Text { text: f.status; color: Theme.tone(f.tone); font-size: 12px; vertical-alignment: center; width: 56px; horizontal-alignment: right; }
+        }
+        if f.active: Rectangle {
+            height: 3px;
+            border-radius: 1.5px;
+            background: Theme.off-track;
+            Rectangle { x: 0; width: parent.width * f.fraction; border-radius: 1.5px; background: Theme.accent; }
+        }
+    }
+    Text { text: root.view.send-summary; color: Theme.muted; font-size: 12px; }
+    Rectangle {
+        height: 6px;
+        border-radius: 3px;
+        background: Theme.off-track;
+        Rectangle { x: 0; width: parent.width * root.view.send-fraction; border-radius: 3px; background: Theme.accent; }
+    }
+    HorizontalLayout {
+        padding-top: 4px;
+        spacing: 8px;
+        alignment: end;
+        if !root.view.send-done: Button { label: "Cancel"; button-height: 36px; clicked => { root.cancel(); } }
+        Button { label: root.view.send-done ? "Close" : "Hide"; kind: root.view.send-done ? "primary" : "secondary"; button-height: 36px; clicked => { root.hide(); } }
+    }
+}
+
+export component IncomingFileDialog inherits Dialog {
+    in property <FilesView> view;
+    in-out property <bool> always;
+    callback accept();
+    callback decline();
+    dialog-width: 440px;
+    accessible-role: groupbox;
+    accessible-label: view.in-title;
+    Text { text: root.view.in-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+    Rectangle {
+        height: 56px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.border2;
+        background: Theme.input-bg;
+        HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            spacing: 12px;
+            Icon { name: "file"; tint: Theme.accent; size: 18px; y: (parent.height - 18px) / 2; }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: root.view.in-name; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
+                Text { text: root.view.in-meta; color: Theme.muted; font-size: 12px; }
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        Text { text: "Saved to"; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
+        Text { text: root.view.in-folder; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+    }
+    CheckBox { text: root.view.in-always-label; checked <=> root.always; }
+    HorizontalLayout {
+        padding-top: 4px;
+        spacing: 8px;
+        alignment: end;
+        Button { label: "Decline"; button-height: 36px; clicked => { root.decline(); } }
+        Button { label: "Accept"; kind: "primary"; button-height: 36px; clicked => { root.accept(); } }
+    }
+}

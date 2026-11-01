@@ -7,11 +7,13 @@
 pub mod agent;
 mod client;
 mod model;
+pub mod obex;
 mod props;
 
 pub use agent::{AgentEvent, Answer, Ask, PairingRequest};
 pub use client::{Client, Error};
 pub use model::{Adapter, Device, DeviceKind, PowerState, Snapshot, uuid};
+pub use obex::{IncomingFile, Obex, ObexEvent, Transfer};
 
 /// BlueZ's well-known name on the system bus.
 pub const BUS_NAME: &str = "org.bluez";

@@ -12,6 +12,7 @@ mod config;
 mod displays;
 mod editing;
 mod editor;
+mod files;
 mod hotspot;
 mod instance;
 mod nav;
@@ -141,6 +142,8 @@ struct App {
     notifier: Option<notify::Notifier>,
     /// The Bluetooth page.
     bt: bluetooth::State,
+    /// Files over Bluetooth.
+    files: files::State,
     /// The Displays page.
     displays: displays::State,
     /// The Sound page.
@@ -242,6 +245,7 @@ fn main() -> Result<(), slint::PlatformError> {
     APP.with(|app| app.borrow_mut().bt.commands = Some(bt_commands));
     bluetooth::spawn(window.as_weak(), bt_receiver);
     sound::spawn(window.as_weak());
+    files::spawn(window.as_weak(), config::load(&config::path()).bluetooth.accept_files_from);
     displays::refresh(&window.as_weak());
     spawn_hyprland_watcher(window.as_weak());
     // The Displays page's countdown after Apply.
@@ -616,6 +620,22 @@ fn connect_callbacks(window: &MainWindow) {
                 app.message_title.clear();
                 app.message = Some((format!("Couldn't save the setting: {error}."), "danger"));
             }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_files_act(move |verb| {
+        let always = weak.upgrade().is_some_and(|w| w.get_files_always());
+        update(&weak, |app| match verb.as_str() {
+            "cancel" => app.files.send(files::Command::Cancel),
+            "hide" => {
+                if app.files.sending.as_ref().is_some_and(|s| s.transfers.iter().all(lituus_bt::Transfer::done)) {
+                    app.files.sending = None;
+                } else {
+                    app.files.hidden = true;
+                }
+            }
+            "accept" | "decline" => app.files.send(files::Command::Answer { accept: verb == "accept", always }),
+            _ => {}
         })
     });
     let weak = window.as_weak();
@@ -1180,6 +1200,10 @@ fn render(window: &MainWindow) {
         window.set_wifi_available(v.wifi_available);
         let on_bluetooth = app.ui.page == view::Page::Bluetooth && window.window().is_visible();
         bluetooth::set_open(&mut app.bt, on_bluetooth);
+        // What files.rs has to tell goes in the Bluetooth page's message.
+        if let Some(note) = app.files.note.take() {
+            app.bt.message = Some(bluetooth::Message { title: String::new(), text: note, tone: "info", retry: None });
+        }
         bluetooth::render(window, &mut app);
         window.set_page(app.ui.page.id().into());
         window.set_page_title(v.page_title.into());
@@ -1263,6 +1287,7 @@ fn render(window: &MainWindow) {
         render_appearance(window, &app);
         sound::render(window, &app.sound);
         displays::render(window, &app.displays);
+        files::render(window, &app.files);
         render_quick(&mut app);
     });
 }
