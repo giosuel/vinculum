@@ -15,10 +15,11 @@ import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
 import { Sidebar, Hero, HeroSubject, Card, NavItem, NavGroup, HeroInfo } from "shell.slint";
 import { AppearancePage, ThemeSwatch, ColourChip, SourceRow } from "appearance.slint";
+import { SoundPage, SoundView, SoundDevice, SoundApp, SoundCard } from "sound.slint";
 import { BluetoothPage, BtAudio, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -86,6 +87,11 @@ export component MainWindow inherits Window {
     in property <string> banner;
     // Settings page.
     in property <string> config-path;
+    // Sound page (see sound.slint).
+    in property <SoundView> sound;
+    in-out property <int> sound-tab;
+    /// Everything done on the Sound page: (verb, id, value).
+    callback sound-act(string, string, float);
     // Appearance page (see appearance.slint).
     in property <[SourceRow]> sources;
     in property <bool> ap-follow;
@@ -690,6 +696,12 @@ export component MainWindow inherits Window {
                         vertical-stretch: 1;
                         page: root.bt;
                         act(verb, argument) => { root.bt-act(verb, argument); keys.focus(); }
+                    }
+                    if root.page == "sound": SoundPage {
+                        vertical-stretch: 1;
+                        page: root.sound;
+                        tab <=> root.sound-tab;
+                        act(verb, id, value) => { root.sound-act(verb, id, value); }
                     }
                     if root.page == "appearance": AppearancePage {
                         vertical-stretch: 1;

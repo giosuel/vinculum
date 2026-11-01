@@ -156,7 +156,10 @@ export component Select inherits Rectangle {
     in property <[string]> details;
     in property <string> label;
     in-out property <int> selected;
-    height: 38px;
+    in property <length> select-height: 38px;
+    /// The user picked an option.
+    callback chosen(int);
+    height: select-height;
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.border2;
@@ -168,7 +171,7 @@ export component Select inherits Rectangle {
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 10px;
-        Text { text: root.options[root.selected]; color: Theme.text; font-size: 14px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        Text { text: root.options[root.selected]; color: Theme.text; font-size: root.select-height < 38px ? 13px : 14px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
         Icon { name: "chevron"; tint: Theme.icon-soft; y: (parent.height - 16px) / 2; }
     }
     touch := TouchArea { mouse-cursor: pointer; clicked => { popup.show(); } }
@@ -195,7 +198,7 @@ export component Select inherits Rectangle {
                         Text { text: option; color: Theme.text; font-size: 13px; }
                         if root.details.length > i: Text { text: root.details[i]; color: Theme.muted; font-size: 11px; }
                     }
-                    item := TouchArea { mouse-cursor: pointer; clicked => { root.selected = i; } }
+                    item := TouchArea { mouse-cursor: pointer; clicked => { root.selected = i; root.chosen(i); } }
                 }
             }
         }

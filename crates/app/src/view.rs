@@ -18,6 +18,7 @@ pub enum Page {
     Hotspot,
     Bluetooth,
     Saved,
+    Sound,
     Appearance,
     Settings,
 }
@@ -31,6 +32,7 @@ impl Page {
             "hotspot" => Self::Hotspot,
             "bluetooth" => Self::Bluetooth,
             "saved" => Self::Saved,
+            "sound" => Self::Sound,
             "appearance" => Self::Appearance,
             "settings" => Self::Settings,
             _ => return None,
@@ -50,6 +52,7 @@ impl Page {
             Self::Hotspot => "hotspot",
             Self::Bluetooth => "bluetooth",
             Self::Saved => "saved",
+            Self::Sound => "sound",
             Self::Appearance => "appearance",
             Self::Settings => "settings",
         }
@@ -300,7 +303,7 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
             Vec::new()
         }
         // Bluetooth has a page of its own (bluetooth.rs).
-        Page::Bluetooth | Page::Appearance | Page::Settings => Vec::new(),
+        Page::Bluetooth | Page::Sound | Page::Appearance | Page::Settings => Vec::new(),
     };
     // Rows grouped by section title, the selection resolved, and the selected row's details.
     view.row_ids = rows.iter().flat_map(|(_, r)| r.iter().map(|r| r.id.clone())).collect();
@@ -346,6 +349,7 @@ fn page_title(page: Page) -> &'static str {
         Page::Hotspot => "Hotspot",
         Page::Bluetooth => "Bluetooth",
         Page::Saved => "Saved connections",
+        Page::Sound => "Sound",
         Page::Appearance => "Appearance",
         Page::Settings => "Settings",
     }

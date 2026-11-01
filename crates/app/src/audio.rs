@@ -104,7 +104,9 @@ impl Session {
     pub fn connect() -> Result<Self, Error> {
         let path = pulseaudio::socket_path_from_env().ok_or(Error::NotRunning)?;
         let socket = UnixStream::connect(path).map_err(|_| Error::NotRunning)?;
-        let cookie = pulseaudio::cookie_path_from_env().and_then(|p| std::fs::read(p).ok()).unwrap_or_default();
+        // pipewire-pulse turns away a handshake without a cookie, and most PipeWire systems have no
+        // cookie file; it doesn't check the cookie, so a blank one of the right length does.
+        let cookie = pulseaudio::cookie_path_from_env().and_then(|p| std::fs::read(p).ok()).unwrap_or(vec![0; 256]);
         Self::over(socket, cookie)
     }
 
