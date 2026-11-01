@@ -1,0 +1,50 @@
+[
+    {
+        "id": 1,
+        "name": "1",
+        "monitor": "DP-5",
+        "monitorID": 1,
+        "windows": 3,
+        "hasfullscreen": false,
+        "lastwindow": "0x0",
+        "lastwindowtitle": "",
+        "ispersistent": false,
+        "tiledLayout": "dwindle"
+    },
+    {
+        "id": 4,
+        "name": "4",
+        "monitor": "DP-3",
+        "monitorID": 0,
+        "windows": 1,
+        "hasfullscreen": false,
+        "lastwindow": "0x0",
+        "lastwindowtitle": "",
+        "ispersistent": false,
+        "tiledLayout": "dwindle"
+    },
+    {
+        "id": 6,
+        "name": "6",
+        "monitor": "DP-4",
+        "monitorID": 2,
+        "windows": 2,
+        "hasfullscreen": false,
+        "lastwindow": "0x0",
+        "lastwindowtitle": "",
+        "ispersistent": false,
+        "tiledLayout": "dwindle"
+    },
+    {
+        "id": 8,
+        "name": "8",
+        "monitor": "HDMI-A-3",
+        "monitorID": 3,
+        "windows": 0,
+        "hasfullscreen": false,
+        "lastwindow": "0x0",
+        "lastwindowtitle": "",
+        "ispersistent": false,
+        "tiledLayout": "dwindle"
+    }
+]

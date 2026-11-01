@@ -116,10 +116,28 @@ jobs:
       - name: --version
         run: ./result/bin/lituus --version
 
+  hyprland:
+    # The monitor and workspace rules the Displays page writes, checked by a real Hyprland
+    # (`Hyprland --verify-config`); Arch has the newest one.
+    name: hyprland (config check)
+    runs-on: ubuntu-24.04
+    container: docker.io/library/archlinux:latest
+    timeout-minutes: 30
+    steps:
+      - name: Hyprland and a Rust toolchain
+        run: pacman -Syu --noconfirm --needed hyprland rustup gcc git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Hyprland version
+        run: Hyprland --version | head -1
+      - name: test lituus-hypr
+        run: cargo test --locked -p lituus-hypr
+
   ci-result:
     name: CI result
     if: always()
-    needs: [lint, test, deps, metadata, nix]
+    needs: [lint, test, deps, metadata, nix, hyprland]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

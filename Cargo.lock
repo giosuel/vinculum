@@ -2714,6 +2714,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lituus-hypr"
+version = "0.0.0-dev"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "lituus-keyring"
 version = "0.0.0-dev"
 dependencies = [

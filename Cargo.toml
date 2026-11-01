@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/app", "crates/bt", "crates/cli", "crates/keyring", "crates/nm", "crates/sound", "xtask"]
+members = ["crates/app", "crates/bt", "crates/cli", "crates/hypr", "crates/keyring", "crates/nm", "crates/sound", "xtask"]
 
 [workspace.package]
 version = "0.0.0-dev"
@@ -24,6 +24,7 @@ serde = "1.0.229"
 thiserror = "2.0.21"
 tokio = "1.53.2"
 lituus-bt = { path = "crates/bt" }
+lituus-hypr = { path = "crates/hypr" }
 lituus-keyring = { path = "crates/keyring" }
 lituus-nm = { path = "crates/nm" }
 lituus-sound = { path = "crates/sound" }
