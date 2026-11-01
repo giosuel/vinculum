@@ -14,17 +14,17 @@ import { JoinDialog, TextField, Segmented } from "dialogs.slint";
 import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
 import { Sidebar, Hero, HeroSubject, Card, NavItem, NavGroup, HeroInfo } from "shell.slint";
+import { AppearancePage, ThemeSwatch, ColourChip, SourceRow } from "appearance.slint";
 import { BluetoothPage, BtAudio, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
 export struct Row { id: string, name: string, meta: string, tone: string, icon: string, bars: int, secure: bool, selected: bool, indent: bool }
 export struct Section { title: string, rows: [Row] }
 export struct HostRow { name: string, address: string, since: string }
-export struct SourceRow { n: int, label: string, path: string, status: string, tone: string, swatches: [color] }
 
 component ListRow inherits Rectangle {
     in property <Row> entry;
@@ -86,12 +86,22 @@ export component MainWindow inherits Window {
     in property <string> banner;
     // Settings page.
     in property <string> config-path;
+    // Appearance page (see appearance.slint).
     in property <[SourceRow]> sources;
-    /// Why the built-in theme choice is greyed out (a colour source is in use); empty when it isn't.
-    in property <string> builtin-note;
-    in property <int> builtin-choice;
+    in property <bool> ap-follow;
+    in property <bool> ap-follow-available;
+    in property <bool> ap-wallpaper-in-use;
+    in property <string> ap-sub;
+    in property <string> ap-name;
+    in property <string> ap-name-text;
+    in property <[ColourChip]> ap-chips;
+    in property <[ThemeSwatch]> ap-swatches;
+    in property <string> ap-note;
+    in property <int> ap-mode;
+    in property <bool> ap-gradient;
+    /// Everything done on the Appearance page: ("follow" | "theme" | "mode" | "gradient", index).
+    callback ap-act(string, int);
     in property <[Toggle]> options;
-    callback builtin-chosen(int);
     callback option-toggled(string);
     in property <string> placeholder;
     // A message above the list: an error ("danger"), a polkit problem ("warn"), or a note ("info").
@@ -681,6 +691,26 @@ export component MainWindow inherits Window {
                         page: root.bt;
                         act(verb, argument) => { root.bt-act(verb, argument); keys.focus(); }
                     }
+                    if root.page == "appearance": AppearancePage {
+                        vertical-stretch: 1;
+                        follow: root.ap-follow;
+                        follow-available: root.ap-follow-available;
+                        wallpaper-in-use: root.ap-wallpaper-in-use;
+                        sub: root.ap-sub;
+                        name: root.ap-name;
+                        name-text: root.ap-name-text;
+                        chips: root.ap-chips;
+                        swatches: root.ap-swatches;
+                        note: root.ap-note;
+                        mode: root.ap-mode;
+                        gradient: root.ap-gradient;
+                        sources: root.sources;
+                        config-path: root.config-path;
+                        follow-toggled => { root.ap-act("follow", 0); keys.focus(); }
+                        theme-chosen(i) => { root.ap-act("theme", i); keys.focus(); }
+                        mode-chosen(i) => { root.ap-act("mode", i); keys.focus(); }
+                        gradient-toggled => { root.ap-act("gradient", 0); keys.focus(); }
+                    }
                     if root.page == "settings": Hero {
                         title: "Settings";
                         sub: "Saved to " + root.config-path;
@@ -694,59 +724,6 @@ export component MainWindow inherits Window {
                                 padding: 22px;
                                 spacing: 22px;
                                 alignment: start;
-                                VerticalLayout {
-                                    spacing: 10px;
-                                    Text { text: "Colours"; color: Theme.text; font-weight: 600; }
-                                    Text { text: "The first source that exists is used, and the window recolours when it changes."; color: Theme.muted; font-size: 13px; }
-                                    Rectangle {
-                                        border-width: 1px;
-                                        border-color: Theme.border2;
-                                        border-radius: 10px;
-                                        VerticalLayout {
-                                            for s[i] in root.sources: Rectangle {
-                                                height: 54px;
-                                                Rectangle { y: 0; height: 1px; background: i == 0 ? transparent : Theme.border2; }
-                                                HorizontalLayout {
-                                                    padding-left: 14px;
-                                                    padding-right: 14px;
-                                                    spacing: 12px;
-                                                    Text { text: s.n; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; width: 14px; vertical-alignment: center; }
-                                                    VerticalLayout {
-                                                        alignment: center;
-                                                        spacing: 2px;
-                                                        horizontal-stretch: 1;
-                                                        Text { text: s.label; color: Theme.text; font-weight: 500; }
-                                                        Text { text: s.path; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
-                                                    }
-                                                    HorizontalLayout {
-                                                        spacing: 3px;
-                                                        alignment: center;
-                                                        for c in s.swatches: Rectangle { width: 14px; height: 14px; y: (parent.height - 14px) / 2; border-radius: 4px; background: c; border-width: 1px; border-color: Theme.border2; }
-                                                    }
-                                                    Text { text: s.status; color: Theme.tone(s.tone); font-size: 12px; width: 92px; horizontal-alignment: right; vertical-alignment: center; }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                HorizontalLayout {
-                                    spacing: 24px;
-                                    Text { text: "Built-in theme"; color: Theme.icon-soft; width: 200px; height: 40px; vertical-alignment: center; }
-                                    VerticalLayout {
-                                        spacing: 8px;
-                                        HorizontalLayout {
-                                            alignment: start;
-                                            Segmented {
-                                                label: "Built-in theme";
-                                                options: ["Follow system", "Dark", "Light"];
-                                                selected: root.builtin-choice;
-                                                enabled: root.builtin-note == "";
-                                                changed(i) => { root.builtin-chosen(i); }
-                                            }
-                                        }
-                                        if root.builtin-note != "": Text { text: root.builtin-note; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-                                    }
-                                }
                                 for o in root.options: HorizontalLayout {
                                     spacing: 24px;
                                     Text { text: o.label; color: Theme.icon-soft; width: 200px; vertical-alignment: center; }
@@ -758,7 +735,6 @@ export component MainWindow inherits Window {
                                     Text { text: "Passwords \"for me only\""; color: Theme.icon-soft; width: 200px; }
                                     Text { text: root.keyring-label; color: Theme.text; wrap: word-wrap; horizontal-stretch: 1; }
                                 }
-                                Text { text: "Colour sources are changed in the file."; color: Theme.faint; font-size: 12px; }
                             }
                         }
                     }

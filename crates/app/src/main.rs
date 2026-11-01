@@ -88,9 +88,15 @@ struct App {
     error: Option<String>,
     ui: view::UiState,
     row_ids: Vec<String>,
-    /// The palette from the colour sources; `None` means the built-in theme.
+    /// The palette from the colour sources, while it's followed; `None` means the built-in theme.
     palette: Option<theme::Palette>,
+    /// The first usable colour source's palette, followed or not.
+    wallpaper: Option<theme::Palette>,
+    /// config.toml's `[theme]`, but for the sources.
     builtin: config::Builtin,
+    mode: config::Mode,
+    follow_wallpaper: bool,
+    gradient: bool,
     /// Commands for the NetworkManager thread.
     commands: Option<tokio::sync::mpsc::UnboundedSender<view::Command>>,
     /// The message above the list, and its tone ("danger", "warn", "info").
@@ -592,11 +598,29 @@ fn connect_callbacks(window: &MainWindow) {
         })
     });
     let weak = window.as_weak();
-    window.on_builtin_chosen(move |i| {
+    window.on_ap_act(move |what, i| {
         update(&weak, |app| {
-            let builtin = config::Builtin::ALL[(i.max(0) as usize).min(2)];
-            app.builtin = builtin;
-            if let Err(error) = config::set(&config::path(), "theme", "builtin", builtin.key()) {
+            let i = i.max(0) as usize;
+            let saved = match what.as_str() {
+                "follow" => {
+                    app.follow_wallpaper = !app.follow_wallpaper;
+                    app.palette = app.wallpaper.filter(|_| app.follow_wallpaper);
+                    config::set(&config::path(), "theme", "follow_wallpaper", app.follow_wallpaper)
+                }
+                "theme" => {
+                    app.builtin = config::Builtin::ALL[i.min(config::Builtin::ALL.len() - 1)];
+                    config::set(&config::path(), "theme", "builtin", app.builtin.key())
+                }
+                "mode" => {
+                    app.mode = config::Mode::ALL[i.min(2)];
+                    config::set(&config::path(), "theme", "mode", app.mode.key())
+                }
+                _ => {
+                    app.gradient = !app.gradient;
+                    config::set(&config::path(), "theme", "gradient", app.gradient)
+                }
+            };
+            if let Err(error) = saved {
                 app.message_title.clear();
                 app.message = Some((format!("Couldn't save the setting: {error}."), "danger"));
             }
@@ -961,6 +985,63 @@ fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(items))
 }
 
+/// The Appearance page.
+fn render_appearance(window: &MainWindow, app: &App) {
+    let in_use = app.palette.is_some();
+    let dark = app.mode.dark(window.get_prefers_dark());
+    window.set_ap_follow(app.follow_wallpaper);
+    window.set_ap_follow_available(app.wallpaper.is_some());
+    window.set_ap_wallpaper_in_use(in_use);
+    let mode = ["auto", "dark", "light"][config::Mode::ALL.iter().position(|m| *m == app.mode).unwrap_or(0)];
+    let (sub, name, text) = if in_use {
+        (
+            "Following your wallpaper".to_owned(),
+            "Wallpaper colours".to_owned(),
+            "Made by matugen from your wallpaper; the window recolours when it changes.".to_owned(),
+        )
+    } else {
+        let why = if app.wallpaper.is_none() { "No wallpaper colours found · " } else { "" };
+        (
+            format!("{why}{} · {}", app.builtin.label(), if dark { "dark" } else { "light" }),
+            app.builtin.label().to_owned(),
+            format!("Built-in theme · {mode} mode"),
+        )
+    };
+    window.set_ap_sub(sub.into());
+    window.set_ap_name(name.into());
+    window.set_ap_name_text(text.into());
+    let chips = app.wallpaper.map(|p| {
+        [("Primary", p.accent), ("Container", p.accent_soft_border), ("Secondary", p.accent_soft_bg), ("Surface", p.bg)]
+            .into_iter()
+            .map(|(label, c)| ColourChip {
+                label: label.into(),
+                value: color(c),
+                hex: format!("#{:02x}{:02x}{:02x}", c.0, c.1, c.2).into(),
+            })
+            .collect()
+    });
+    window.set_ap_chips(model(chips.unwrap_or_default()));
+    window.set_ap_swatches(model(
+        config::Builtin::ALL
+            .iter()
+            .map(|&b| {
+                let p = theme::Palette::builtin(b, dark);
+                ThemeSwatch {
+                    name: b.label().into(),
+                    bg: color(p.bg),
+                    side: color(p.panel),
+                    accent: color(p.accent),
+                    selected: b == app.builtin,
+                }
+            })
+            .collect(),
+    ));
+    let statuses: Vec<theme::SourceStatus> = app.wallpaper.map(theme::SourceStatus::Used).into_iter().collect();
+    window.set_ap_note(theme::builtin_note(app.follow_wallpaper, &statuses).into());
+    window.set_ap_mode(config::Mode::ALL.iter().position(|m| *m == app.mode).unwrap_or(0) as i32);
+    window.set_ap_gradient(app.gradient);
+}
+
 /// The sidebar's pages; the Network item's status is filled in from the view.
 fn nav_entries(app: &App) -> Vec<nav::Entry> {
     vec![
@@ -979,6 +1060,14 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             group: "CONNECTIONS",
             keywords: "pair pairing headphones headset keyboard mouse speaker devices",
             status: bluetooth::nav(&app.bt, false).sub.to_string(),
+        },
+        nav::Entry {
+            id: "appearance",
+            label: "Appearance",
+            icon: "palette",
+            group: "PERSONAL",
+            keywords: "theme colours colors dark light mode matugen wallpaper accent gradient",
+            status: if app.palette.is_some() { "Wallpaper".to_owned() } else { app.builtin.label().to_owned() },
         },
     ]
 }
@@ -1094,7 +1183,7 @@ fn render(window: &MainWindow) {
                 app.settings.notifications,
             ),
         ]));
-        window.set_builtin_choice(config::Builtin::ALL.iter().position(|b| *b == app.builtin).unwrap_or(0) as i32);
+        render_appearance(window, &app);
         render_quick(&mut app);
     });
 }
@@ -1816,23 +1905,27 @@ fn spawn_theme_watcher(weak: slint::Weak<MainWindow>) {
             let config = config::load(&path);
             let now = signature(&path, &config);
             if last.as_ref() != Some(&now) {
-                let (statuses, palette) = theme::resolve(&config.theme.sources);
-                let rows = source_rows(&config, &statuses);
-                let note = theme::builtin_note(&config.theme.sources, &statuses);
-                let builtin = config.theme.builtin;
+                let follow = config.theme.follow_wallpaper;
+                let (statuses, palette) = theme::resolve(&config.theme.sources, follow);
+                let wallpaper = theme::resolve(&config.theme.sources, true).1;
+                let rows = source_rows(&config, &statuses, follow);
+                let (builtin, mode, gradient) = (config.theme.builtin, config.theme.mode, config.theme.gradient);
                 let settings = Settings::from(&config);
                 let config_path = path.display().to_string();
                 let _ = weak.upgrade_in_event_loop(move |window| {
                     APP.with(|app| {
                         let mut app = app.borrow_mut();
                         app.palette = palette;
+                        app.wallpaper = wallpaper;
                         app.builtin = builtin;
+                        app.mode = mode;
+                        app.follow_wallpaper = follow;
+                        app.gradient = gradient;
                     });
                     apply_theme(&window);
                     apply_settings(&window, settings);
                     render(&window);
                     window.set_config_path(shorten_home(&config_path).into());
-                    window.set_builtin_note(note.into());
                     window.set_sources(model(rows.into_iter().map(SourceRow::from).collect()));
                 });
                 last = Some(now);
@@ -1865,9 +1958,9 @@ impl From<SourceRowData> for SourceRow {
     }
 }
 
-fn source_rows(config: &config::Config, statuses: &[theme::SourceStatus]) -> Vec<SourceRowData> {
+fn source_rows(config: &config::Config, statuses: &[theme::SourceStatus], follow: bool) -> Vec<SourceRowData> {
     let mut used = false;
-    let mut rows: Vec<SourceRowData> = config
+    let rows: Vec<SourceRowData> = config
         .theme
         .sources
         .iter()
@@ -1880,21 +1973,18 @@ fn source_rows(config: &config::Config, statuses: &[theme::SourceStatus]) -> Vec
                 theme::SourceStatus::Unusable => ("Not usable", "danger", Vec::new()),
                 theme::SourceStatus::Used(p) if !used => {
                     used = true;
-                    ("In use", "accent", vec![p.accent, p.accent_soft_bg, p.surface, p.danger])
+                    let status = if follow { "In use" } else { "Found · not followed" };
+                    (
+                        status,
+                        if follow { "accent" } else { "muted" },
+                        vec![p.accent, p.accent_soft_bg, p.surface, p.danger],
+                    )
                 }
                 theme::SourceStatus::Used(_) => ("Usable", "muted", Vec::new()),
             };
             SourceRowData { n: i as i32 + 1, label, path: source.path.clone(), status, tone, swatches }
         })
         .collect();
-    rows.push(SourceRowData {
-        n: rows.len() as i32 + 1,
-        label: "Built-in theme".into(),
-        path: "Follows the setting below".into(),
-        status: if used { "Fallback" } else { "In use" },
-        tone: if used { "muted" } else { "accent" },
-        swatches: Vec::new(),
-    });
     rows
 }
 
@@ -1910,17 +2000,19 @@ fn color(rgb: theme::Rgb) -> slint::Color {
 }
 
 fn apply_theme(window: &MainWindow) {
-    let (palette, builtin) = APP.with(|app| {
+    let (palette, builtin, mode, gradient) = APP.with(|app| {
         let app = app.borrow();
-        (app.palette, app.builtin)
+        (app.palette, app.builtin, app.mode, app.gradient)
     });
-    let p = palette.unwrap_or_else(|| theme::Palette::builtin(builtin, window.get_prefers_dark()));
+    let p = palette.unwrap_or_else(|| theme::Palette::builtin(builtin, mode.dark(window.get_prefers_dark())));
     set_theme(window.global::<Theme>(), &p);
+    window.global::<Theme>().set_gradient(gradient);
     QUICK.with(|q| {
         if let Some(q) = q.borrow().as_ref() {
             set_theme(q.global::<Theme>(), &p);
         }
     });
+    render(window);
 }
 
 fn set_theme(t: Theme<'_>, p: &theme::Palette) {
@@ -1948,6 +2040,7 @@ fn set_theme(t: Theme<'_>, p: &theme::Palette) {
     t.set_warn_bg(color(p.warn_bg));
     t.set_warn_border(color(p.warn_border));
     t.set_warn_text(color(p.warn_text));
+    t.set_glow(color(p.glow));
 }
 
 #[cfg(test)]
