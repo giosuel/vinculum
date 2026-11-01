@@ -9,7 +9,11 @@ import { Hero, Card } from "shell.slint";
 import { Slider } from "sound.slint";
 
 /// A monitor on the layout, in layout pixels.
-export struct LayoutMonitor { n: int, port: string, name: string, sub: string, x: float, y: float, w: float, h: float, selected: bool, disabled: bool, mirrored: bool }
+/// workspaces: the workspaces bound to it ("1★  2  3"; ★ is the default).
+export struct LayoutMonitor { n: int, port: string, name: string, sub: string, x: float, y: float, w: float, h: float, selected: bool, disabled: bool, mirrored: bool, workspaces: string }
+/// A workspace and the monitor it opens on: `monitor` is a place in `ws-monitors` (0: any).
+export struct WorkspaceRow { name: string, monitor: int, bound: bool, default: bool, persistent: bool }
+export struct ProfileRow { name: string, summary: string, active: bool, auto: bool, exec: string }
 /// state: "list", "loading" or "not-running".
 export struct DisplaysView {
     state: string,
@@ -66,6 +70,12 @@ export struct DisplaysView {
     config-main: string,
     config-open: bool,
     config-text: string,
+    workspaces: [WorkspaceRow],
+    ws-monitors: [string],
+    profiles: [ProfileRow],
+    /// The profile the monitors show now, if any.
+    profile: string,
+    switch-hotplug: bool,
 }
 
 component Badge inherits Rectangle {
@@ -83,6 +93,7 @@ component Badge inherits Rectangle {
 /// The monitors to scale, draggable.
 component Layout inherits Rectangle {
     in property <DisplaysView> view;
+    in property <bool> show-workspaces;
     callback select(int);
     callback drag(int, float, float, bool);
     property <length> margin: 18px;
@@ -117,7 +128,8 @@ component Layout inherits Rectangle {
             }
             Rectangle { vertical-stretch: 1; }
             Text { text: m.name; color: Theme.text; font-size: 12px; font-weight: 600; overflow: elide; }
-            Text { text: m.sub; color: Theme.muted; font-size: 11px; overflow: elide; }
+            if !root.show-workspaces: Text { text: m.sub; color: Theme.muted; font-size: 11px; overflow: elide; }
+            if root.show-workspaces: Text { text: m.workspaces == "" ? "No workspaces bound" : m.workspaces; color: m.workspaces == "" ? Theme.faint : Theme.accent; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
         }
         touch := TouchArea {
             mouse-cursor: m.disabled || m.mirrored ? pointer : move;
@@ -145,6 +157,9 @@ component Field inherits VerticalLayout {
 export component DisplaysPage inherits VerticalLayout {
     in property <DisplaysView> view;
     in-out property <int> tab;
+    /// Monitor, Workspaces or Profiles.
+    in-out property <int> page-tab;
+    property <string> new-profile;
     callback act(string, string, float);
     callback drag(int, float, float, bool);
     spacing: 14px;
@@ -189,6 +204,7 @@ export component DisplaysPage inherits VerticalLayout {
             width: parent.width - 40px;
             height: parent.height - 76px - 28px;
             view: root.view;
+            show-workspaces: root.page-tab == 1;
             select(i) => { root.act("select", "" + i, 0); }
             drag(i, x, y, done) => { root.drag(i, x, y, done); }
         }
@@ -203,12 +219,126 @@ export component DisplaysPage inherits VerticalLayout {
             x: parent.width - self.width - 18px;
             y: 18px;
             width: self.preferred-width;
-            height: 34px;
-            Button { label: "View config"; button-height: 34px; clicked => { root.act("view-config", "", 0); } }
+            height: 36px;
+            spacing: 8px;
+            Segmented {
+                label: "Displays";
+                height: 36px;
+                options: ["Monitor", "Workspaces", "Profiles"];
+                selected <=> root.page-tab;
+            }
+            Button { label: "View config"; button-height: 36px; clicked => { root.act("view-config", "", 0); } }
         }
     }
 
-    if root.view.state == "list": Card {
+    if root.view.state == "list" && root.page-tab == 1: Card {
+        vertical-stretch: 1;
+        Flickable {
+            content-height: ws-list.preferred-height;
+            ws-list := VerticalLayout {
+                padding: 18px;
+                padding-top: 12px;
+                spacing: 0;
+                alignment: start;
+                HorizontalLayout {
+                    height: 30px;
+                    spacing: 14px;
+                    Text { text: "Workspace"; color: Theme.faint; font-size: 12px; width: 80px; vertical-alignment: center; }
+                    Text { text: "Opens on"; color: Theme.faint; font-size: 12px; horizontal-stretch: 1; vertical-alignment: center; }
+                    Text { text: "Shown when the monitor turns on"; color: Theme.faint; font-size: 12px; width: 220px; vertical-alignment: center; }
+                    Text { text: "Kept when empty"; color: Theme.faint; font-size: 12px; width: 120px; vertical-alignment: center; }
+                }
+                for w[i] in root.view.workspaces: HorizontalLayout {
+                    height: 44px;
+                    spacing: 14px;
+                    Text { text: w.name; color: Theme.text; font-size: 14px; font-weight: 600; font-family: "JetBrains Mono"; width: 80px; vertical-alignment: center; }
+                    Select {
+                        horizontal-stretch: 1;
+                        select-height: 32px;
+                        label: "Monitor for workspace " + w.name;
+                        options: root.view.ws-monitors;
+                        selected: w.monitor;
+                        y: (parent.height - self.height) / 2;
+                        chosen(c) => { root.act("ws-monitor", "" + i, c); }
+                    }
+                    HorizontalLayout {
+                        width: 220px;
+                        Switch { on: w.default; label: "Default for its monitor"; opacity: w.bound ? 1 : 0.4; y: (parent.height - self.height) / 2; toggled => { root.act("ws-default", "" + i, 0); } }
+                    }
+                    HorizontalLayout {
+                        width: 120px;
+                        Switch { on: w.persistent; label: "Kept when empty"; opacity: w.bound ? 1 : 0.4; y: (parent.height - self.height) / 2; toggled => { root.act("ws-persistent", "" + i, 0); } }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.view.state == "list" && root.page-tab == 2: Card {
+        vertical-stretch: 1;
+        Flickable {
+            content-height: profile-list.preferred-height;
+            profile-list := VerticalLayout {
+                padding: 18px;
+                padding-top: 12px;
+                spacing: 10px;
+                alignment: start;
+                HorizontalLayout {
+                    spacing: 14px;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 2px;
+                        Text { text: "Switch when monitors are plugged in or out"; color: Theme.text; font-size: 13px; }
+                        Text { text: "To the profile made for exactly the monitors plugged in, if it switches by itself. Lituus must be running (in the tray, or with --background)."; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
+                    }
+                    Switch { on: root.view.switch-hotplug; label: "Switch profiles on hotplug"; switch-width: 40px; y: (parent.height - self.height) / 2; toggled => { root.act("switch-hotplug", "", 0); } }
+                }
+                Rectangle { height: 1px; background: Theme.border; }
+                if root.view.profiles.length == 0: Text { text: "No profiles yet. Save the layout you have now as one."; color: Theme.faint; font-size: 13px; height: 32px; vertical-alignment: center; }
+                for p[i] in root.view.profiles: Rectangle {
+                    height: prow.preferred-height;
+                    border-radius: 10px;
+                    background: p.active ? Theme.accent-soft-bg : transparent;
+                    prow := VerticalLayout {
+                        padding: 10px;
+                        spacing: 8px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: 2px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    Text { text: p.name; color: Theme.text; font-size: 14px; font-weight: 600; }
+                                    if p.active: Text { text: "In use"; color: Theme.accent; font-size: 12px; vertical-alignment: center; }
+                                }
+                                Text { text: p.summary; color: Theme.faint; font-size: 12px; }
+                            }
+                            Text { text: "By itself"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                            Switch { on: p.auto; label: "Switch to " + p.name + " by itself"; y: (parent.height - self.height) / 2; toggled => { root.act("profile-auto", "" + i, 0); } }
+                            Button { label: "Use"; button-height: 30px; horizontal-stretch: 0; enabled: !p.active; y: (parent.height - self.height) / 2; clicked => { root.act("profile-use", "" + i, 0); } }
+                            Button { label: "Update"; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-update", "" + i, 0); } }
+                            Button { label: "Delete"; kind: "danger"; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-delete", "" + i, 0); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "Run after switching"; color: Theme.faint; font-size: 12px; vertical-alignment: center; width: 140px; }
+                            TextField { text: p.exec; mono: true; placeholder: "e.g. pkill -SIGUSR2 waybar"; label: "Run after switching to " + p.name; height: 32px; accepted => { root.act("profile-exec", i + ":" + self.text, 0); } }
+                        }
+                    }
+                }
+                Rectangle { height: 1px; background: Theme.border; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    TextField { text <=> root.new-profile; placeholder: "Name, e.g. Desk + TV"; label: "New profile's name"; height: 34px; accepted => { root.act("profile-save", root.new-profile, 0); root.new-profile = ""; } }
+                    Button { label: "Save the current layout as a profile"; button-height: 34px; horizontal-stretch: 0; enabled: root.new-profile != ""; clicked => { root.act("profile-save", root.new-profile, 0); root.new-profile = ""; } }
+                }
+            }
+        }
+    }
+
+    if root.view.state == "list" && root.page-tab == 0: Card {
         vertical-stretch: 1;
         VerticalLayout {
             padding: 18px;
