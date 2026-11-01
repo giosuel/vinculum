@@ -2242,4 +2242,23 @@ mod tests {
         mock_elapsed_time(Duration::from_millis(500));
         assert_eq!(editor(), Some(0.0));
     }
+
+    /// A wide window's width goes to the list, also when it shows an empty state (Wi-Fi off) and
+    /// there are no details beside it.
+    #[test]
+    fn the_network_list_fills_a_wide_window_when_empty() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_empty_icon("wifi-off".into());
+        window.set_empty_title("Wi-Fi is off".into());
+        window.set_empty_text("Wired and VPN connections keep working.".into());
+        window.set_empty_action("Turn on Wi-Fi".into());
+        window.set_has_details(false);
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        window.show().unwrap();
+        let list =
+            ElementHandle::find_by_element_id(&window, "MainWindow::list-card").next().expect("the list is shown");
+        // The window less the sidebar (250) and the page's padding (44).
+        assert!(list.size().width > 1600.0, "{}", list.size().width);
+    }
 }

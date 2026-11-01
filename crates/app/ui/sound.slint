@@ -433,7 +433,7 @@ export component SoundPage inherits VerticalLayout {
         VerticalLayout {
             alignment: center;
             spacing: 12px;
-            Icon { name: "volume-off"; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+            HorizontalLayout { alignment: center; Icon { name: "volume-off"; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
             Text { text: root.page.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
             Text { text: root.page.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
         }
