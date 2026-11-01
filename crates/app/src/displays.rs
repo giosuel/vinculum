@@ -8,7 +8,11 @@ use std::time::{Duration, Instant};
 use lituus_hypr::{ConfigFile, Hyprland, Mode, Monitor, MonitorRule, config_dir, scale_is_valid, valid_scales};
 use slint::{Model, ModelRc, SharedString, VecModel};
 
-use crate::{DisplaysView, LayoutMonitor, MainWindow, update};
+use crate::profiles::{self, Profile, Store, StoredMonitor, StoredWorkspace};
+use crate::{DisplaysView, LayoutMonitor, MainWindow, ProfileRow, WorkspaceRow, update};
+
+/// The workspaces the Workspaces tab lists.
+const WORKSPACES: usize = 10;
 
 /// How long Apply waits for Keep.
 pub const KEEP_FOR: Duration = Duration::from_secs(15);
@@ -32,6 +36,12 @@ pub struct State {
     pub config_open: bool,
     /// The file as last written or read.
     saved: Option<String>,
+    /// displays.toml, and the workspace bindings as edited.
+    store: Store,
+    store_read: bool,
+    ws_edit: Vec<StoredWorkspace>,
+    /// Workspace bindings before the last Apply, to go back to.
+    ws_before: Option<Vec<StoredWorkspace>>,
 }
 
 impl State {
@@ -41,7 +51,9 @@ impl State {
 
     /// The file's text for these rules.
     fn text(&self, rules: &[MonitorRule]) -> String {
-        lituus_hypr::file(self.lua(), None, rules, &[])
+        let profile = self.store.active(rules).map(|i| self.store.profiles[i].name.clone());
+        let ws: Vec<lituus_hypr::WorkspaceRule> = self.store.workspaces.iter().map(StoredWorkspace::rule).collect();
+        lituus_hypr::file(self.lua(), profile.as_deref(), rules, &ws)
     }
 
     /// Apply is waiting for Keep.
@@ -50,12 +62,22 @@ impl State {
     }
 
     fn dirty(&self) -> bool {
-        self.edit != self.live
+        self.edit != self.live || self.ws_edit != self.store.workspaces
     }
 }
 
 /// Reads Hyprland's monitors (on a thread: the socket may take a moment).
 pub fn refresh(weak: &slint::Weak<MainWindow>) {
+    refresh_then(weak, false);
+}
+
+/// After a monitor came or went: reads the monitors, then switches to the profile made for
+/// exactly those, if there is one.
+pub fn hotplugged(weak: &slint::Weak<MainWindow>) {
+    refresh_then(weak, true);
+}
+
+fn refresh_then(weak: &slint::Weak<MainWindow>, switch: bool) {
     let weak = weak.clone();
     std::thread::spawn(move || {
         let read = (|| {
@@ -65,11 +87,72 @@ pub fn refresh(weak: &slint::Weak<MainWindow>) {
             Ok::<_, lituus_hypr::Error>((h, lua, monitors))
         })();
         let w = weak.clone();
-        let _ = weak.upgrade_in_event_loop(move |_| update(&w, move |app| loaded(&mut app.displays, read)));
+        let _ = weak.upgrade_in_event_loop(move |_| {
+            let w2 = w.clone();
+            update(&w, move |app| {
+                loaded(&mut app.displays, read);
+                if switch {
+                    auto_switch(&w2, &mut app.displays);
+                }
+            })
+        });
     });
 }
 
+/// Switches to the auto profile for the monitors plugged in, unless they already show it.
+fn auto_switch(weak: &slint::Weak<MainWindow>, state: &mut State) {
+    if !state.store.switch_on_hotplug || state.keep.is_some() {
+        return;
+    }
+    let connected: Vec<String> = state.monitors.iter().map(Monitor::selector).collect();
+    let Some(profile) = state.store.matching(&connected).cloned() else { return };
+    let rules = profile_rules(state, &profile);
+    let ws = profile.workspaces.clone();
+    if rules == state.live && ws == state.store.workspaces {
+        return;
+    }
+    let changed = changes(&state.live, &rules);
+    state.edit = rules.clone();
+    state.ws_edit = ws.clone();
+    state.store.workspaces = ws;
+    save_store(state);
+    send(weak, state, changed, state.ws_edit.clone());
+    if let Some(file) = &state.file {
+        let text = state.text(&rules);
+        if file.write(&text).is_ok() {
+            state.saved = Some(text);
+        }
+    }
+    if let Some(h) = &state.hypr {
+        let _ = h.notify(1, 4000, &format!("Lituus: switched to {}", profile.name));
+    }
+    if !profile.exec.trim().is_empty() {
+        let _ = std::process::Command::new("sh").arg("-c").arg(&profile.exec).spawn();
+    }
+}
+
+/// A profile's rules for the monitors plugged in now (in the page's order); a monitor the
+/// profile doesn't have keeps its rule.
+fn profile_rules(state: &State, profile: &Profile) -> Vec<MonitorRule> {
+    state
+        .live
+        .iter()
+        .map(|r| profile.monitors.iter().find(|m| m.output == r.output).map_or_else(|| r.clone(), StoredMonitor::rule))
+        .collect()
+}
+
+fn save_store(state: &mut State) {
+    if let Err(e) = profiles::save(&profiles::path(), &state.store) {
+        state.error = Some(format!("Couldn't save the profiles: {e}"));
+    }
+}
+
 fn loaded(state: &mut State, read: Result<(Hyprland, bool, Vec<Monitor>), lituus_hypr::Error>) {
+    if !state.store_read {
+        state.store = profiles::load(&profiles::path());
+        state.ws_edit = state.store.workspaces.clone();
+        state.store_read = true;
+    }
     match read {
         Ok((h, lua, mut monitors)) => {
             monitors.sort_by_key(|m| (m.disabled, m.x, m.y));
@@ -98,7 +181,7 @@ fn loaded(state: &mut State, read: Result<(Hyprland, bool, Vec<Monitor>), lituus
 }
 
 /// Sets rules live, on a thread, then reads the monitors again.
-fn send(weak: &slint::Weak<MainWindow>, state: &State, rules: Vec<MonitorRule>) {
+fn send(weak: &slint::Weak<MainWindow>, state: &State, rules: Vec<MonitorRule>, workspaces: Vec<StoredWorkspace>) {
     let Some(h) = state.hypr.clone() else { return };
     let lua = state.lua();
     let weak = weak.clone();
@@ -108,6 +191,12 @@ fn send(weak: &slint::Weak<MainWindow>, state: &State, rules: Vec<MonitorRule>) 
             let result = if lua { h.eval(&r.lua_live()) } else { h.keyword("monitor", &r.hyprlang()) };
             if let Err(e) = result {
                 error = Some(format!("Hyprland didn't take the settings for {}: {e}", r.output));
+            }
+        }
+        for w in workspaces.iter().map(StoredWorkspace::rule) {
+            let result = if lua { h.eval(&w.lua()) } else { h.keyword("workspace", &w.hyprlang()) };
+            if let Err(e) = result {
+                error = Some(format!("Hyprland didn't take the rule for workspace {}: {e}", w.workspace));
             }
         }
         // Hyprland applies on its next frame.
@@ -136,17 +225,77 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
     let index = arg.parse::<usize>().unwrap_or(0);
     match verb {
         "select" => state.selected = index.min(state.monitors.len().saturating_sub(1)),
-        "apply" if state.dirty() && problem(state).is_none() => {
-            let rules = changes(&state.live, &state.edit);
-            state.keep = Some((Instant::now() + KEEP_FOR, state.live.clone()));
-            send(weak, state, rules);
-        }
+        "apply" => apply(weak, state),
         "keep" => {
             state.keep = None;
+            state.ws_before = None;
+            state.store.workspaces = state.ws_edit.clone();
+            save_store(state);
             save(state);
         }
         "revert-now" => revert(weak, state),
-        "revert" => state.edit = state.live.clone(),
+        "revert" => {
+            state.edit = state.live.clone();
+            state.ws_edit = state.store.workspaces.clone();
+        }
+        "ws-monitor" | "ws-default" | "ws-persistent" => edit_workspace(state, verb, index, value),
+        "switch-hotplug" => {
+            state.store.switch_on_hotplug = !state.store.switch_on_hotplug;
+            save_store(state);
+        }
+        "profile-save" => {
+            let name = arg.trim();
+            if !name.is_empty() {
+                let profile = Profile {
+                    name: name.to_owned(),
+                    auto: true,
+                    exec: String::new(),
+                    monitors: state.live.iter().map(StoredMonitor::from).collect(),
+                    workspaces: state.store.workspaces.clone(),
+                };
+                match state.store.profiles.iter_mut().find(|p| p.name == name) {
+                    Some(old) => *old = Profile { auto: old.auto, exec: old.exec.clone(), ..profile },
+                    None => state.store.profiles.push(profile),
+                }
+                save_store(state);
+                save(state);
+            }
+        }
+        "profile-use" => {
+            if let Some(p) = state.store.profiles.get(index).cloned() {
+                state.edit = profile_rules(state, &p);
+                state.ws_edit = p.workspaces.clone();
+                apply(weak, state);
+            }
+        }
+        "profile-update" => {
+            let live: Vec<StoredMonitor> = state.live.iter().map(StoredMonitor::from).collect();
+            let ws = state.store.workspaces.clone();
+            if let Some(p) = state.store.profiles.get_mut(index) {
+                p.monitors = live;
+                p.workspaces = ws;
+                save_store(state);
+            }
+        }
+        "profile-auto" => {
+            if let Some(p) = state.store.profiles.get_mut(index) {
+                p.auto = !p.auto;
+                save_store(state);
+            }
+        }
+        "profile-exec" => {
+            let (i, text) = arg.split_once(':').unwrap_or(("", ""));
+            if let Some(p) = i.parse::<usize>().ok().and_then(|i| state.store.profiles.get_mut(i)) {
+                p.exec = text.to_owned();
+                save_store(state);
+            }
+        }
+        "profile-delete" => {
+            if index < state.store.profiles.len() {
+                state.store.profiles.remove(index);
+                save_store(state);
+            }
+        }
         "save" => save(state),
         "view-config" => state.config_open = true,
         "close-config" => state.config_open = false,
@@ -156,6 +305,66 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
             edit(rule, monitor, &state.monitors, verb, arg, index, value);
         }
     }
+}
+
+fn apply(weak: &slint::Weak<MainWindow>, state: &mut State) {
+    if !state.dirty() || problem(state).is_some() || state.keep.is_some() {
+        return;
+    }
+    let rules = changes(&state.live, &state.edit);
+    let ws: Vec<StoredWorkspace> =
+        state.ws_edit.iter().filter(|w| !state.store.workspaces.contains(w)).cloned().collect();
+    state.keep = Some((Instant::now() + KEEP_FOR, state.live.clone()));
+    state.ws_before = Some(state.store.workspaces.clone());
+    send(weak, state, rules, ws);
+}
+
+/// The Workspaces tab: row `index` is workspace index + 1.
+fn edit_workspace(state: &mut State, verb: &str, index: usize, value: f32) {
+    let name = (index + 1).to_string();
+    let pos = state.ws_edit.iter().position(|w| w.workspace == name);
+    match verb {
+        "ws-monitor" => {
+            let choice = value as usize;
+            match (choice, pos) {
+                (0, Some(p)) => {
+                    state.ws_edit.remove(p);
+                }
+                (0, None) => {}
+                (c, _) => {
+                    let Some(monitor) = state.monitors.get(c - 1).map(Monitor::selector) else { return };
+                    match pos {
+                        Some(p) => state.ws_edit[p].monitor = monitor,
+                        None => state.ws_edit.push(StoredWorkspace {
+                            workspace: name,
+                            monitor,
+                            default: false,
+                            persistent: false,
+                        }),
+                    }
+                }
+            }
+        }
+        "ws-default" => {
+            if let Some(p) = pos {
+                let on = !state.ws_edit[p].default;
+                // One default per monitor.
+                let monitor = state.ws_edit[p].monitor.clone();
+                for w in &mut state.ws_edit {
+                    if w.monitor == monitor {
+                        w.default = false;
+                    }
+                }
+                state.ws_edit[p].default = on;
+            }
+        }
+        _ => {
+            if let Some(p) = pos {
+                state.ws_edit[p].persistent = !state.ws_edit[p].persistent;
+            }
+        }
+    }
+    state.ws_edit.sort_by_key(|w| w.workspace.parse::<u32>().unwrap_or(u32::MAX));
 }
 
 /// Every second of the countdown, and its end.
@@ -171,7 +380,9 @@ fn revert(weak: &slint::Weak<MainWindow>, state: &mut State) {
     if let Some((_, previous)) = state.keep.take() {
         let rules = changes(&state.live, &previous);
         state.edit = previous;
-        send(weak, state, rules);
+        let ws = state.ws_before.take().unwrap_or_else(|| state.store.workspaces.clone());
+        state.ws_edit = ws.clone();
+        send(weak, state, rules, ws);
     }
 }
 
@@ -399,10 +610,14 @@ pub fn view(state: &State) -> DisplaysView {
     }
     v.state = s("list");
     let on = state.edit.iter().filter(|r| !r.disabled).count();
-    v.sub = s(match (state.monitors.len(), on) {
+    let count = match (state.monitors.len(), on) {
         (1, _) => "1 monitor".to_owned(),
         (n, m) if m == n => format!("{n} monitors"),
         (n, m) => format!("{n} monitors · {m} on"),
+    };
+    v.sub = s(match state.store.active(&state.live) {
+        Some(k) => format!("{count} · profile {}", state.store.profiles[k].name),
+        None => count,
     });
     // The layout, and its bounds.
     let mut bounds: Option<(i32, i32, i32, i32)> = None;
@@ -441,6 +656,13 @@ pub fn view(state: &State) -> DisplaysView {
             selected: i == state.selected,
             disabled: r.disabled,
             mirrored,
+            workspaces: s(state
+                .ws_edit
+                .iter()
+                .filter(|w| w.monitor == r.output)
+                .map(|w| if w.default { format!("{}★", w.workspace) } else { w.workspace.clone() })
+                .collect::<Vec<_>>()
+                .join("  ")),
         });
     }
     let (bx, by, bx2, by2) = bounds.unwrap_or((0, 0, 1920, 1080));
@@ -525,6 +747,7 @@ pub fn view(state: &State) -> DisplaysView {
     // The bar at the bottom, and Apply's dialog.
     let problem = problem(state);
     let changed = state.edit.iter().zip(&state.live).filter(|(a, b)| a != b).count();
+    let ws_changed = state.ws_edit != state.store.workspaces;
     let saved = state.saved.as_deref() == Some(state.text(&state.live).as_str());
     let (status, tone) = if let Some(e) = &state.error {
         (e.clone(), "danger")
@@ -532,8 +755,17 @@ pub fn view(state: &State) -> DisplaysView {
         (format!("{p}, so Apply is off"), "danger")
     } else if state.keep.is_some() {
         ("Applied; waiting for you to keep it".to_owned(), "accent")
-    } else if changed > 0 {
-        (if changed == 1 { "1 monitor changed".to_owned() } else { format!("{changed} monitors changed") }, "accent")
+    } else if changed > 0 || ws_changed {
+        let mut parts = Vec::new();
+        match changed {
+            0 => {}
+            1 => parts.push("1 monitor changed".to_owned()),
+            n => parts.push(format!("{n} monitors changed")),
+        }
+        if ws_changed {
+            parts.push("workspaces changed".to_owned());
+        }
+        (parts.join(" · "), "accent")
     } else if saved {
         ("Everything is applied and saved".to_owned(), "muted")
     } else {
@@ -541,9 +773,10 @@ pub fn view(state: &State) -> DisplaysView {
     };
     v.status = s(status);
     v.status_tone = s(tone);
-    v.can_apply = changed > 0 && problem.is_none() && state.keep.is_none();
-    v.can_revert = changed > 0 && state.keep.is_none();
-    v.can_save = changed == 0 && !saved && state.keep.is_none();
+    let dirty = changed > 0 || ws_changed;
+    v.can_apply = dirty && problem.is_none() && state.keep.is_none();
+    v.can_revert = dirty && state.keep.is_none();
+    v.can_save = !dirty && !saved && state.keep.is_none();
     if let Some((deadline, _)) = &state.keep {
         let left = deadline.saturating_duration_since(Instant::now());
         v.keep_open = true;
@@ -557,6 +790,46 @@ pub fn view(state: &State) -> DisplaysView {
         v.config_main = s(shorten_home(&file.main_path().display().to_string()));
     }
     v.config_open = state.config_open;
+    // Workspaces.
+    v.ws_monitors = strings(
+        std::iter::once("Any monitor".to_owned())
+            .chain(state.monitors.iter().map(|m| format!("{} · {}", m.name, m.model))),
+    );
+    v.workspaces = ModelRc::new(VecModel::from(
+        (1..=WORKSPACES)
+            .map(|n| {
+                let w = state.ws_edit.iter().find(|w| w.workspace == n.to_string());
+                WorkspaceRow {
+                    name: s(n.to_string()),
+                    monitor: w
+                        .and_then(|w| state.monitors.iter().position(|m| m.selector() == w.monitor))
+                        .map_or(0, |p| p as i32 + 1),
+                    bound: w.is_some(),
+                    default: w.is_some_and(|w| w.default),
+                    persistent: w.is_some_and(|w| w.persistent),
+                }
+            })
+            .collect::<Vec<_>>(),
+    ));
+    // Profiles.
+    let active = state.store.active(&state.live);
+    v.switch_hotplug = state.store.switch_on_hotplug;
+    v.profiles = ModelRc::new(VecModel::from(
+        state
+            .store
+            .profiles
+            .iter()
+            .enumerate()
+            .map(|(k, p)| ProfileRow {
+                name: s(&p.name),
+                summary: s(p.summary()),
+                active: active == Some(k),
+                auto: p.auto,
+                exec: s(&p.exec),
+            })
+            .collect::<Vec<_>>(),
+    ));
+    v.profile = s(active.map(|k| state.store.profiles[k].name.clone()).unwrap_or_default());
     v.config_text = s(state.text(&state.edit));
     v
 }
@@ -603,7 +876,8 @@ mod tests {
     fn state() -> State {
         let monitors: Vec<Monitor> =
             serde_json::from_str(include_str!("../../hypr/tests/fixtures/monitors.json")).unwrap();
-        let mut st = State::default();
+        // Not the real displays.toml.
+        let mut st = State { store_read: true, ..State::default() };
         loaded(&mut st, Ok((Hyprland::at("/nonexistent"), true, monitors)));
         st
     }
@@ -695,8 +969,48 @@ mod tests {
     }
 
     #[test]
+    fn workspaces_bind_with_one_default_per_monitor() {
+        let mut st = state();
+        let w = weak();
+        act(&w, &mut st, "ws-monitor", "0", 3.0); // workspace 1 on the G8 (third in the list)
+        act(&w, &mut st, "ws-monitor", "1", 3.0);
+        act(&w, &mut st, "ws-default", "0", 0.0);
+        act(&w, &mut st, "ws-default", "1", 0.0);
+        let g8 = st.monitors[2].selector();
+        let defaults: Vec<(&str, bool)> = st.ws_edit.iter().map(|w| (w.workspace.as_str(), w.default)).collect();
+        assert_eq!(defaults, [("1", false), ("2", true)]);
+        assert!(st.ws_edit.iter().all(|w| w.monitor == g8));
+        let v = view(&st);
+        assert_eq!(v.status, "workspaces changed");
+        assert!(v.can_apply);
+        assert_eq!(v.monitors.row_data(2).unwrap().workspaces, "1  2★");
+        act(&w, &mut st, "ws-monitor", "0", 0.0);
+        assert_eq!(st.ws_edit.len(), 1);
+    }
+
+    #[test]
+    fn a_profile_for_exactly_these_monitors_switches_by_itself() {
+        let mut st = state();
+        let mut desk: Vec<MonitorRule> = st.live.clone();
+        desk[1].disabled = true; // the TV off
+        st.store.switch_on_hotplug = true;
+        st.store.profiles.push(Profile {
+            name: "Desk".into(),
+            auto: true,
+            monitors: desk.iter().map(StoredMonitor::from).collect(),
+            ..Profile::default()
+        });
+        // The real displays.toml mustn't be touched: no file, no Hyprland here.
+        let profile = st.store.matching(&st.monitors.iter().map(Monitor::selector).collect::<Vec<_>>()).cloned();
+        assert_eq!(profile.as_ref().map(|p| p.name.as_str()), Some("Desk"));
+        assert_eq!(profile_rules(&st, &profile.unwrap()), desk);
+        assert_eq!(st.store.active(&desk), Some(0));
+        assert_eq!(st.store.active(&st.live), None);
+    }
+
+    #[test]
     fn no_hyprland() {
-        let mut st = State::default();
+        let mut st = State { store_read: true, ..State::default() };
         loaded(&mut st, Err(lituus_hypr::Error::NotRunning));
         assert_eq!(view(&st).state, "not-running");
         assert_eq!(status(&st), "—");

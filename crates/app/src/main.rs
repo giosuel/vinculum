@@ -18,6 +18,7 @@ mod nav;
 mod notify;
 mod openvpn;
 mod portal;
+mod profiles;
 mod qr;
 mod quick;
 mod secrets;
@@ -1032,8 +1033,10 @@ fn spawn_hyprland_watcher(weak: slint::Weak<MainWindow>) {
         loop {
             if let Ok(h) = lituus_hypr::Hyprland::from_env() {
                 let _ = h.events(|name, _| {
-                    if matches!(name, "monitoraddedv2" | "monitorremovedv2" | "configreloaded") {
-                        displays::refresh(&weak);
+                    match name {
+                        "monitoraddedv2" | "monitorremovedv2" => displays::hotplugged(&weak),
+                        "configreloaded" => displays::refresh(&weak),
+                        _ => {}
                     }
                     true
                 });
