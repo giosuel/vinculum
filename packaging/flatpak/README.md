@@ -45,6 +45,8 @@ folders above. To drop one, for example the KWallet names on a GNOME desktop:
 - **OpenVPN:** the sandbox can't see whether NetworkManager's OpenVPN plugin is installed, so the
   app doesn't check: without the plugin, NetworkManager refuses the connection when it's saved or
   started. WireGuard is built into NetworkManager.
+- **Cisco AnyConnect:** signing in runs NetworkManager-openconnect's own window, a program outside
+  the sandbox, so the Flatpak can't connect to AnyConnect VPNs. The other packages can.
 - **Certificates chosen in the editor** come through the file chooser portal. One outside the
   folders above arrives as a `/run/user/<uid>/doc/…` path, which NetworkManager can't read. Put
   certificates in `~/.local/share/lituus/certificates` first. (Imported `.ovpn` files are

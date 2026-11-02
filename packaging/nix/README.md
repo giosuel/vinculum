@@ -16,8 +16,8 @@ nix develop                                              # cargo, clippy, the li
 On NixOS or with home-manager, add the flake as an input and use
 `inputs.lituus.packages.${pkgs.stdenv.hostPlatform.system}.default`, or apply
 `overlays.default`. NetworkManager itself comes from your system
-(`networking.networkmanager.enable = true`); for OpenVPN add
-`networking.networkmanager.plugins = [ pkgs.networkmanager-openvpn ];`.
+(`networking.networkmanager.enable = true`); for OpenVPN and Cisco AnyConnect add
+`networking.networkmanager.plugins = [ pkgs.networkmanager-openvpn pkgs.networkmanager-openconnect ];`.
 
 `lituus --version` says `0.0.0-dev+g<commit>`: the flake has no git history to find the
 release tag in, so the version names the commit it was built from.

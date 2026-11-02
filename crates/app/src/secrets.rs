@@ -9,6 +9,8 @@ use lituus_nm::agent::secret;
 use lituus_nm::{AgentConnection, AgentEvent, KeyMgmt, Refusal, SecretRequest};
 use tokio::sync::{Mutex, oneshot};
 
+use crate::openconnect::{self, SignIn, SignInError, SignIns};
+
 /// The Wi-Fi password setting, the only one the password dialog asks for.
 pub const WIFI_SECURITY: &str = "802-11-wireless-security";
 
@@ -44,6 +46,10 @@ pub struct Prompt {
 /// What the agent needs from the UI thread.
 pub trait Ui: Clone + Send + 'static {
     fn ask(&self, prompt: Prompt);
+    /// A connection's sign-in window (OpenConnect's) opened or closed.
+    fn signing_in(&self, uuid: String, on: bool);
+    /// A note above the list.
+    fn notice(&self, text: String);
     /// NetworkManager doesn't need the password any more: close its dialog.
     fn cancel(&self, connection_path: String);
 }
@@ -89,10 +95,19 @@ fn prompt_secret(request: &SecretRequest) -> Option<(KeyMgmt, &'static str, Stri
     }
 }
 
-pub async fn handle(event: AgentEvent, keyrings: &Keyrings, ui: &impl Ui) {
+pub async fn handle(event: AgentEvent, keyrings: &Keyrings, sign_ins: &SignIns, ui: &impl Ui) {
     match event {
-        AgentEvent::GetSecrets(request) => get_secrets(request, keyrings, ui).await,
-        AgentEvent::Cancel { connection_path, .. } => ui.cancel(connection_path),
+        AgentEvent::GetSecrets(request) => {
+            if request.setting == "vpn" && openconnect::is_openconnect(&request.connection.settings) {
+                openconnect_secrets(request, sign_ins, ui).await;
+            } else {
+                get_secrets(request, keyrings, ui).await;
+            }
+        }
+        AgentEvent::Cancel { connection_path, .. } => {
+            sign_ins.cancel(&connection_path);
+            ui.cancel(connection_path);
+        }
         AgentEvent::Save { connection, secrets } => {
             if let Some(keyring) = keyrings.get().await {
                 for (setting, key, value) in secrets {
@@ -110,6 +125,56 @@ pub async fn handle(event: AgentEvent, keyrings: &Keyrings, ui: &impl Ui) {
                 eprintln!("lituus: couldn't delete the passwords of {}: {error}", connection.id);
             }
         }
+    }
+}
+
+/// An OpenConnect VPN: the session Lituus signed in for before connecting, or (for a connection
+/// started elsewhere, or one whose session was refused) the plugin's sign-in window now.
+async fn openconnect_secrets(request: SecretRequest, sign_ins: &SignIns, ui: &impl Ui) {
+    let uuid = request.connection.uuid.clone();
+    let ready = sign_ins.take_ready(&uuid);
+    if let (Some(session), false) = (ready, request.request_new()) {
+        request.reply(Ok(session));
+        return;
+    }
+    if !request.interactive() {
+        request.reply(Err(Refusal::NoSecrets));
+        return;
+    }
+    let Some(dialog) = openconnect::auth_dialog() else {
+        ui.notice(openconnect_missing().into());
+        request.reply(Err(Refusal::NoSecrets));
+        return;
+    };
+    let settings = &request.connection.settings;
+    let (data, kept) = (openconnect::data(settings), openconnect::secrets(settings));
+    let cancel = sign_ins.start(&uuid, &request.connection.path);
+    ui.signing_in(uuid.clone(), true);
+    let result = openconnect::sign_in(
+        &dialog,
+        SignIn { uuid: &uuid, name: &request.connection.id, data: &data, secrets: &kept, again: request.request_new() },
+        cancel,
+    )
+    .await;
+    sign_ins.finish(&uuid);
+    ui.signing_in(uuid, false);
+    request.reply(match result {
+        Ok(session) => Ok(session),
+        Err(SignInError::Closed) => Err(Refusal::UserCanceled),
+        Err(SignInError::Failed(reason)) => {
+            ui.notice(reason);
+            Err(Refusal::NoSecrets)
+        }
+    });
+}
+
+/// Why there's no sign-in window: the OpenConnect plugin (or its window) isn't installed, or
+/// Lituus runs in a Flatpak, which can't start it.
+pub fn openconnect_missing() -> &'static str {
+    if std::env::var_os("FLATPAK_ID").is_some() {
+        "Cisco AnyConnect's sign-in window belongs to NetworkManager's OpenConnect plugin, which the Flatpak can't start. AnyConnect works with Lituus's other packages (AUR, .deb, .rpm, Nix)."
+    } else {
+        "Cisco AnyConnect needs NetworkManager's OpenConnect plugin, with its sign-in window: networkmanager-openconnect on Arch, network-manager-openconnect-gnome on Debian and Ubuntu, NetworkManager-openconnect-gnome on Fedora. Install it, then try again."
     }
 }
 

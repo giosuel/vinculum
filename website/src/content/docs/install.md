@@ -11,6 +11,10 @@ Besides NetworkManager, some features use packages you may want:
 
 - **OpenVPN** needs NetworkManager's OpenVPN plugin: `networkmanager-openvpn` (Arch),
   `network-manager-openvpn` (Debian, Ubuntu), `NetworkManager-openvpn` (Fedora).
+- **Cisco AnyConnect** (and the other VPNs OpenConnect speaks, such as GlobalProtect) needs
+  NetworkManager's OpenConnect plugin with its sign-in window, which also shows Microsoft 365 and
+  other web sign-ins: `networkmanager-openconnect` (Arch), `network-manager-openconnect-gnome`
+  (Debian, Ubuntu), `NetworkManager-openconnect-gnome` (Fedora).
 - **Choosing files** (certificates, `.conf` and `.ovpn` files) opens your desktop's file dialog
   through the XDG desktop portal. On Hyprland that's `xdg-desktop-portal-gtk` (or `-kde`) next to
   `xdg-desktop-portal-hyprland`. Without one, type the path instead.
@@ -62,6 +66,8 @@ differently there:
 - The hotspot can't list the devices connected to it.
 - Lituus can't see whether NetworkManager's OpenVPN plugin is installed; without it, OpenVPN
   connections fail when they're saved or started. WireGuard needs no plugin.
+- Cisco AnyConnect doesn't work: its sign-in window is part of NetworkManager's plugin, outside
+  the sandbox. Use one of the other packages for it.
 - Certificates you pick in the editor should be in `~/.local/share/lituus/certificates`, where
   NetworkManager can read them.
 - With Hyprland, start it with `exec-once = flatpak run ch.giosuel.Lituus --background`.
@@ -79,8 +85,8 @@ nix run github:giosuel/lituus/v0.3.0     # a particular release
 ```
 
 On NixOS or with home-manager, add `github:giosuel/lituus` as an input and use its
-`packages.${system}.default` or `overlays.default`. For OpenVPN, add
-`networking.networkmanager.plugins = [ pkgs.networkmanager-openvpn ];`.
+`packages.${system}.default` or `overlays.default`. For OpenVPN and Cisco AnyConnect, add
+`networking.networkmanager.plugins = [ pkgs.networkmanager-openvpn pkgs.networkmanager-openconnect ];`.
 
 ## Tarball
 

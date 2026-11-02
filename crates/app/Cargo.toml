@@ -20,7 +20,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 slint.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 zbus.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
@@ -54,9 +54,9 @@ NetworkManager (Wi-Fi, wired, VPN, every connection setting), Bluetooth through 
 audio, files, a phone's internet), sound through PipeWire, and displays through Hyprland."""
 # $auto adds the libraries the binary links against; xkbcommon and EGL are loaded at runtime.
 depends = "$auto, network-manager, libxkbcommon0, libegl1"
-# Optional: OpenVPN, file dialogs (certificates, VPN files), and a keyring for "for me only".
+# Optional: OpenVPN, Cisco AnyConnect, file dialogs (certificates, VPN files), and a keyring for "for me only".
 recommends = "xdg-desktop-portal, gnome-keyring | kwalletmanager, bluez, bluez-obexd, pipewire-pulse | pulseaudio"
-suggests = "network-manager-openvpn"
+suggests = "network-manager-openvpn, network-manager-openconnect-gnome"
 assets = [
     ["target/release/lituus", "usr/bin/", "755"],
     ["../../packaging/linux/ch.giosuel.Lituus.desktop", "usr/share/applications/", "644"],

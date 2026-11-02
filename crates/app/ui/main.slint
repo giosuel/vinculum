@@ -893,7 +893,7 @@ export component MainWindow inherits Window {
         background: #05060799;
         TouchArea { clicked => { root.add-cancelled(); } }
         Rectangle {
-            width: 660px;
+            width: min(760px, parent.width - 32px);
             height: add-form.preferred-height;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
@@ -908,50 +908,54 @@ export component MainWindow inherits Window {
                 padding: 24px;
                 spacing: 14px;
                 Text { text: "Add a connection"; color: Theme.text; font-size: 17px; font-weight: 600; }
-                GridLayout {
-                    spacing: 10px;
-                    for group[g] in ["NETWORKS", "VPN", "VIRTUAL INTERFACES"]: SectionLabel {
-                        text: group;
-                        col: 0;
-                        colspan: 3;
-                        row: g * 2;
-                    }
-                    for kind[i] in [
+                for group in [
+                    { title: "NETWORKS", kinds: [
                         { id: "wifi", icon: "wifi", title: "Wi-Fi", text: "Hidden and Enterprise (802.1X) too", ready: true },
                         { id: "wired", icon: "wired", title: "Wired", text: "Ethernet, DHCP or static", ready: true },
                         { id: "hotspot", icon: "hotspot", title: "Hotspot", text: "Share a connection over Wi-Fi", ready: true },
+                    ] },
+                    { title: "VPN", kinds: [
                         { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Built in. Empty or from a .conf", ready: true },
                         { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "By hand or from an .ovpn", ready: true },
-                        { id: "import", icon: "saved", title: "Import from file…", text: "A .conf or an .ovpn", ready: true },
+                        { id: "openconnect", icon: "vpn", title: "AnyConnect", text: "Cisco, with Microsoft 365 sign‑in too", ready: true },
+                        { id: "import", icon: "saved", title: "Import…", text: "A .conf, an .ovpn, or your openconnect-saml profiles", ready: true },
+                    ] },
+                    { title: "VIRTUAL INTERFACES", kinds: [
                         { id: "vlan", icon: "vlan", title: "VLAN", text: "A tagged network on a wired device", ready: true },
                         { id: "bridge", icon: "bridge", title: "Bridge", text: "Join devices into one network, e.g. for VMs", ready: true },
                         { id: "bond", icon: "bond", title: "Bond", text: "Combine devices for failover or speed", ready: true },
-                    ]: Rectangle {
-                        col: mod(i, 3);
-                        row: floor(i / 3) * 2 + 1;
-                        width: 196px;
-                        height: 76px;
-                        border-radius: 10px;
-                        border-width: 1px;
-                        border-color: Theme.border2;
-                        background: tile.has-hover && kind.ready ? Theme.sel-bg : transparent;
-                        opacity: kind.ready ? 1 : 0.5;
-                        accessible-role: button;
-                        accessible-label: kind.title;
-                        accessible-enabled: kind.ready;
-                        accessible-action-default => { if kind.ready { root.add-chosen(kind.id); } }
-                        HorizontalLayout {
-                            padding: 14px;
-                            spacing: 12px;
-                            Icon { name: kind.icon; tint: Theme.accent; y: 2px; }
-                            VerticalLayout {
-                                spacing: 3px;
-                                alignment: start;
-                                Text { text: kind.title; color: Theme.text; font-weight: 600; font-size: 14px; }
-                                Text { text: kind.text; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                    ] },
+                ]: VerticalLayout {
+                    spacing: 10px;
+                    SectionLabel { text: group.title; }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        for kind in group.kinds: Rectangle {
+                            // Equal widths, and as tall as the text needs.
+                            width: (add-form.width - 48px - (group.kinds.length - 1) * 10px) / group.kinds.length;
+                            min-height: max(76px, tile-text.min-height);
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: Theme.border2;
+                            background: tile.has-hover && kind.ready ? Theme.sel-bg : transparent;
+                            opacity: kind.ready ? 1 : 0.5;
+                            accessible-role: button;
+                            accessible-label: kind.title;
+                            accessible-enabled: kind.ready;
+                            accessible-action-default => { if kind.ready { root.add-chosen(kind.id); } }
+                            tile-text := HorizontalLayout {
+                                padding: 14px;
+                                spacing: 12px;
+                                Icon { name: kind.icon; tint: Theme.accent; y: 2px; }
+                                VerticalLayout {
+                                    spacing: 3px;
+                                    alignment: start;
+                                    Text { text: kind.title; color: Theme.text; font-weight: 600; font-size: 14px; wrap: word-wrap; }
+                                    Text { text: kind.text; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                                }
                             }
+                            tile := TouchArea { enabled: kind.ready; mouse-cursor: kind.ready ? pointer : default; clicked => { root.add-chosen(kind.id); } }
                         }
-                        tile := TouchArea { enabled: kind.ready; mouse-cursor: kind.ready ? pointer : default; clicked => { root.add-chosen(kind.id); } }
                     }
                 }
                 HorizontalLayout {
