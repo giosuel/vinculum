@@ -1104,7 +1104,8 @@ pub fn write(kind: Kind, original: &Settings, initial: Option<&Form>, f: &Form, 
     if kind == Kind::OpenVpn && initial.is_none_or(|i| i.ovpn != f.ovpn) {
         crate::openvpn::write(&mut s, initial.map(|i| &i.ovpn), &f.ovpn);
     }
-    if kind == Kind::OpenConnect && initial.is_none_or(|i| i.oc != f.oc) {
+    // Even unchanged: it marks the session as never kept, which a connection made elsewhere may not.
+    if kind == Kind::OpenConnect {
         crate::openconnect::write(&mut s, initial.map(|i| &i.oc), &f.oc);
     }
     if kind.is_virtual() {

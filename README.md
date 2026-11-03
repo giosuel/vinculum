@@ -100,7 +100,8 @@ What the sandbox allows, and what works differently in it, is in [`packaging/fla
 
 Every release also has ARM64 builds (except the Flatpak). All of them need NetworkManager. Optional: NetworkManager's
 OpenVPN plugin (`networkmanager-openvpn` on Arch) for OpenVPN, its OpenConnect plugin
-(`networkmanager-openconnect`) for Cisco AnyConnect, an XDG desktop portal with a file
+(`networkmanager-openconnect`) for Cisco AnyConnect (Microsoft 365 and other web sign-ins need
+openconnect 9.00 and NetworkManager-openconnect 1.2.10 or newer), an XDG desktop portal with a file
 dialog (`xdg-desktop-portal-gtk`, say) for choosing certificates and VPN files, a keyring,
 BlueZ (`bluez`, with its service running) for Bluetooth, and PipeWire's PulseAudio service
 (`pipewire-pulse`) to switch a headset between high quality and headset mode.

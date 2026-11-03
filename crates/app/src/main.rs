@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use clap::Parser;
@@ -337,13 +338,15 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
         tray::Event::Connect(id) | tray::Event::Toggle(id) => {
             update(&weak, |app| {
                 let Some(snap) = &app.snapshot else { return };
-                let q = quick::build(Some(snap));
+                let q = quick::build(Some(snap), &app.signing_in);
                 let page = if id.starts_with("wifi:") { view::Page::Wifi } else { view::Page::Vpn };
                 let action = if id.starts_with("wifi:") {
                     if q.networks.iter().any(|n| n.id == id && n.active) {
                         return;
                     }
                     "connect"
+                } else if id.strip_prefix("conn:").is_some_and(|uuid| app.signing_in.iter().any(|u| u == uuid)) {
+                    "cancel-sign-in"
                 } else if q.vpns.iter().any(|v| v.id == id && v.on) {
                     "disconnect"
                 } else {
@@ -477,7 +480,7 @@ fn toggle_quick(window: &MainWindow) {
 
 /// The tray and the popup show what changed.
 fn render_quick(app: &mut App) {
-    let q = quick::build(app.snapshot.as_ref());
+    let q = quick::build(app.snapshot.as_ref(), &app.signing_in);
     let bt = bluetooth::quick(&app.bt);
     if q == app.quick && bt == app.quick_bt && !std::mem::take(&mut app.quick_new) {
         return;
@@ -1031,6 +1034,12 @@ fn accept_dialog(app: &mut App, (name, security, password, storage, autoconnect)
 /// A details button (or Enter, for "connect") on the selected row.
 fn act(app: &mut App, action: &str) {
     let (Some(snapshot), Some(selected)) = (app.snapshot.as_ref(), app.ui.selected.as_deref()) else { return };
+    // Its sign-in window is open: Enter, the popup and the tray don't open a second one.
+    if action == "connect"
+        && selected.strip_prefix("conn:").is_some_and(|uuid| app.signing_in.iter().any(|u| u == uuid))
+    {
+        return;
+    }
     let name = view::row_name(snapshot, selected);
     match view::intent(snapshot, selected, action) {
         Some(view::Intent::Run(command)) => {
@@ -1409,6 +1418,8 @@ fn spawn_network_manager(
         runtime.block_on(async move {
             let keyrings = secrets::Keyrings::default();
             let sign_ins = openconnect::SignIns::default();
+            // The OpenConnect VPNs' settings paths, from the last snapshot.
+            let mut oc_paths = Arc::new(std::collections::HashSet::new());
             let ui = AgentUi(weak.clone());
             loop {
                 tell_keyring(&weak, &keyrings).await;
@@ -1432,6 +1443,7 @@ fn spawn_network_manager(
                                 Some(snapshot) => {
                                     // Count traffic on the devices in use, for "Received / sent".
                                     if let Ok(snap) = &snapshot {
+                                        oc_paths = Arc::new(openconnect::paths(snap));
                                         for d in snap.devices.iter().filter(|d| d.active_connection.is_some() && d.traffic.is_none()) {
                                             if counting.insert(d.path.clone()) {
                                                 let _ = client.count_traffic(&d.path, 5000).await;
@@ -1444,9 +1456,10 @@ fn spawn_network_manager(
                             },
                             Some(command) = commands.recv() => {
                                 let (client, weak, keyrings, sign_ins) = (client.clone(), weak.clone(), keyrings.clone(), sign_ins.clone());
+                                let vpns = Vpns { sign_ins, openconnect: oc_paths.clone() };
                                 tokio::spawn(async move {
-                                    match run(&client, &keyrings, &sign_ins, &weak, &command).await {
-                                        Ok(Some((reason, retry))) => failed(&weak, reason, retry),
+                                    match run(&client, &keyrings, &vpns, &weak, &command).await {
+                                        Ok(Some((reason, retry, target))) => failed(&weak, reason, retry, target),
                                         Ok(None) => {}
                                         Err(error) => report(&weak, &command, &error),
                                     }
@@ -1520,25 +1533,41 @@ impl secrets::Ui for AgentUi {
             render(&window);
         });
     }
+
+    fn reconnect(&self, connection_path: String) {
+        let _ = self.0.upgrade_in_event_loop(move |window| {
+            APP.with(|app| {
+                let command = view::Command::Activate { connection: connection_path, device: None, access_point: None };
+                send(&mut app.borrow_mut(), command);
+            });
+            render(&window);
+        });
+    }
 }
+
+/// Why a connection attempt failed, what "Try again" runs, and the row and name it was for when
+/// that's known (otherwise it's the last attempt's).
+type Failure = (String, Option<view::Command>, Option<(String, String)>);
 
 /// Runs a command. For a connection attempt it waits for the outcome, and gives the reason it
 /// failed and what "Try again" should run.
 async fn run(
     client: &lituus_nm::Client,
     keyrings: &secrets::Keyrings,
-    sign_ins: &openconnect::SignIns,
+    vpns: &Vpns,
     weak: &slint::Weak<MainWindow>,
     command: &view::Command,
-) -> Result<Option<(String, Option<view::Command>)>, lituus_nm::Error> {
+) -> Result<Option<Failure>, lituus_nm::Error> {
     use view::Command::*;
+    // For an OpenConnect VPN: its row and name, and whether another agent signs in.
+    let (mut target, mut delegated) = (None, false);
     let (active, device, retry) = match command {
         OpenEditor { connection, new } => {
             if *new == Some(editor::Kind::OpenVpn) && !openvpn::plugin_installed() {
                 notice(weak, OPENVPN_MISSING);
                 return Ok(None);
             }
-            if *new == Some(editor::Kind::OpenConnect) && openconnect::auth_dialog().is_none() {
+            if *new == Some(editor::Kind::OpenConnect) && openconnect::missing() {
                 notice(weak, secrets::openconnect_missing());
                 return Ok(None);
             }
@@ -1737,17 +1766,32 @@ async fn run(
         Forget { connection } => return client.forget(connection).await.map(|()| None),
         Tether { device, address, name } => return client.tether(device, address, name).await.map(|_| None),
         CancelSignIn { uuid } => {
-            sign_ins.cancel(uuid);
+            vpns.sign_ins.cancel(uuid);
             return Ok(None);
         }
         Activate { connection, device, access_point } => {
-            match sign_in_first(client, sign_ins, weak, connection).await? {
-                First::Go => {}
-                First::Stop => return Ok(None),
-                First::Failed(reason) => return Ok(Some((reason, Some(command.clone())))),
+            let mut uuid = None;
+            if vpns.openconnect.contains(connection) {
+                let (id, name) = match sign_in_first(client, &vpns.sign_ins, weak, connection).await? {
+                    First::Go { uuid, name } => (uuid, name),
+                    First::Delegate { uuid, name } => {
+                        delegated = true;
+                        (uuid, name)
+                    }
+                    First::Stop => return Ok(None),
+                    First::Failed { reason, uuid, name } => {
+                        return Ok(Some((reason, Some(command.clone()), Some((format!("conn:{uuid}"), name)))));
+                    }
+                };
+                target = Some((format!("conn:{id}"), name));
+                uuid = Some(id);
             }
-            let active = client.activate(connection, device.as_deref(), access_point.as_deref()).await?;
-            (active, device.clone(), command.clone())
+            let activated = client.activate(connection, device.as_deref(), access_point.as_deref()).await;
+            // NetworkManager won't ask for the session of an attempt that didn't start.
+            if let (Err(_), Some(uuid)) = (&activated, &uuid) {
+                vpns.sign_ins.take_ready(uuid);
+            }
+            (activated?, device.clone(), command.clone())
         }
         ConnectOpen { device, access_point, ssid } => {
             let (connection, active) = client.connect_open(device, access_point, ssid).await?;
@@ -1784,17 +1828,41 @@ async fn run(
         }
     };
     Ok(match client.outcome(&active, device.as_deref()).await? {
-        lituus_nm::Outcome::Failed(reason) => Some((reason, Some(retry))),
-        lituus_nm::Outcome::Connected | lituus_nm::Outcome::Stopped => None,
+        lituus_nm::Outcome::Failed(reason) => Some((reason, Some(retry), target)),
+        lituus_nm::Outcome::NoSecrets if delegated => {
+            notice(weak, secrets::openconnect_missing());
+            None
+        }
+        lituus_nm::Outcome::Connected | lituus_nm::Outcome::Stopped | lituus_nm::Outcome::NoSecrets => None,
     })
 }
 
-/// What happens before NetworkManager is asked to connect.
+/// What connecting a VPN needs besides NetworkManager.
+struct Vpns {
+    sign_ins: openconnect::SignIns,
+    /// The OpenConnect VPNs' settings paths.
+    openconnect: Arc<std::collections::HashSet<String>>,
+}
+
+/// What happens before NetworkManager is asked to connect an OpenConnect VPN.
 enum First {
-    Go,
-    /// Nothing more to do (the notice says why).
+    Go {
+        uuid: String,
+        name: String,
+    },
+    /// Connect, and let another agent sign in (in a Flatpak, which can't open the window).
+    Delegate {
+        uuid: String,
+        name: String,
+    },
+    /// Nothing more to do: the sign-in was cancelled, or is running already, or the notice says
+    /// why.
     Stop,
-    Failed(String),
+    Failed {
+        reason: String,
+        uuid: String,
+        name: String,
+    },
 }
 
 /// An OpenConnect VPN signs in first, in the plugin's window, and the session waits for
@@ -1807,37 +1875,42 @@ async fn sign_in_first(
     connection: &str,
 ) -> Result<First, lituus_nm::Error> {
     let settings = client.settings(connection).await?;
-    if !openconnect::is_openconnect(&settings) {
-        return Ok(First::Go);
-    }
-    let Some(dialog) = openconnect::auth_dialog() else {
-        notice(weak, secrets::openconnect_missing());
-        return Ok(First::Stop);
-    };
     let string = |key: &str| {
         settings.get("connection").and_then(|c| c.get(key)).and_then(|v| <&str>::try_from(&**v).ok()).unwrap_or("")
     };
     let (uuid, name) = (string("uuid").to_owned(), string("id").to_owned());
+    // Signed in already: NetworkManager gave up on the agent while the window was open.
+    if sign_ins.has_ready(&uuid) {
+        return Ok(First::Go { uuid, name });
+    }
+    let Some(dialog) = openconnect::auth_dialog() else {
+        if openconnect::in_flatpak() {
+            return Ok(First::Delegate { uuid, name });
+        }
+        notice(weak, secrets::openconnect_missing());
+        return Ok(First::Stop);
+    };
+    let Some(started) = sign_ins.start(&uuid, connection) else { return Ok(First::Stop) };
     // What NetworkManager kept from earlier sign-ins; asking may need polkit, and then there's none.
     let kept = client.secrets_raw(connection, "vpn").await.map(|s| openconnect::secrets(&s)).unwrap_or_default();
-    let cancel = sign_ins.start(&uuid, connection);
     signing_in(weak, uuid.clone(), true);
     let data = openconnect::data(&settings);
     let result = openconnect::sign_in(
         &dialog,
         openconnect::SignIn { uuid: &uuid, name: &name, data: &data, secrets: &kept, again: false },
-        cancel,
+        started.cancel,
     )
     .await;
-    sign_ins.finish(&uuid);
+    sign_ins.finish(started.id);
     signing_in(weak, uuid.clone(), false);
     Ok(match result {
         Ok(session) => {
             sign_ins.set_ready(&uuid, session);
-            First::Go
+            First::Go { uuid, name }
         }
-        Err(openconnect::SignInError::Closed) => First::Failed(openconnect::CLOSED.into()),
-        Err(openconnect::SignInError::Failed(reason)) => First::Failed(reason),
+        Err(openconnect::SignInError::Cancelled) => First::Stop,
+        Err(openconnect::SignInError::Closed) => First::Failed { reason: openconnect::CLOSED.into(), uuid, name },
+        Err(openconnect::SignInError::Failed(reason)) => First::Failed { reason, uuid, name },
     })
 }
 
@@ -1976,7 +2049,7 @@ async fn import_file(client: &lituus_nm::Client, weak: &slint::Weak<MainWindow>)
 
 /// openconnect-saml's profiles: one opens in the editor; several are added at once.
 async fn import_saml(client: &lituus_nm::Client, weak: &slint::Weak<MainWindow>, file: &str, text: &str) {
-    if openconnect::auth_dialog().is_none() {
+    if openconnect::missing() {
         return notice(weak, secrets::openconnect_missing());
     }
     let profiles = match openconnect::import_saml(text) {
@@ -2009,7 +2082,11 @@ async fn import_saml(client: &lituus_nm::Client, weak: &slint::Weak<MainWindow>,
             Err(e) => failed.push(format!("{name} ({e})")),
         }
     }
-    let mut text = format!("Added {} AnyConnect connections from openconnect-saml: {}.", added.len(), added.join(", "));
+    let mut text = if added.is_empty() {
+        "Couldn't add the AnyConnect connections from openconnect-saml.".to_owned()
+    } else {
+        format!("Added {} AnyConnect connections from openconnect-saml: {}.", added.len(), added.join(", "))
+    };
     if !failed.is_empty() {
         text += &format!(" Couldn't add {}.", failed.join(", "));
     }
@@ -2100,25 +2177,43 @@ async fn save_connection(
 }
 
 /// A connection attempt failed: mark its row, and offer "Try again".
-fn failed(weak: &slint::Weak<MainWindow>, reason: String, retry: Option<view::Command>) {
+fn failed(
+    weak: &slint::Weak<MainWindow>,
+    reason: String,
+    retry: Option<view::Command>,
+    target: Option<(String, String)>,
+) {
     let _ = weak.upgrade_in_event_loop(move |window| {
         APP.with(|app| {
             let mut app = app.borrow_mut();
-            let (row, name) = app.attempt.clone().unwrap_or_default();
-            let what = if reason == openconnect::CLOSED { "Couldn't sign in" } else { "Couldn't connect" };
-            app.message_title = if name.is_empty() { what.to_owned() } else { format!("{what} to {name}") };
-            app.message = Some((reason.clone(), "danger"));
-            app.retry = retry;
+            let name = mark_failed(&mut app, reason.clone(), retry, target);
             if app.settings.notifications
                 && !window.window().is_visible()
                 && let Some(notifier) = &app.notifier
             {
                 notifier.send(notify::failure(&name, &reason));
             }
-            app.ui.failed = (!row.is_empty()).then_some((row, reason));
         });
         render(&window);
     });
+}
+
+/// Shows a failed attempt above the list and on its row: `target`'s, or else the last
+/// attempt's (a sign-in can take minutes, and another attempt may have started meanwhile). The
+/// connection's name.
+fn mark_failed(
+    app: &mut App,
+    reason: String,
+    retry: Option<view::Command>,
+    target: Option<(String, String)>,
+) -> String {
+    let (row, name) = target.or_else(|| app.attempt.clone()).unwrap_or_default();
+    let what = if reason == openconnect::CLOSED { "Couldn't sign in" } else { "Couldn't connect" };
+    app.message_title = if name.is_empty() { what.to_owned() } else { format!("{what} to {name}") };
+    app.message = Some((reason.clone(), "danger"));
+    app.retry = retry;
+    app.ui.failed = (!row.is_empty()).then_some((row, reason));
+    name
 }
 
 /// Shows why a command failed, above the list.
@@ -2366,7 +2461,53 @@ mod tests {
     use i_slint_backend_testing::{ElementHandle, mock_elapsed_time};
     use slint::{ComponentHandle, LogicalSize};
 
-    use super::MainWindow;
+    use super::{App, MainWindow, act, mark_failed, openconnect, view};
+
+    /// An app with a saved AnyConnect VPN, selected, whose commands go to the receiver.
+    fn with_a_vpn() -> (App, tokio::sync::mpsc::UnboundedReceiver<view::Command>) {
+        let mut snap = view::tests::home();
+        let kind = lituus_nm::ConnectionKind::Vpn {
+            service: openconnect::SERVICE.into(),
+            gateway: "vpn.uzh.ch".into(),
+            protocol: "anyconnect".into(),
+        };
+        snap.connections.push(view::tests::saved("u-uzh", "UZH VPN", kind, "", None));
+        let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { snapshot: Some(snap), commands: Some(commands), ..App::default() };
+        app.ui = view::UiState { page: view::Page::Vpn, selected: Some("conn:u-uzh".into()), ..Default::default() };
+        (app, receiver)
+    }
+
+    /// Enter on a VPN whose sign-in window is open (or its switch in the popup) doesn't open a
+    /// second window.
+    #[test]
+    fn connecting_while_signing_in_does_nothing() {
+        let (mut app, mut commands) = with_a_vpn();
+        app.signing_in = vec!["u-uzh".into()];
+        act(&mut app, "connect");
+        assert!(commands.try_recv().is_err());
+        act(&mut app, "cancel-sign-in");
+        assert!(matches!(commands.try_recv(), Ok(view::Command::CancelSignIn { uuid }) if uuid == "u-uzh"));
+        app.signing_in.clear();
+        act(&mut app, "connect");
+        assert!(matches!(commands.try_recv(), Ok(view::Command::Activate { .. })));
+    }
+
+    /// A sign-in that fails after minutes is reported against its VPN, not the network joined
+    /// meanwhile.
+    #[test]
+    fn a_failed_sign_in_marks_its_own_row() {
+        let (mut app, _commands) = with_a_vpn();
+        app.attempt = Some(("wifi:Aster Café".into(), "Aster Café".into()));
+        let target = Some(("conn:u-uzh".to_owned(), "UZH VPN".to_owned()));
+        assert_eq!(mark_failed(&mut app, openconnect::CLOSED.into(), None, target), "UZH VPN");
+        assert_eq!(app.message_title, "Couldn't sign in to UZH VPN");
+        assert_eq!(app.ui.failed, Some(("conn:u-uzh".into(), openconnect::CLOSED.into())));
+        // Without one, it's the last attempt's.
+        mark_failed(&mut app, "The network rejected the password.".into(), None, None);
+        assert_eq!(app.message_title, "Couldn't connect to Aster Café");
+        assert_eq!(app.ui.failed.unwrap().0, "wifi:Aster Café");
+    }
 
     /// Widening the window must not show the closed editor in the new space, not even while
     /// the editor's slide animation would be running.

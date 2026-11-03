@@ -672,7 +672,7 @@ fn connection_kind_label(c: &SavedConnection) -> String {
         ConnectionKind::Bluetooth { .. } => "Bluetooth".into(),
         ConnectionKind::WireGuard => "WireGuard".into(),
         ConnectionKind::Vpn { service, protocol, .. } if service == crate::openconnect::SERVICE => {
-            crate::openconnect::protocol_label(protocol).into()
+            crate::openconnect::protocol_label(protocol)
         }
         ConnectionKind::Vpn { service, .. } => vpn_service_label(service),
         ConnectionKind::Bridge { .. } => "Bridge".into(),
@@ -927,7 +927,6 @@ fn vpn_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, V
                 ("Couldn't sign in".to_owned(), "danger")
             }
             _ if state.failed.as_ref().is_some_and(|(f, _)| *f == id) => ("Couldn't connect".to_owned(), "danger"),
-            _ if matches!(c.kind, ConnectionKind::WireGuard) => ("Off".to_owned(), "muted"),
             _ => (format!("Off · {}", connection_kind_label(c)), "muted"),
         };
         let row = RowData { id, name: c.id.clone(), meta, tone, icon: "vpn", bars: 0, secure: false, indent: false };
@@ -1660,7 +1659,13 @@ pub(crate) mod tests {
         assert_eq!(d.toggles.row_count(), 0);
     }
 
-    fn saved(uuid: &str, id: &str, kind: ConnectionKind, interface: &str, port: Option<&str>) -> SavedConnection {
+    pub(crate) fn saved(
+        uuid: &str,
+        id: &str,
+        kind: ConnectionKind,
+        interface: &str,
+        port: Option<&str>,
+    ) -> SavedConnection {
         SavedConnection {
             path: format!("/c/{uuid}"),
             uuid: uuid.into(),
@@ -1713,6 +1718,23 @@ pub(crate) mod tests {
         assert_eq!(meta(&view), "Couldn't sign in");
         assert_eq!(view.details.as_ref().unwrap().status, "Couldn't sign in: the sign-in window was closed");
         assert_eq!(actions(&view), ["Try again", "Edit", "Forget"]);
+
+        // Every VPN row says its type, and a protocol Lituus doesn't know is shown as it is.
+        state.failed = None;
+        snap.connections.push(saved("u-wg", "wg0", ConnectionKind::WireGuard, "wg0", None));
+        let kind = ConnectionKind::Vpn {
+            service: crate::openconnect::SERVICE.into(),
+            gateway: "vpn.example.org".into(),
+            protocol: "pulse-ng".into(),
+        };
+        snap.connections.push(saved("u-new", "New VPN", kind, "", None));
+        let view = build(Some(&snap), None, &state);
+        let metas = |title: &str| -> Vec<String> {
+            let rows = &view.sections.iter().find(|s| s.title == title).unwrap().rows;
+            (0..rows.row_count()).map(|i| rows.row_data(i).unwrap().meta.to_string()).collect()
+        };
+        assert_eq!(metas("WIREGUARD"), ["Off · WireGuard"]);
+        assert_eq!(metas("VPN"), ["Off · Cisco AnyConnect", "Off · pulse-ng"]);
     }
 
     #[test]

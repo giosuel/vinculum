@@ -950,6 +950,12 @@ pub fn connect(window: &MainWindow) {
                     v.interface = crate::virt::vlan_name(&v.parent, &v.vlan_id);
                     state.reset = true;
                 }
+                if state.kind == Kind::OpenConnect
+                    && state.initial.is_none()
+                    && crate::openconnect::protocol_changed(&before.oc, &mut state.form.oc)
+                {
+                    state.reset = true;
+                }
             }
             render(&window, &mut app);
         });
@@ -1333,5 +1339,23 @@ mod tests {
             let ui = to_ui(&state, (SharedString::new(), SharedString::new()));
             assert_eq!(from_ui(&state, &ui), state.form, "{kind:?}");
         }
+        // Every OpenConnect field with its own value, so two swapped would show.
+        let mut state = EditorState::new(None, Settings::new(), Vec::new(), Some(&snap), Some(Kind::OpenConnect));
+        state.form.oc = OcForm {
+            gateway: "vpn.uzh.ch/staff".into(),
+            protocol: 3,
+            cert: "/c.pem".into(),
+            key: "/k.pem".into(),
+            ca: "/ca.pem".into(),
+            user_agent: "Agent".into(),
+            system: 4,
+            csd: "/csd.sh".into(),
+            udp: false,
+            proxy: "http://proxy:3128".into(),
+            mtu: "1300".into(),
+            refuse_unknown: true,
+        };
+        let ui = to_ui(&state, (SharedString::new(), SharedString::new()));
+        assert_eq!(from_ui(&state, &ui).oc, state.form.oc);
     }
 }

@@ -125,6 +125,9 @@ pub enum Refusal {
     UserCanceled,
 }
 
+/// What a [`SecretRequest`] is answered with.
+pub type Answer = Result<HashMap<String, String>, Refusal>;
+
 /// NetworkManager wants secrets for one setting of a connection. Answer with [`Self::reply`];
 /// dropping it refuses with [`Refusal::NoSecrets`].
 #[derive(Debug)]
@@ -136,7 +139,7 @@ pub struct SecretRequest {
     pub hints: Vec<String>,
     /// [`request`] flags.
     pub flags: u32,
-    reply: oneshot::Sender<Result<HashMap<String, String>, Refusal>>,
+    reply: oneshot::Sender<Answer>,
 }
 
 impl SecretRequest {
@@ -156,14 +159,21 @@ impl SecretRequest {
     /// A request for tests of what answers it, with nobody waiting for the answer.
     #[doc(hidden)]
     pub fn for_tests(settings: Settings, setting: &str) -> Self {
-        let (reply, _) = oneshot::channel();
-        Self {
+        Self::for_tests_answered(settings, setting, request::ALLOW_INTERACTION).0
+    }
+
+    /// A request for tests, with these [`request`] flags, and where its answer goes.
+    #[doc(hidden)]
+    pub fn for_tests_answered(settings: Settings, setting: &str, flags: u32) -> (Self, oneshot::Receiver<Answer>) {
+        let (reply, answer) = oneshot::channel();
+        let request = Self {
             connection: AgentConnection::new(settings, "/test".into()),
             setting: setting.into(),
             hints: Vec::new(),
-            flags: request::ALLOW_INTERACTION,
+            flags,
             reply,
-        }
+        };
+        (request, answer)
     }
 }
 
