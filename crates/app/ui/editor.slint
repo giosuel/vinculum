@@ -5,7 +5,7 @@
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 import { Button, Switch, SectionLabel } from "controls.slint";
-import { TextField, Segmented, CheckBox, Select } from "dialogs.slint";
+import { TextField, Segmented, CheckBox, Select, Modal } from "dialogs.slint";
 
 export struct AddressRow { address: string, prefix: string }
 export struct RouteRow { dest: string, prefix: string, gateway: string, metric: string }
@@ -676,11 +676,12 @@ export component Editor inherits Rectangle {
     background: Theme.surface;
     // Clicks don't fall through to the window underneath.
     TouchArea {}
-    // Esc from any field closes the routes dialog, or else the editor.
-    FocusScope {
+    // Esc from any field closes the editor. Its dialogs take the keyboard while open and give
+    // it back here when they close.
+    changed routes-open => { if root.routes-open == "" { keys.focus(); } }
+    changed ports-open => { if !root.ports-open { keys.focus(); } }
+    keys := FocusScope {
         key-pressed(event) => {
-            if event.text == Key.Escape && root.routes-open != "" { root.routes-done(false); return accept; }
-            if event.text == Key.Escape && root.ports-open { root.port-chosen(""); return accept; }
             if event.text == Key.Escape { root.back(); return accept; }
             reject
         }
@@ -1443,117 +1444,89 @@ export component Editor inherits Rectangle {
     }
 
     // Add-port dialog
-    if root.ports-open: Rectangle {
-        background: #05060799;
-        TouchArea { clicked => { root.port-chosen(""); } }
-        Rectangle {
-            width: min(560px, parent.width - 48px);
-            height: port-dialog.preferred-height;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 14px;
+    if root.ports-open: Modal {
+        card-width: min(560px, self.width - 48px);
+        card-spacing: 12px;
+        label: "Add a port";
+        backdrop-dismisses: true;
+        dismissed => { root.port-chosen(""); }
+        Text { text: "Add a port to " + (root.form.virt.interface == "" ? root.form.name : root.form.virt.interface); color: Theme.text; font-size: 17px; font-weight: 600; }
+        Text { text: "The device becomes part of it, with a small connection of its own."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+        if root.options.candidates.length == 0: Text { text: "No other wired devices to add."; color: Theme.faint; font-size: 13px; }
+        for c in root.options.candidates: Rectangle {
+            height: c.warning != "" ? 68px : 52px;
+            border-radius: 8px;
             border-width: 1px;
-            border-color: Theme.ctrl-border;
-            background: Theme.surface;
-            drop-shadow-blur: 40px;
-            drop-shadow-color: #00000080;
-            TouchArea {}
-            port-dialog := VerticalLayout {
-                padding: 24px;
+            border-color: Theme.border2;
+            background: pick.has-hover && c.blocked == "" ? Theme.sel-bg : transparent;
+            opacity: c.blocked == "" ? 1 : 0.55;
+            accessible-role: button;
+            accessible-label: c.interface + ", " + c.meta;
+            accessible-enabled: c.blocked == "";
+            accessible-action-default => { if c.blocked == "" { root.port-chosen(c.interface); } }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
                 spacing: 12px;
-                Text { text: "Add a port to " + (root.form.virt.interface == "" ? root.form.name : root.form.virt.interface); color: Theme.text; font-size: 17px; font-weight: 600; }
-                Text { text: "The device becomes part of it, with a small connection of its own."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-                if root.options.candidates.length == 0: Text { text: "No other wired devices to add."; color: Theme.faint; font-size: 13px; }
-                for c in root.options.candidates: Rectangle {
-                    height: c.warning != "" ? 68px : 52px;
-                    border-radius: 8px;
-                    border-width: 1px;
-                    border-color: Theme.border2;
-                    background: pick.has-hover && c.blocked == "" ? Theme.sel-bg : transparent;
-                    opacity: c.blocked == "" ? 1 : 0.55;
-                    accessible-role: button;
-                    accessible-label: c.interface + ", " + c.meta;
-                    accessible-enabled: c.blocked == "";
-                    accessible-action-default => { if c.blocked == "" { root.port-chosen(c.interface); } }
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 12px;
-                        spacing: 12px;
-                        Icon { name: c.icon; tint: Theme.muted; y: (parent.height - 16px) / 2; width: 16px; }
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 2px;
-                            Text { text: c.interface; color: Theme.text; font-size: 13px; font-weight: 500; font-family: "JetBrains Mono"; }
-                            Text { text: c.blocked != "" ? c.blocked : c.meta; color: Theme.muted; font-size: 12px; overflow: elide; }
-                            if c.warning != "": Text { text: c.warning; color: Theme.warn-text; font-size: 12px; overflow: elide; }
-                        }
-                    }
-                    pick := TouchArea {
-                        enabled: c.blocked == "";
-                        mouse-cursor: c.blocked == "" ? pointer : default;
-                        clicked => { root.port-chosen(c.interface); }
-                    }
-                }
-                HorizontalLayout {
-                    padding-top: 6px;
-                    alignment: end;
-                    Button { label: "Cancel"; button-height: 36px; clicked => { root.port-chosen(""); } }
+                Icon { name: c.icon; tint: Theme.muted; y: (parent.height - 16px) / 2; width: 16px; }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    Text { text: c.interface; color: Theme.text; font-size: 13px; font-weight: 500; font-family: "JetBrains Mono"; }
+                    Text { text: c.blocked != "" ? c.blocked : c.meta; color: Theme.muted; font-size: 12px; overflow: elide; }
+                    if c.warning != "": Text { text: c.warning; color: Theme.warn-text; font-size: 12px; overflow: elide; }
                 }
             }
+            pick := TouchArea {
+                enabled: c.blocked == "";
+                mouse-cursor: c.blocked == "" ? pointer : default;
+                clicked => { root.port-chosen(c.interface); }
+            }
+        }
+        HorizontalLayout {
+            padding-top: 6px;
+            alignment: end;
+            Button { label: "Cancel"; button-height: 36px; clicked => { root.port-chosen(""); } }
         }
     }
 
     // Routes dialog
-    if root.routes-open != "": Rectangle {
+    if root.routes-open != "": Modal {
         property <bool> v6: root.routes-open == "ipv6";
-        background: #05060799;
-        TouchArea { clicked => { root.routes-done(false); } }
-        Rectangle {
-            width: min(640px, parent.width - 48px);
-            height: routes.preferred-height;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 14px;
-            border-width: 1px;
-            border-color: Theme.ctrl-border;
-            background: Theme.surface;
-            drop-shadow-blur: 40px;
-            drop-shadow-color: #00000080;
-            TouchArea {}
-            routes := VerticalLayout {
-                padding: 24px;
-                spacing: 12px;
-                Text { text: (v6 ? "IPv6 routes · " : "IPv4 routes · ") + root.form.name; color: Theme.text; font-size: 17px; font-weight: 600; }
-                Text { text: "Extra routes added when this connection is up."; color: Theme.muted; font-size: 13px; }
-                if (v6 ? root.form.ip6.routes.length : root.form.ip4.routes.length) == 0: Text {
-                    text: "No extra routes yet.";
-                    color: Theme.faint;
-                    font-size: 13px;
-                }
-                if (v6 ? root.form.ip6.routes.length : root.form.ip4.routes.length) > 0: HorizontalLayout {
-                    spacing: 8px;
-                    Text { text: "Destination"; color: Theme.muted; font-size: 12px; width: 180px; }
-                    Text { text: "Prefix"; color: Theme.muted; font-size: 12px; width: 64px; }
-                    Text { text: "Gateway"; color: Theme.muted; font-size: 12px; width: 180px; }
-                    Text { text: "Metric"; color: Theme.muted; font-size: 12px; width: 80px; }
-                    Rectangle {}
-                }
-                if !v6: RouteRows { routes <=> root.form.ip4.routes; edited => { root.form-edited(); } remove(i) => { root.remove-row("ip4-route", i); } }
-                if v6: RouteRows { routes <=> root.form.ip6.routes; edited => { root.form-edited(); } remove(i) => { root.remove-row("ip6-route", i); } }
-                if (v6 ? root.errors.ip6-routes : root.errors.ip4-routes) != "": Error { text: v6 ? root.errors.ip6-routes : root.errors.ip4-routes; }
-                HorizontalLayout { alignment: start; AddButton { label: "Add route"; clicked => { root.add-row(v6 ? "ip6-route" : "ip4-route"); } } }
-                if !v6: CheckBox { checked <=> root.form.ip4.ignore-auto-routes; text: "Ignore routes from DHCP"; }
-                if v6: CheckBox { checked <=> root.form.ip6.ignore-auto-routes; text: "Ignore routes from the network"; }
-                if !v6: CheckBox { checked <=> root.form.ip4.never-default; text: "Use this connection only for resources on its network"; }
-                if v6: CheckBox { checked <=> root.form.ip6.never-default; text: "Use this connection only for resources on its network"; }
-                HorizontalLayout {
-                    padding-top: 6px;
-                    spacing: 8px;
-                    alignment: end;
-                    Button { label: "Cancel"; button-height: 36px; clicked => { root.routes-done(false); } }
-                    Button { label: "Done"; kind: "primary"; button-height: 36px; clicked => { root.routes-done(true); } }
-                }
-            }
+        card-width: min(640px, self.width - 48px);
+        card-spacing: 12px;
+        label: v6 ? "IPv6 routes" : "IPv4 routes";
+        // A click beside it would lose the routes typed in it.
+        dismissed => { root.routes-done(false); }
+        Text { text: (v6 ? "IPv6 routes · " : "IPv4 routes · ") + root.form.name; color: Theme.text; font-size: 17px; font-weight: 600; }
+        Text { text: "Extra routes added when this connection is up."; color: Theme.muted; font-size: 13px; }
+        if (v6 ? root.form.ip6.routes.length : root.form.ip4.routes.length) == 0: Text {
+            text: "No extra routes yet.";
+            color: Theme.faint;
+            font-size: 13px;
+        }
+        if (v6 ? root.form.ip6.routes.length : root.form.ip4.routes.length) > 0: HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Destination"; color: Theme.muted; font-size: 12px; width: 180px; }
+            Text { text: "Prefix"; color: Theme.muted; font-size: 12px; width: 64px; }
+            Text { text: "Gateway"; color: Theme.muted; font-size: 12px; width: 180px; }
+            Text { text: "Metric"; color: Theme.muted; font-size: 12px; width: 80px; }
+            Rectangle {}
+        }
+        if !v6: RouteRows { routes <=> root.form.ip4.routes; edited => { root.form-edited(); } remove(i) => { root.remove-row("ip4-route", i); } }
+        if v6: RouteRows { routes <=> root.form.ip6.routes; edited => { root.form-edited(); } remove(i) => { root.remove-row("ip6-route", i); } }
+        if (v6 ? root.errors.ip6-routes : root.errors.ip4-routes) != "": Error { text: v6 ? root.errors.ip6-routes : root.errors.ip4-routes; }
+        HorizontalLayout { alignment: start; AddButton { label: "Add route"; clicked => { root.add-row(v6 ? "ip6-route" : "ip4-route"); } } }
+        if !v6: CheckBox { checked <=> root.form.ip4.ignore-auto-routes; text: "Ignore routes from DHCP"; }
+        if v6: CheckBox { checked <=> root.form.ip6.ignore-auto-routes; text: "Ignore routes from the network"; }
+        if !v6: CheckBox { checked <=> root.form.ip4.never-default; text: "Use this connection only for resources on its network"; }
+        if v6: CheckBox { checked <=> root.form.ip6.never-default; text: "Use this connection only for resources on its network"; }
+        HorizontalLayout {
+            padding-top: 6px;
+            spacing: 8px;
+            alignment: end;
+            Button { label: "Cancel"; button-height: 36px; clicked => { root.routes-done(false); } }
+            Button { label: "Done"; kind: "primary"; button-height: 36px; clicked => { root.routes-done(true); } }
         }
     }
 }

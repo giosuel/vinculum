@@ -1,4 +1,5 @@
-// The form controls and the password dialog, styled like the mockups (Password, Hidden network).
+// The form controls, the dialog frame every dialog uses, and the password dialog, styled like the
+// mockups (Password, Hidden network).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 import { Button } from "controls.slint";
@@ -205,9 +206,52 @@ export component Select inherits Rectangle {
     }
 }
 
+/// A dialog over the window: a dimmed backdrop and a card with the children. Esc calls
+/// `dismissed`, from any field in it; so does a click on the backdrop if `backdrop-dismisses`,
+/// which is only for dialogs with nothing typed in them.
+export component Modal inherits Rectangle {
+    in property <length> card-width: 440px;
+    in property <length> card-spacing: 14px;
+    in property <string> label;
+    in property <bool> backdrop-dismisses;
+    callback dismissed();
+    background: #05060799;
+    TouchArea { clicked => { if root.backdrop-dismisses { root.dismissed(); } } }
+    Rectangle {
+        width: root.card-width;
+        height: body.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Theme.ctrl-border;
+        background: Theme.surface;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: #00000080;
+        accessible-role: groupbox;
+        accessible-label: root.label;
+        TouchArea {}
+        // The dialog takes the keyboard (a field in it that asks for focus gets it after this),
+        // so the page underneath gets no keys, and Esc from a field ends here: the window's own
+        // keys never see it.
+        FocusScope {
+            init => { self.focus(); }
+            key-pressed(event) => {
+                if event.text == Key.Escape { root.dismissed(); return accept; }
+                reject
+            }
+            body := VerticalLayout {
+                padding: 24px;
+                spacing: root.card-spacing;
+                @children
+            }
+        }
+    }
+}
+
 /// The password dialog. `mode` is "new" (joining a network, with the storage choice), "hidden"
 /// (the network's name and security too) or "prompt" (NetworkManager asking, password only).
-export component JoinDialog inherits Rectangle {
+export component JoinDialog inherits Modal {
     in property <string> mode: "new";
     in property <string> title;
     in property <string> subtitle;
@@ -228,82 +272,65 @@ export component JoinDialog inherits Rectangle {
     // Open networks (a hidden one with "None") need no password.
     property <bool> needs-password: root.mode != "hidden" || root.security != 0;
 
-    background: #05060799;
-    TouchArea { clicked => { root.cancelled(); } }
-    Rectangle {
-        width: 440px;
-        height: form.preferred-height;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: 14px;
-        border-width: 1px;
-        border-color: Theme.ctrl-border;
-        background: Theme.surface;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: #00000080;
-        accessible-role: groupbox;
-        accessible-label: root.title;
-        TouchArea {}
-        form := VerticalLayout {
-            padding: 24px;
-            spacing: 16px;
-            HorizontalLayout {
-                spacing: 14px;
-                if root.mode != "hidden": Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    border-radius: 10px;
-                    background: Theme.accent-soft-bg;
-                    Icon { name: "lock"; tint: Theme.accent; size: 18px; }
-                }
-                VerticalLayout {
-                    spacing: 3px;
-                    alignment: center;
-                    Text { text: root.title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
-                    Text { text: root.subtitle; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-                }
-            }
-            if root.mode == "hidden": VerticalLayout {
-                spacing: 6px;
-                FieldLabel { text: "Network name"; }
-                TextField { text <=> root.name; label: "Network name"; autofocus: true; accepted => { if root.valid { root.accepted(); } } }
-            }
-            if root.mode == "hidden": VerticalLayout {
-                spacing: 6px;
-                FieldLabel { text: "Security"; }
-                Select { options: root.securities; selected <=> root.security; label: "Security"; }
-            }
-            if root.needs-password: VerticalLayout {
-                spacing: 6px;
-                FieldLabel { text: "Password"; }
-                TextField {
-                    text <=> root.password;
-                    password: true;
-                    autofocus: root.mode != "hidden";
-                    label: "Password";
-                    accepted => { if root.valid { root.accepted(); } }
-                }
-                if root.error != "": Text { text: root.error; color: Theme.danger; font-size: 12px; wrap: word-wrap; }
-                if root.error == "" && root.password-hints[root.security] != "": Text {
-                    text: root.password-hints[root.security];
-                    color: Theme.faint;
-                    font-size: 12px;
-                }
-            }
-            if root.mode != "prompt" && root.needs-password: VerticalLayout {
-                spacing: 8px;
-                FieldLabel { text: "Remember the password"; }
-                Segmented { options: ["For me only", "All users", "Ask each time"]; selected <=> root.storage; label: "Remember the password"; }
-                Text { text: root.storage-hints[root.storage]; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
-            }
-            if root.mode != "prompt": CheckBox { checked <=> root.autoconnect; text: "Connect automatically when in range"; }
-            HorizontalLayout {
-                padding-top: 4px;
-                spacing: 8px;
-                alignment: end;
-                Button { label: "Cancel"; button-height: 36px; clicked => { root.cancelled(); } }
-                Button { label: "Connect"; kind: "primary"; button-height: 36px; enabled: root.valid; clicked => { root.accepted(); } }
-            }
+    label: root.title;
+    card-spacing: 16px;
+    // A click beside it would lose the password, so only Esc and Cancel close it.
+    dismissed => { root.cancelled(); }
+    HorizontalLayout {
+        spacing: 14px;
+        if root.mode != "hidden": Rectangle {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: Theme.accent-soft-bg;
+            Icon { name: "lock"; tint: Theme.accent; size: 18px; }
         }
+        VerticalLayout {
+            spacing: 3px;
+            alignment: center;
+            Text { text: root.title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+            Text { text: root.subtitle; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+        }
+    }
+    if root.mode == "hidden": VerticalLayout {
+        spacing: 6px;
+        FieldLabel { text: "Network name"; }
+        TextField { text <=> root.name; label: "Network name"; autofocus: true; accepted => { if root.valid { root.accepted(); } } }
+    }
+    if root.mode == "hidden": VerticalLayout {
+        spacing: 6px;
+        FieldLabel { text: "Security"; }
+        Select { options: root.securities; selected <=> root.security; label: "Security"; }
+    }
+    if root.needs-password: VerticalLayout {
+        spacing: 6px;
+        FieldLabel { text: "Password"; }
+        TextField {
+            text <=> root.password;
+            password: true;
+            autofocus: root.mode != "hidden";
+            label: "Password";
+            accepted => { if root.valid { root.accepted(); } }
+        }
+        if root.error != "": Text { text: root.error; color: Theme.danger; font-size: 12px; wrap: word-wrap; }
+        if root.error == "" && root.password-hints[root.security] != "": Text {
+            text: root.password-hints[root.security];
+            color: Theme.faint;
+            font-size: 12px;
+        }
+    }
+    if root.mode != "prompt" && root.needs-password: VerticalLayout {
+        spacing: 8px;
+        FieldLabel { text: "Remember the password"; }
+        Segmented { options: ["For me only", "All users", "Ask each time"]; selected <=> root.storage; label: "Remember the password"; }
+        Text { text: root.storage-hints[root.storage]; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+    }
+    if root.mode != "prompt": CheckBox { checked <=> root.autoconnect; text: "Connect automatically when in range"; }
+    HorizontalLayout {
+        padding-top: 4px;
+        spacing: 8px;
+        alignment: end;
+        Button { label: "Cancel"; button-height: 36px; clicked => { root.cancelled(); } }
+        Button { label: "Connect"; kind: "primary"; button-height: 36px; enabled: root.valid; clicked => { root.accepted(); } }
     }
 }
