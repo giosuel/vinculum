@@ -190,7 +190,8 @@ export component BluetoothPage inherits HorizontalLayout {
                     padding: 10px;
                     padding-right: 6px;
                     spacing: 10px;
-                    Icon { name: root.page.message-tone == "warn" ? "warning" : "error"; tint: root.page.message-tone == "danger" ? Theme.danger : root.page.message-tone == "warn" ? Theme.warn-text : Theme.muted; y: 2px; }
+                    // On the first line of the text.
+                    VerticalLayout { alignment: start; Icon { name: root.page.message-tone == "warn" ? "warning" : "error"; tint: root.page.message-tone == "danger" ? Theme.danger : root.page.message-tone == "warn" ? Theme.warn-text : Theme.muted; } }
                     VerticalLayout {
                         spacing: 2px;
                         horizontal-stretch: 1;

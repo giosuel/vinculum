@@ -326,7 +326,7 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         padding-left: 16px;
                         spacing: 10px;
-                        Icon { name: "warning"; tint: Theme.warn-text; y: (parent.height - 16px) / 2; }
+                        VerticalLayout { alignment: center; Icon { name: "warning"; tint: Theme.warn-text; } }
                         Text { text: root.banner; color: Theme.warn-text; font-size: 13px; vertical-alignment: center; }
                     }
                 }
@@ -466,10 +466,13 @@ export component MainWindow inherits Window {
                                 padding: 10px;
                                 padding-right: 6px;
                                 spacing: 10px;
-                                Icon {
-                                    name: root.message-tone == "info" ? "error" : root.message-tone == "warn" ? "warning" : "error";
-                                    tint: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-text : Theme.muted;
-                                    y: 2px;
+                                // On the first line of the text.
+                                VerticalLayout {
+                                    alignment: start;
+                                    Icon {
+                                        name: root.message-tone == "info" ? "error" : root.message-tone == "warn" ? "warning" : "error";
+                                        tint: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-text : Theme.muted;
+                                    }
                                 }
                                 VerticalLayout {
                                     spacing: 2px;
@@ -623,7 +626,8 @@ export component MainWindow inherits Window {
                                 warn := HorizontalLayout {
                                     padding: 10px;
                                     spacing: 10px;
-                                    Icon { name: "warning"; tint: Theme.warn-text; y: 2px; }
+                                    // On the first line of the text.
+                                    VerticalLayout { alignment: start; Icon { name: "warning"; tint: Theme.warn-text; } }
                                     Text { text: root.hotspot-warning; color: Theme.warn-text; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
                                 }
                             }
@@ -943,7 +947,7 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             padding: 14px;
                             spacing: 12px;
-                            Icon { name: kind.icon; tint: Theme.accent; y: 2px; }
+                            VerticalLayout { alignment: start; Icon { name: kind.icon; tint: Theme.accent; } }
                             VerticalLayout {
                                 spacing: 3px;
                                 alignment: start;
