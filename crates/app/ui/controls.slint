@@ -113,3 +113,89 @@ export component Kbd inherits HorizontalLayout {
     }
     Text { text: root.label; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
 }
+
+/// A vertical scroll area with a thin scrollbar, shown when its content doesn't fit. Its
+/// children are laid out top to bottom at its width. With `fill`, they fill its height (a list
+/// card stretching) and only scroll once they're down to their minimum height; otherwise they
+/// keep their preferred height (the details pane).
+export component Scroll inherits Rectangle {
+    in property <bool> fill;
+    in property <length> spacing;
+    /// The scrollbar's distance from the right edge; a negative one puts it in the padding
+    /// beside the area instead of over its content.
+    in property <length> bar-inset: 2px;
+    /// Scrolled by the user, with the wheel or the scrollbar.
+    callback scrolled();
+    // Its size comes from where it's put, never from the content; the content's width is still
+    // the least it takes.
+    min-width: body.min-width;
+    min-height: 0;
+    preferred-height: 0;
+    max-width: 100000px;
+    max-height: 100000px;
+    property <length> range: flick.content-height - flick.height;
+    // Content that got shorter (other details, say) stays at the bottom, not below it.
+    changed range => { flick.content-y = max(flick.content-y, -max(0, root.range)); }
+
+    /// Scrolls just enough to show the part from `top` (in window coordinates) that's `size` tall.
+    public function reveal(top: length, size: length) {
+        if top < self.absolute-position.y {
+            flick.content-y = min(0, flick.content-y + self.absolute-position.y - top);
+        } else if top + size > self.absolute-position.y + self.height {
+            flick.content-y = max(-root.range, flick.content-y - (top + size - self.absolute-position.y - self.height));
+        }
+    }
+
+    flick := Flickable {
+        width: parent.width;
+        height: parent.height;
+        // Dragging with the mouse belongs to what's under it (sliders, the monitors); the wheel,
+        // the touchpad and the scrollbar scroll.
+        mouse-drag-pan-enabled: false;
+        content-height: max(self.height, root.fill ? body.min-height : body.preferred-height);
+        flicked => { root.scrolled(); }
+        body := VerticalLayout {
+            width: flick.width;
+            height: flick.content-height;
+            spacing: root.spacing;
+            alignment: root.fill ? LayoutAlignment.stretch : LayoutAlignment.start;
+            @children
+        }
+    }
+
+    if root.range > 0.5px: Rectangle {
+        property <length> thumb: max(32px, self.height * flick.height / flick.content-height);
+        property <length> start;
+        x: root.width - self.width - root.bar-inset;
+        width: 10px;
+        accessible-role: none;
+        Rectangle {
+            x: parent.width - self.width;
+            y: (parent.height - parent.thumb) * (-flick.content-y / root.range);
+            width: touch.has-hover || touch.pressed ? 8px : 6px;
+            height: parent.thumb;
+            border-radius: self.width / 2;
+            background: touch.has-hover || touch.pressed ? Theme.muted : Theme.faint;
+            opacity: touch.has-hover || touch.pressed ? 0.9 : 0.55;
+        }
+        // Drag the thumb, or click beside it to move it there.
+        touch := TouchArea {
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    let top = (parent.height - parent.thumb) * (-flick.content-y / root.range);
+                    if self.mouse-y < top || self.mouse-y > top + parent.thumb {
+                        flick.content-y = -max(0, min(root.range, (self.mouse-y - parent.thumb / 2) / (parent.height - parent.thumb) * root.range));
+                        root.scrolled();
+                    }
+                    parent.start = flick.content-y;
+                }
+            }
+            moved => {
+                if self.pressed {
+                    flick.content-y = -max(0, min(root.range, -parent.start + (self.mouse-y - self.pressed-y) / (parent.height - parent.thumb) * root.range));
+                    root.scrolled();
+                }
+            }
+        }
+    }
+}
