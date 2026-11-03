@@ -1,7 +1,7 @@
 // The form controls and the password dialog, styled like the mockups (Password, Hidden network).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, Focusable, Focus } from "controls.slint";
+import { Button, Focusable, Focus, FocusTrap } from "controls.slint";
 
 component FieldLabel inherits Text {
     color: Theme.text;
@@ -273,7 +273,7 @@ export component JoinDialog inherits Rectangle {
 
     background: #05060799;
     TouchArea { clicked => { root.cancelled(); } }
-    Rectangle {
+    FocusTrap {
         width: 440px;
         height: form.preferred-height;
         x: (parent.width - self.width) / 2;

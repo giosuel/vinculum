@@ -2,7 +2,7 @@
 // they show comes from Rust (src/files.rs).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button } from "controls.slint";
+import { Button, FocusTrap } from "controls.slint";
 import { CheckBox } from "dialogs.slint";
 
 /// tone: the status's colour ("accent" sent, "danger" failed, "muted").
@@ -28,7 +28,7 @@ component Dialog inherits Rectangle {
     in property <length> dialog-width: 480px;
     background: #05060799;
     TouchArea { }
-    Rectangle {
+    FocusTrap {
         width: root.dialog-width;
         height: body.preferred-height;
         x: (parent.width - self.width) / 2;

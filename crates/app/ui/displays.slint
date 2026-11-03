@@ -3,7 +3,7 @@
 // what's applied and saved. What it shows comes from Rust (src/displays.rs).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Focusable } from "controls.slint";
+import { Button, IconButton, Switch, SectionLabel, Focusable, FocusTrap } from "controls.slint";
 import { Segmented, Select, TextField, CheckBox } from "dialogs.slint";
 import { Hero, Card } from "shell.slint";
 import { Slider } from "sound.slint";
@@ -540,7 +540,7 @@ export component KeepDialog inherits Rectangle {
     callback revert();
     background: #05060799;
     TouchArea { }
-    Rectangle {
+    FocusTrap {
         width: 440px;
         height: body.preferred-height;
         x: (parent.width - self.width) / 2;
@@ -581,7 +581,7 @@ export component ConfigDialog inherits Rectangle {
     callback closed();
     background: #05060799;
     TouchArea { clicked => { root.closed(); } }
-    Rectangle {
+    FocusTrap {
         width: min(parent.width - 80px, 820px);
         height: body.preferred-height;
         x: (parent.width - self.width) / 2;

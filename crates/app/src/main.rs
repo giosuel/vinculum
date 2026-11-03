@@ -238,6 +238,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     window.set_version(env!("APP_VERSION").into());
     connect_callbacks(&window);
+    connect_focus(&window);
     apply_theme(&window);
     render(&window);
     let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -528,6 +529,31 @@ fn render_quick(app: &mut App) {
     });
     app.quick = q;
     app.quick_bt = bt;
+}
+
+/// A dialog's FocusTrap asks for Tab (or Shift+Tab) to be pressed again once it has moved the
+/// focus to its other end, which sends it round to the first (or last) control. Slint can't press
+/// keys itself, and it's done after the key that got there, not inside its handling.
+fn connect_focus(window: &MainWindow) {
+    use slint::platform::{Key, WindowEvent};
+    use std::{cell::Cell, rc::Rc};
+    let weak = window.as_weak();
+    let stepping = Rc::new(Cell::new(false));
+    window.global::<Focus>().on_step(move |forward| {
+        // A card with nothing to focus would send it round for ever.
+        if stepping.get() {
+            return;
+        }
+        let (weak, stepping) = (weak.clone(), stepping.clone());
+        slint::Timer::single_shot(Duration::ZERO, move || {
+            let Some(window) = weak.upgrade() else { return };
+            let key = slint::SharedString::from(if forward { Key::Tab } else { Key::Backtab });
+            stepping.set(true);
+            window.window().dispatch_event(WindowEvent::KeyPressed { text: key.clone() });
+            window.window().dispatch_event(WindowEvent::KeyReleased { text: key });
+            stepping.set(false);
+        });
+    });
 }
 
 fn connect_callbacks(window: &MainWindow) {
@@ -2256,12 +2282,15 @@ mod tests {
         let text = text.into();
         window.window().dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
         window.window().dispatch_event(WindowEvent::KeyReleased { text });
+        // The Tab a dialog presses again to send the focus round (connect_focus).
+        mock_elapsed_time(Duration::ZERO);
     }
 
     /// The window with the sidebar filled in, as the app shows it.
     fn window() -> MainWindow {
         i_slint_backend_testing::init_no_event_loop();
         let window = MainWindow::new().unwrap();
+        super::connect_focus(&window);
         let entries = super::nav_entries(&super::App::default());
         window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
         window.set_hostname("thinkpad-x1".into());
@@ -2446,6 +2475,41 @@ mod tests {
         }
         press(&window, "s");
         assert_eq!(*keys.borrow(), ["key s"]);
+    }
+
+    /// Tab and Shift+Tab go round a dialog's controls instead of on to the page behind it, and
+    /// when the dialog closes, the control that had the focus before gets it back.
+    #[test]
+    fn tab_stays_in_a_dialog_and_the_focus_comes_back() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        tab_to(&window, "Airplane mode");
+        window.set_confirm_title("Forget Aster Café?".into());
+        window.set_confirm_button("Forget".into());
+        window.set_confirm_open(true);
+        tab_to(&window, "Cancel");
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Forget"));
+        // Past the last button: round to the first, not to the sidebar.
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Cancel"));
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Forget"));
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Cancel"));
+        for _ in 0..6 {
+            press(&window, Key::Tab);
+            assert!(ring_on(&window, "Cancel") || ring_on(&window, "Forget"));
+        }
+        window.set_confirm_open(false);
+        // The next turn of the event loop.
+        mock_elapsed_time(Duration::ZERO);
+        assert!(ring_on(&window, "Airplane mode"));
+        // And it stays there: the window doesn't take it for the button that went.
+        for _ in 0..5 {
+            mock_elapsed_time(Duration::from_millis(100));
+        }
+        assert!(ring_on(&window, "Airplane mode"));
     }
 
     /// Widening the window must not show the closed editor in the new space, not even while

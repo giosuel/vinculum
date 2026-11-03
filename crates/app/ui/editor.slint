@@ -4,7 +4,7 @@
 // whenever it changes (see src/editor.rs) and sends back the errors.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, Switch, Focusable } from "controls.slint";
+import { Button, Switch, Focusable, FocusTrap } from "controls.slint";
 import { TextField, Segmented, CheckBox, Select } from "dialogs.slint";
 
 export struct AddressRow { address: string, prefix: string }
@@ -1346,7 +1346,7 @@ export component Editor inherits Rectangle {
     if root.ports-open: Rectangle {
         background: #05060799;
         TouchArea { clicked => { root.port-chosen(""); } }
-        Rectangle {
+        FocusTrap {
             width: min(560px, parent.width - 48px);
             height: port-dialog.preferred-height;
             x: (parent.width - self.width) / 2;
@@ -1408,7 +1408,7 @@ export component Editor inherits Rectangle {
         property <bool> v6: root.routes-open == "ipv6";
         background: #05060799;
         TouchArea { clicked => { root.routes-done(false); } }
-        Rectangle {
+        FocusTrap {
             width: min(640px, parent.width - 48px);
             height: routes.preferred-height;
             x: (parent.width - self.width) / 2;

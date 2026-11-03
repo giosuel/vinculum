@@ -3,7 +3,7 @@
 // user does goes back through one callback, `act(verb, argument)`.
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Battery, Spinner } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Focusable, Focus } from "controls.slint";
+import { Button, IconButton, Switch, SectionLabel, Focusable, Focus, FocusTrap } from "controls.slint";
 import { TextField, Segmented, CheckBox } from "dialogs.slint";
 import { Details, DetailsPane } from "details.slint";
 import { HeroInfo } from "shell.slint";
@@ -371,7 +371,7 @@ component Modal inherits Rectangle {
     callback dismissed();
     background: #05060799;
     TouchArea { clicked => { root.dismissed(); } }
-    Rectangle {
+    FocusTrap {
         width: root.card-width;
         height: body.preferred-height;
         x: (parent.width - self.width) / 2;
