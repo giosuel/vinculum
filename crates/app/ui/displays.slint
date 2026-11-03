@@ -81,13 +81,14 @@ export struct DisplaysView {
 component Badge inherits Rectangle {
     in property <int> n;
     in property <bool> on;
-    width: 22px;
-    height: 22px;
-    border-radius: 11px;
+    in property <length> size: 22px;
+    width: size;
+    height: size;
+    border-radius: size / 2;
     background: on ? Theme.accent : Theme.ctrl-bg;
     border-width: on ? 0 : 1px;
     border-color: Theme.ctrl-border;
-    Text { text: root.n; color: root.on ? Theme.on-accent : Theme.muted; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+    Text { text: root.n; color: root.on ? Theme.on-accent : Theme.muted; font-size: max(11px, round(root.size / 2px) * 1px); font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
 }
 
 /// The monitors to scale, draggable.
@@ -97,17 +98,28 @@ component Layout inherits Rectangle {
     callback select(int);
     callback drag(int, float, float, bool);
     property <length> margin: 18px;
+    property <length> gap: 6px;
     // Layout pixels to screen.
     property <float> k: min((self.width - 2 * margin) / 1px / max(1, view.bounds-w), (self.height - 2 * margin) / 1px / max(1, view.bounds-h));
     property <length> ox: (self.width - view.bounds-w * k * 1px) / 2;
     property <length> oy: (self.height - view.bounds-h * k * 1px) / 2;
-    for m[i] in root.view.monitors: Rectangle {
+    for m[i] in root.view.monitors: tile := Rectangle {
         property <length> dx: touch.pressed ? touch.mouse-x - touch.pressed-x : 0;
         property <length> dy: touch.pressed ? touch.mouse-y - touch.pressed-y : 0;
-        x: root.ox + (m.x - root.view.bounds-x) * root.k * 1px + 1.5px + dx;
-        y: root.oy + (m.y - root.view.bounds-y) * root.k * 1px + 1.5px + dy;
-        width: m.w * root.k * 1px - 3px;
-        height: m.h * root.k * 1px - 3px;
+        // The edges on whole pixels, so borders and text stay sharp, and a gap between monitors
+        // that touch.
+        property <length> left: round((root.ox + (m.x - root.view.bounds-x) * root.k * 1px) / 1px) * 1px;
+        property <length> top: round((root.oy + (m.y - root.view.bounds-y) * root.k * 1px) / 1px) * 1px;
+        property <length> right: round((root.ox + (m.x + m.w - root.view.bounds-x) * root.k * 1px) / 1px) * 1px;
+        property <length> bottom: round((root.oy + (m.y + m.h - root.view.bounds-y) * root.k * 1px) / 1px) * 1px;
+        // Text, badge and padding grow with the monitor, from their size at a 1200 × 760 window;
+        // on a smaller monitor the padding and badge shrink, but the text doesn't.
+        property <float> f: clamp(min(self.width / 165px, self.height / 92px), 0.7, 1.5);
+        property <float> text-f: max(1, f);
+        x: left + root.gap / 2 + dx;
+        y: top + root.gap / 2 + dy;
+        width: right - left - root.gap;
+        height: bottom - top - root.gap;
         border-radius: 8px;
         border-width: m.selected ? 2px : 1px;
         border-color: m.selected ? Theme.accent : Theme.ctrl-border;
@@ -118,18 +130,18 @@ component Layout inherits Rectangle {
         accessible-label: m.port + ", " + m.name + ", " + m.sub;
         accessible-action-default => { root.select(i); }
         VerticalLayout {
-            padding: 10px;
-            spacing: 2px;
+            padding: round(10 * tile.f) * 1px;
+            spacing: round(2 * tile.f) * 1px;
             HorizontalLayout {
-                spacing: 7px;
+                spacing: round(7 * tile.f) * 1px;
                 alignment: start;
-                Badge { n: m.n; on: m.selected; }
-                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: 11px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+                Badge { n: m.n; on: m.selected; size: round(22 * tile.f) * 1px; }
+                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: round(12 * tile.text-f) * 1px; font-family: "JetBrains Mono"; vertical-alignment: center; }
             }
             Rectangle { vertical-stretch: 1; }
-            Text { text: m.name; color: Theme.text; font-size: 12px; font-weight: 600; overflow: elide; }
-            if !root.show-workspaces: Text { text: m.sub; color: Theme.muted; font-size: 11px; overflow: elide; }
-            if root.show-workspaces: Text { text: m.workspaces == "" ? "No workspaces bound" : m.workspaces; color: m.workspaces == "" ? Theme.faint : Theme.accent; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+            Text { text: m.name; color: Theme.text; font-size: round(13 * tile.text-f) * 1px; font-weight: 600; overflow: elide; }
+            if !root.show-workspaces: Text { text: m.sub; color: Theme.muted; font-size: round(12 * tile.text-f) * 1px; overflow: elide; }
+            if root.show-workspaces: Text { text: m.workspaces == "" ? "No workspaces bound" : m.workspaces; color: m.workspaces == "" ? Theme.faint : Theme.accent; font-size: round(12 * tile.text-f) * 1px; font-family: "JetBrains Mono"; overflow: elide; }
         }
         touch := TouchArea {
             mouse-cursor: m.disabled || m.mirrored ? pointer : move;
@@ -194,40 +206,49 @@ export component DisplaysPage inherits VerticalLayout {
         }
     }
 
-    Hero {
-        title: "Displays";
-        sub: root.view.sub;
-        hero-height: root.view.state != "list" ? 140px : root.view.not-loaded ? 286px : 330px;
-        if root.view.state == "list": Layout {
-            x: 20px;
-            y: 76px;
-            width: parent.width - 40px;
-            height: parent.height - 76px - 28px;
-            view: root.view;
-            show-workspaces: root.page-tab == 1;
-            select(i) => { root.act("select", "" + i, 0); }
-            drag(i, x, y, done) => { root.drag(i, x, y, done); }
-        }
-        if root.view.state == "list": Text {
-            x: 24px;
-            y: parent.height - 24px;
-            text: root.view.logical;
-            color: Theme.faint;
-            font-size: 11px;
-        }
-        if root.view.state == "list": HorizontalLayout {
-            x: parent.width - self.width - 18px;
-            y: 18px;
-            width: self.preferred-width;
-            height: 36px;
-            spacing: 8px;
-            Segmented {
-                label: "Displays";
-                height: 36px;
-                options: ["Monitor", "Workspaces", "Profiles"];
-                selected <=> root.page-tab;
+    // On the Monitor tab the settings card is as tall as its content, and the hero (with the
+    // monitors) grows into the room left over. Workspaces and Profiles keep it at its smallest:
+    // their lists need the room.
+    hero-box := Rectangle {
+        property <length> smallest: root.view.state != "list" ? 140px : root.view.not-loaded ? 286px : 330px;
+        min-height: smallest;
+        max-height: root.view.state == "list" && root.page-tab == 0 ? 720px : smallest;
+        vertical-stretch: root.view.state == "list" && root.page-tab == 0 ? 1 : 0;
+        Hero {
+            title: "Displays";
+            sub: root.view.sub;
+            hero-height: hero-box.height;
+            if root.view.state == "list": Layout {
+                x: 20px;
+                y: 76px;
+                width: parent.width - 40px;
+                height: parent.height - 76px - 28px;
+                view: root.view;
+                show-workspaces: root.page-tab == 1;
+                select(i) => { root.act("select", "" + i, 0); }
+                drag(i, x, y, done) => { root.drag(i, x, y, done); }
             }
-            Button { label: "View config"; button-height: 36px; clicked => { root.act("view-config", "", 0); } }
+            if root.view.state == "list": Text {
+                x: 24px;
+                y: parent.height - 24px;
+                text: root.view.logical;
+                color: Theme.faint;
+                font-size: 12px;
+            }
+            if root.view.state == "list": HorizontalLayout {
+                x: parent.width - self.width - 18px;
+                y: 18px;
+                width: self.preferred-width;
+                height: 36px;
+                spacing: 8px;
+                Segmented {
+                    label: "Displays";
+                    height: 36px;
+                    options: ["Monitor", "Workspaces", "Profiles"];
+                    selected <=> root.page-tab;
+                }
+                Button { label: "View config"; button-height: 36px; clicked => { root.act("view-config", "", 0); } }
+            }
         }
     }
 
@@ -339,7 +360,7 @@ export component DisplaysPage inherits VerticalLayout {
     }
 
     if root.view.state == "list" && root.page-tab == 0: Card {
-        vertical-stretch: 1;
+        vertical-stretch: 0;
         VerticalLayout {
             padding: 18px;
             padding-top: 14px;
@@ -492,7 +513,6 @@ export component DisplaysPage inherits VerticalLayout {
                     }
                 }
             }
-            Rectangle { vertical-stretch: 1; }
         }
     }
 

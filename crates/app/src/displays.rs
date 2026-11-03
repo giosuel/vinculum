@@ -647,7 +647,8 @@ pub fn view(state: &State) -> DisplaysView {
                         .map_or("", |o| o.name.as_str())
                 )
             } else {
-                format!("{} × {} · {} Hz · {}×", r.mode.width, r.mode.height, r.mode.refresh_text(), short(r.scale))
+                // Short enough for the smallest monitor on the layout; the card has the details.
+                format!("{} × {} · {} Hz", r.mode.width, r.mode.height, (f64::from(r.mode.refresh) / 1000.0).round())
             }),
             x: r.x as f32,
             y: r.y as f32,
@@ -895,7 +896,9 @@ mod tests {
         assert_eq!(v.state, "list");
         assert_eq!(v.sub, "4 monitors");
         assert_eq!((v.bounds_w, v.bounds_h), (7680.0, 2880.0));
-        assert_eq!(v.monitors.row_data(2).unwrap().sub, "3840 × 2160 · 240 Hz · 1.5×");
+        assert_eq!(v.monitors.row_data(2).unwrap().sub, "3840 × 2160 · 240 Hz");
+        // 239.76 Hz, rounded on the layout.
+        assert_eq!(v.monitors.row_data(0).unwrap().sub, "2560 × 1440 · 240 Hz");
     }
 
     #[test]
