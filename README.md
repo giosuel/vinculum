@@ -188,7 +188,8 @@ When you join a network, Lituus asks where to keep its password:
 
 Lituus takes its colours from the first usable source in `~/.config/lituus/config.toml`, and
 recolours itself when that file changes, so it follows your wallpaper. Without a config file it
-uses these two, then its built-in theme. The Appearance page sets all of it but the sources:
+uses these two, then its built-in theme. The Settings page's Appearance section sets all of it but
+the sources:
 
 ```toml
 [theme]
@@ -207,7 +208,7 @@ path = "~/.config/ml4w/colors/colors.json"   # ML4W writes matugen's colours her
 A source is a matugen-style `colors.json` (Material colour roles such as `primary` and `surface` as
 hex strings). One with missing roles, or text too faint to read, is skipped.
 
-The Settings page writes the rest of the file (and keeps your comments in it):
+Its other sections write the rest of the file (and keep your comments in it):
 
 ```toml
 [tray]
