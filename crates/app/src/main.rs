@@ -152,7 +152,7 @@ struct App {
     sound: sound::State,
     /// The sidebar's search.
     nav_query: String,
-    /// The Network tab last open, for coming back to it from the sidebar.
+    /// The Network sub-page last open, for coming back to it from the sidebar.
     net_page: view::Page,
 }
 
@@ -334,7 +334,7 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
             update(&weak, |app| {
                 let Some(snap) = &app.snapshot else { return };
                 let q = quick::build(Some(snap));
-                let page = if id.starts_with("wifi:") { view::Page::Wifi } else { view::Page::Vpn };
+                let page = if id.starts_with("wifi:") { "wifi" } else { "vpn" };
                 let action = if id.starts_with("wifi:") {
                     if q.networks.iter().any(|n| n.id == id && n.active) {
                         return;
@@ -345,7 +345,8 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
                 } else {
                     "connect"
                 };
-                app.ui = view::UiState { page, selected: Some(id), ..view::UiState::default() };
+                go(app, page);
+                app.ui.selected = Some(id);
                 act(app, action);
             });
             // A password to type, or something to confirm: that's the window's job.
@@ -365,7 +366,7 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
         }
         tray::Event::Settings => {
             hide_quick();
-            update(&weak, |app| app.ui = view::UiState { page: view::Page::Settings, ..view::UiState::default() });
+            update(&weak, |app| go(app, "settings"));
             let _ = window.show();
         }
         tray::Event::Quit => {
@@ -531,20 +532,7 @@ fn render_quick(app: &mut App) {
 
 fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
-    window.on_navigate(move |id| {
-        let id = if id == "network" { APP.with(|app| app.borrow().net_page.id().into()) } else { id };
-        if let Some(page) = view::Page::from_id(&id) {
-            update(&weak, |app| {
-                if page.is_network() {
-                    app.net_page = page;
-                }
-                app.ui = view::UiState { page, ..view::UiState::default() };
-                if page == view::Page::Hotspot {
-                    open_hotspot(app);
-                }
-            });
-        }
-    });
+    window.on_navigate(move |id| update(&weak, |app| go(app, &id)));
     let weak = window.as_weak();
     window.on_nav_search(move |text| update(&weak, |app| app.nav_query = text.to_string()));
     let weak = window.as_weak();
@@ -563,10 +551,6 @@ fn connect_callbacks(window: &MainWindow) {
         update(&weak, |app| {
             let hero = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui).net_hero;
             let Some(row) = hero.row else { return };
-            if app.ui.page != hero.page {
-                app.ui = view::UiState { page: hero.page, ..view::UiState::default() };
-                app.net_page = hero.page;
-            }
             app.ui.selected = Some(row);
             act(app, &verb);
         })
@@ -780,10 +764,7 @@ fn connect_callbacks(window: &MainWindow) {
                 "bridge" => editor::Kind::Bridge,
                 "bond" => editor::Kind::Bond,
                 "import" => return send(app, view::Command::ImportFile),
-                "hotspot" => {
-                    app.ui = view::UiState { page: view::Page::Hotspot, ..view::UiState::default() };
-                    return open_hotspot(app);
-                }
+                "hotspot" => return go(app, "hotspot"),
                 _ => editor::Kind::Ethernet,
             };
             send(app, view::Command::OpenEditor { connection: None, new: Some(kind) });
@@ -852,14 +833,16 @@ fn connect_callbacks(window: &MainWindow) {
     });
     let weak = window.as_weak();
     window.on_bottom_clicked(move || {
-        update(&weak, |app| {
-            if app.ui.page == view::Page::Wifi
-                && let Some(device) = app.snapshot.as_ref().and_then(view::hidden_network_device)
-            {
-                open_dialog(app, Dialog::Hidden { device });
-            } else if app.ui.page != view::Page::Wifi {
-                send(app, view::Command::ImportFile);
+        update(&weak, |app| match app.ui.page {
+            view::Page::Wifi => {
+                if let Some(device) = app.snapshot.as_ref().and_then(view::hidden_network_device) {
+                    open_dialog(app, Dialog::Hidden { device });
+                }
             }
+            view::Page::Wired => {
+                send(app, view::Command::OpenEditor { connection: None, new: Some(editor::Kind::Ethernet) })
+            }
+            _ => send(app, view::Command::ImportFile),
         })
     });
     let weak = window.as_weak();
@@ -915,6 +898,13 @@ fn hostname_problem(name: &str) -> Option<&'static str> {
     if name.split('.').all(label_ok) { None } else { Some("Letters, digits and hyphens only, such as thinkpad-x1.") }
 }
 
+/// Goes to a page (a sidebar item's id); Network opens its sub-page used last.
+fn go(app: &mut App, id: &str) {
+    if view::navigate(&mut app.ui, &mut app.net_page, id) == Some(view::Page::Hotspot) {
+        open_hotspot(app);
+    }
+}
+
 /// The hotspot page opens with its saved settings, or with the hostname and a new password.
 fn open_hotspot(app: &mut App) {
     let Some(snap) = &app.snapshot else { return };
@@ -928,7 +918,6 @@ fn render_hotspot(window: &MainWindow, app: &mut App, view: Option<&view::Hotspo
     let Some(h) = view else { return };
     window.set_hotspot_available(h.device.is_some());
     window.set_hotspot_on(h.active.is_some());
-    window.set_hotspot_status(h.status.as_str().into());
     window.set_hotspot_warning(h.warning.as_str().into());
     if let Some((ssid, password, band)) = app.hotspot_fields.take() {
         window.set_hotspot_ssid(ssid.into());
@@ -1177,7 +1166,7 @@ fn tether_offers(snapshot: Option<&lituus_nm::Snapshot>) -> std::collections::Ha
         .collect()
 }
 
-/// The sidebar's pages; the Network item's status is filled in from the view.
+/// The sidebar's pages; Network's statuses are filled in from the view.
 fn nav_entries(app: &App) -> Vec<nav::Entry> {
     vec![
         nav::Entry {
@@ -1185,8 +1174,45 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             label: "Network",
             icon: "wifi",
             group: "CONNECTIONS",
-            keywords: "wi-fi wifi wired ethernet vpn wireguard openvpn hotspot internet saved connections hostname",
+            keywords: "internet networkmanager saved connections hostname",
             status: String::new(),
+            parent: None,
+        },
+        nav::Entry {
+            id: "wifi",
+            label: "Wi-Fi",
+            icon: "wifi",
+            group: "CONNECTIONS",
+            keywords: "wi-fi wifi wireless wlan networks hidden enterprise eduroam saved",
+            status: String::new(),
+            parent: Some("network"),
+        },
+        nav::Entry {
+            id: "wired",
+            label: "Wired",
+            icon: "wired",
+            group: "CONNECTIONS",
+            keywords: "ethernet cable lan bridge bond vlan virtual interfaces profiles",
+            status: String::new(),
+            parent: Some("network"),
+        },
+        nav::Entry {
+            id: "vpn",
+            label: "VPN",
+            icon: "vpn",
+            group: "CONNECTIONS",
+            keywords: "wireguard openvpn openconnect tunnel import",
+            status: String::new(),
+            parent: Some("network"),
+        },
+        nav::Entry {
+            id: "hotspot",
+            label: "Hotspot",
+            icon: "hotspot",
+            group: "CONNECTIONS",
+            keywords: "tethering share access point",
+            status: String::new(),
+            parent: Some("network"),
         },
         nav::Entry {
             id: "bluetooth",
@@ -1195,6 +1221,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             group: "CONNECTIONS",
             keywords: "pair pairing headphones headset keyboard mouse speaker devices",
             status: bluetooth::nav(&app.bt, false).sub.to_string(),
+            parent: None,
         },
         nav::Entry {
             id: "displays",
@@ -1203,6 +1230,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             group: "DEVICES",
             keywords: "monitors screens resolution refresh rate scale hdr vrr rotation mirror hyprland layout",
             status: displays::status(&app.displays),
+            parent: None,
         },
         nav::Entry {
             id: "sound",
@@ -1211,6 +1239,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             group: "DEVICES",
             keywords: "audio volume speakers headphones microphone input output pipewire mute apps",
             status: sound::status(&app.sound),
+            parent: None,
         },
         nav::Entry {
             id: "appearance",
@@ -1219,6 +1248,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             group: "PERSONAL",
             keywords: "theme colours colors dark light mode matugen wallpaper accent gradient",
             status: if app.palette.is_some() { "Wallpaper".to_owned() } else { app.builtin.label().to_owned() },
+            parent: None,
         },
     ]
 }
@@ -1227,11 +1257,14 @@ fn render(window: &MainWindow) {
     APP.with(|app| {
         let mut app = app.borrow_mut();
         let v = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui);
-        let current = if app.ui.page.is_network() { "network" } else { app.ui.page.id() };
         let mut entries = nav_entries(&app);
-        entries[0].status = v.net_status.clone();
-        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, current)));
-        window.set_net_sub(v.net_sub.as_str().into());
+        let statuses = [&v.net_status, &v.net_items.wifi, &v.net_items.wired, &v.net_items.vpn, &v.net_items.hotspot];
+        for (entry, status) in entries.iter_mut().zip(statuses) {
+            entry.status = status.clone();
+        }
+        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, app.ui.page.id())));
+        window.set_net_sub(v.net_hero.sub.as_str().into());
+        window.set_count(v.count.as_str().into());
         window.set_net_hero(HeroInfo {
             icon: v.net_hero.icon.into(),
             name: v.net_hero.name.as_str().into(),
@@ -1243,10 +1276,10 @@ fn render(window: &MainWindow) {
             v.net_hero
                 .actions
                 .iter()
-                .map(|&(id, label, kind)| Action {
-                    id: id.into(),
-                    label: label.into(),
-                    kind: kind.into(),
+                .map(|(id, label, kind)| Action {
+                    id: (*id).into(),
+                    label: label.as_str().into(),
+                    kind: (*kind).into(),
                     enabled: true,
                 })
                 .collect(),
@@ -2241,5 +2274,27 @@ mod tests {
         assert!(0.0 < x && x < 1600.0, "{x}");
         mock_elapsed_time(Duration::from_millis(500));
         assert_eq!(editor(), Some(0.0));
+    }
+
+    /// With Network's sub-items open, the sidebar's pages scroll in the smallest window instead
+    /// of pushing Settings and Airplane mode out of it.
+    #[test]
+    fn the_sidebar_keeps_its_footer_in_a_short_window() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
+        window.set_hostname("thinkpad-x1".into());
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        let bottom = |label: &str| {
+            let e = ElementHandle::find_by_accessible_label(&window, label).next().expect(label);
+            e.absolute_position().y + e.size().height
+        };
+        // The hint bar is 30 px; the footer ends above the window's bottom edge.
+        assert!(bottom("Airplane mode") < 590.0, "{}", bottom("Airplane mode"));
+        assert!(bottom("Settings") < bottom("Airplane mode"));
+        // The last page is still there, below the fold.
+        assert!(bottom("Appearance") > 0.0);
     }
 }

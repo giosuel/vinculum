@@ -197,6 +197,8 @@ pub struct SavedConnection {
     pub hotspot: bool,
     /// A port of a bridge or bond: it's part of that connection rather than one of its own.
     pub port: Option<Port>,
+    /// When it was last connected, in seconds since 1970; 0 if never.
+    pub timestamp: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

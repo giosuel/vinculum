@@ -467,6 +467,7 @@ impl Client {
             interface: string("connection", "interface-name").filter(|i| !i.is_empty()),
             hotspot: string("802-11-wireless", "mode").as_deref() == Some("ap"),
             port,
+            timestamp: get("connection", "timestamp").and_then(|v| u64::try_from(&**v).ok()).unwrap_or(0),
             // NMMetered: 1 yes, 2 no, 3 guessed yes, 4 guessed no; 0 (unknown) means automatic.
             metered: match get("connection", "metered").and_then(|v| i32::try_from(&**v).ok()) {
                 Some(1 | 3) => Some(true),
