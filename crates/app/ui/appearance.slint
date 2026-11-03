@@ -227,6 +227,8 @@ export component AppearanceSettings inherits VerticalLayout {
         description: "Auto follows the desktop";
         Segmented {
             label: "Mode";
+            // As wide as its options, beside the text that takes the rest of the row.
+            horizontal-stretch: 0;
             options: ["Auto", "Dark", "Light"];
             selected: root.mode;
             enabled: !root.wallpaper-in-use;

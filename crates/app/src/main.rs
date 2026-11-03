@@ -2265,4 +2265,25 @@ mod tests {
         let gradient = at("Hero gradient");
         assert!(files.0 > gradient.0 && files.1 < gradient.1, "{files:?}");
     }
+
+    /// The Mode control is as wide as its options, at the end of its row like the switches.
+    #[test]
+    fn the_mode_control_is_as_wide_as_its_options() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("settings".into());
+        window.show().unwrap();
+        // The left and right edges of the elements with this label, together.
+        let span = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label).fold((f32::MAX, f32::MIN), |(l, r), e| {
+                (l.min(e.absolute_position().x), r.max(e.absolute_position().x + e.size().width))
+            })
+        };
+        for (w, h) in [(1040.0, 600.0), (1200.0, 760.0), (2000.0, 1070.0)] {
+            window.window().set_size(LogicalSize::new(w, h));
+            let (auto, light, gradient) = (span("Auto"), span("Light"), span("Hero gradient"));
+            assert!(light.1 - auto.0 < 240.0, "{w}: {auto:?} {light:?}");
+            assert!((light.1 - gradient.1).abs() < 8.0, "{w}: {light:?} {gradient:?}");
+        }
+    }
 }
