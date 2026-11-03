@@ -36,7 +36,7 @@ it.
 <td width="33%" valign="top">
 
 **📶 Network**<br>
-Wi-Fi, wired and VPNs, all live: connect with <kbd>Enter</kbd>, a full editor for every setting (802.1X, IPv4 and IPv6, DNS, routes, VLANs, bridges, bonds), WireGuard and OpenVPN files, a hotspot with a QR code. Passwords go to your keyring.
+Wi-Fi, wired and VPNs, all live: connect with <kbd>Enter</kbd>, a full editor for every setting (802.1X, IPv4 and IPv6, DNS, routes, VLANs, bridges, bonds), WireGuard and OpenVPN files, Cisco AnyConnect with Microsoft 365 sign-in, a hotspot with a QR code. Passwords go to your keyring.
 
 </td>
 <td width="33%" valign="top">
@@ -99,7 +99,9 @@ What the sandbox allows, and what works differently in it, is in [`packaging/fla
 **Nix** – `nix run github:giosuel/lituus`, or the flake as an input ([`packaging/nix/`](packaging/nix/README.md)).
 
 Every release also has ARM64 builds (except the Flatpak). All of them need NetworkManager. Optional: NetworkManager's
-OpenVPN plugin (`networkmanager-openvpn` on Arch) for OpenVPN, an XDG desktop portal with a file
+OpenVPN plugin (`networkmanager-openvpn` on Arch) for OpenVPN, its OpenConnect plugin
+(`networkmanager-openconnect`) for Cisco AnyConnect (Microsoft 365 and other web sign-ins need
+openconnect 9.00 and NetworkManager-openconnect 1.2.10 or newer), an XDG desktop portal with a file
 dialog (`xdg-desktop-portal-gtk`, say) for choosing certificates and VPN files, a keyring,
 BlueZ (`bluez`, with its service running) for Bluetooth, and PipeWire's PulseAudio service
 (`pipewire-pulse`) to switch a headset between high quality and headset mode.

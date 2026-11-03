@@ -7,12 +7,13 @@ use lituus_nm::{ConnectionKind, DeviceKind, Settings, Snapshot};
 use slint::{ComponentHandle, Model, ModelRc, SharedString};
 
 use crate::editor::{self, Address, EapForm, Form, IpForm, Kind, PeerForm, Route, Tab, WgForm};
+use crate::openconnect::OcForm;
 use crate::openvpn::OvpnForm;
 use crate::view::Command;
 use crate::virt::{PortRow, VirtForm};
 use crate::{
     APP, AddressRow, App, EapFormUi, EditorErrors, EditorForm, EditorOptions, EditorTab, IpFormUi, MainWindow,
-    OvpnFormUi, PeerRow, PortCandidateUi, PortRowUi, RouteRow, VirtFormUi, WgFormUi, model, send, update,
+    OcFormUi, OvpnFormUi, PeerRow, PortCandidateUi, PortRowUi, RouteRow, VirtFormUi, WgFormUi, model, send, update,
 };
 
 /// What else the editor opens with.
@@ -322,6 +323,7 @@ impl EditorState {
         match (self.form.name.trim(), self.kind) {
             ("", Kind::Wifi) => self.form.ssid.clone(),
             ("", Kind::WireGuard) => self.form.wg.interface.clone(),
+            ("", Kind::OpenConnect) => self.form.oc.gateway.trim().to_owned(),
             ("", Kind::Vlan | Kind::Bridge | Kind::Bond) => self.form.virt.interface.trim().to_owned(),
             (name, _) => name.to_owned(),
         }
@@ -435,6 +437,7 @@ fn to_ui(state: &EditorState, dns_inputs: (SharedString, SharedString)) -> Edito
         eap: eap_ui(&f.eap),
         wg: wg_ui(&f.wg),
         ovpn: ovpn_ui(&f.ovpn),
+        oc: oc_ui(&f.oc),
         virt: virt_ui(state, &f.virt),
     }
 }
@@ -637,6 +640,40 @@ fn ovpn_form(u: &OvpnFormUi) -> OvpnForm {
     }
 }
 
+fn oc_ui(o: &OcForm) -> OcFormUi {
+    OcFormUi {
+        gateway: s(&o.gateway),
+        protocol: o.protocol as i32,
+        cert: s(&o.cert),
+        key: s(&o.key),
+        ca: s(&o.ca),
+        user_agent: s(&o.user_agent),
+        system: o.system as i32,
+        csd: s(&o.csd),
+        udp: o.udp,
+        proxy: s(&o.proxy),
+        mtu: s(&o.mtu),
+        refuse_unknown: o.refuse_unknown,
+    }
+}
+
+fn oc_form(u: &OcFormUi) -> OcForm {
+    OcForm {
+        gateway: u.gateway.trim().to_owned(),
+        protocol: u.protocol.max(0) as usize,
+        cert: u.cert.trim().to_owned(),
+        key: u.key.trim().to_owned(),
+        ca: u.ca.trim().to_owned(),
+        user_agent: u.user_agent.trim().to_owned(),
+        system: u.system.max(0) as usize,
+        csd: u.csd.trim().to_owned(),
+        udp: u.udp,
+        proxy: u.proxy.trim().to_owned(),
+        mtu: u.mtu.trim().to_owned(),
+        refuse_unknown: u.refuse_unknown,
+    }
+}
+
 fn from_ui(state: &EditorState, ui: &EditorForm) -> Form {
     let pick = |list: &[String], i: i32| list.get(i.max(0) as usize).cloned().unwrap_or_default();
     Form {
@@ -670,6 +707,7 @@ fn from_ui(state: &EditorState, ui: &EditorForm) -> Form {
         eap: eap_form(&ui.eap),
         wg: wg_form(&ui.wg),
         ovpn: ovpn_form(&ui.ovpn),
+        oc: oc_form(&ui.oc),
         virt: virt_form(state, &ui.virt),
     }
 }
@@ -704,6 +742,8 @@ fn errors_ui(e: &editor::Errors) -> EditorErrors {
         ovpn_user: s(&e.ovpn_user),
         ovpn_secret: s(&e.ovpn_secret),
         ovpn_files: s(&e.ovpn_files),
+        oc_gateway: s(&e.oc_gateway),
+        oc_mtu: s(&e.oc_mtu),
         virt_interface: s(&e.virt_interface),
         virt_settings: s(&e.virt_settings),
         virt_monitor: s(&e.virt_monitor),
@@ -743,6 +783,8 @@ pub fn render(window: &MainWindow, app: &mut App) {
             ovpn_auth: strings(crate::openvpn::AUTH.iter().map(|(_, l)| *l)),
             ovpn_tls_modes: strings(crate::openvpn::TLS_KEY_MODES.iter().map(|(_, l)| *l)),
             ovpn_compression: strings(crate::openvpn::COMPRESSION.iter().map(|(_, l)| *l)),
+            oc_protocols: strings(crate::openconnect::PROTOCOLS.iter().map(|(_, l)| *l)),
+            oc_systems: strings(crate::openconnect::SYSTEMS.iter().map(|(_, l)| *l)),
             banner: s(&state.banner),
             keyring: "".into(),
             parents: strings(state.parents.iter().cloned()),
@@ -795,6 +837,7 @@ pub fn render(window: &MainWindow, app: &mut App) {
         Kind::Ethernet => "Ethernet connection",
         Kind::WireGuard => "WireGuard VPN",
         Kind::OpenVpn => "OpenVPN",
+        Kind::OpenConnect => crate::openconnect::PROTOCOLS.get(state.form.oc.protocol).map_or("VPN", |(_, l)| *l),
         Kind::Vlan => "VLAN",
         Kind::Bridge => "Bridge",
         Kind::Bond => "Bond",
@@ -905,6 +948,12 @@ pub fn connect(window: &MainWindow) {
                     && v.interface == b.interface
                 {
                     v.interface = crate::virt::vlan_name(&v.parent, &v.vlan_id);
+                    state.reset = true;
+                }
+                if state.kind == Kind::OpenConnect
+                    && state.initial.is_none()
+                    && crate::openconnect::protocol_changed(&before.oc, &mut state.form.oc)
+                {
                     state.reset = true;
                 }
             }
@@ -1150,6 +1199,7 @@ fn apply(app: &mut App) {
         form.name = match state.kind {
             Kind::Wifi => form.ssid.clone(),
             Kind::WireGuard => form.wg.interface.clone(),
+            Kind::OpenConnect => form.oc.gateway.trim().to_owned(),
             Kind::Vlan | Kind::Bridge | Kind::Bond => form.virt.interface.clone(),
             _ => form.name.clone(),
         };
@@ -1256,6 +1306,10 @@ pub fn file_chosen(app: &mut App, field: &str, path: Result<Option<String>, Stri
         "ovpn.key" => &mut f.ovpn.key,
         "ovpn.static-key" => &mut f.ovpn.static_key,
         "ovpn.tls-key" => &mut f.ovpn.tls_key,
+        "oc.cert" => &mut f.oc.cert,
+        "oc.key" => &mut f.oc.key,
+        "oc.ca" => &mut f.oc.ca,
+        "oc.csd" => &mut f.oc.csd,
         _ => return,
     };
     *target = path;
@@ -1271,10 +1325,37 @@ mod tests {
     #[test]
     fn the_form_round_trips_through_the_window() {
         let snap = home();
-        for kind in [Kind::Wifi, Kind::Ethernet, Kind::WireGuard, Kind::OpenVpn, Kind::Vlan, Kind::Bridge, Kind::Bond] {
+        for kind in [
+            Kind::Wifi,
+            Kind::Ethernet,
+            Kind::WireGuard,
+            Kind::OpenVpn,
+            Kind::OpenConnect,
+            Kind::Vlan,
+            Kind::Bridge,
+            Kind::Bond,
+        ] {
             let state = EditorState::new(None, Settings::new(), Vec::new(), Some(&snap), Some(kind));
             let ui = to_ui(&state, (SharedString::new(), SharedString::new()));
             assert_eq!(from_ui(&state, &ui), state.form, "{kind:?}");
         }
+        // Every OpenConnect field with its own value, so two swapped would show.
+        let mut state = EditorState::new(None, Settings::new(), Vec::new(), Some(&snap), Some(Kind::OpenConnect));
+        state.form.oc = OcForm {
+            gateway: "vpn.uzh.ch/staff".into(),
+            protocol: 3,
+            cert: "/c.pem".into(),
+            key: "/k.pem".into(),
+            ca: "/ca.pem".into(),
+            user_agent: "Agent".into(),
+            system: 4,
+            csd: "/csd.sh".into(),
+            udp: false,
+            proxy: "http://proxy:3128".into(),
+            mtu: "1300".into(),
+            refuse_unknown: true,
+        };
+        let ui = to_ui(&state, (SharedString::new(), SharedString::new()));
+        assert_eq!(from_ui(&state, &ui).oc, state.form.oc);
     }
 }

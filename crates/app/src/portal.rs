@@ -25,8 +25,12 @@ pub enum Error {
 /// A filter: its name, and glob patterns such as `*.conf`.
 pub type Filter<'a> = (&'a str, &'a [&'a str]);
 
-/// Asks for a file to open. `None` when the user cancelled.
-pub async fn open_file(title: &str, filters: &[Filter<'_>]) -> Result<Option<PathBuf>, Error> {
+/// Asks for a file to open, starting in `folder` if given. `None` when the user cancelled.
+pub async fn open_file(
+    title: &str,
+    filters: &[Filter<'_>],
+    folder: Option<&std::path::Path>,
+) -> Result<Option<PathBuf>, Error> {
     let filters: Vec<(String, Vec<(u32, String)>)> = filters
         .iter()
         .map(|(name, globs)| (name.to_string(), globs.iter().map(|g| (0u32, g.to_string())).collect()))
@@ -34,6 +38,12 @@ pub async fn open_file(title: &str, filters: &[Filter<'_>]) -> Result<Option<Pat
     let mut options: HashMap<&str, Value> = HashMap::new();
     options.insert("filters", Value::from(filters));
     options.insert("modal", Value::from(true));
+    if let Some(folder) = folder {
+        // A path as bytes, ending in NUL.
+        let mut bytes = folder.as_os_str().as_encoded_bytes().to_vec();
+        bytes.push(0);
+        options.insert("current_folder", Value::from(bytes));
+    }
     request("OpenFile", title, options).await
 }
 
