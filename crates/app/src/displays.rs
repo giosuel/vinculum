@@ -3,9 +3,12 @@
 //! Without an answer within 15 seconds the old settings come back, so a black screen fixes
 //! itself.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use lituus_hypr::{ConfigFile, Hyprland, Mode, Monitor, MonitorRule, config_dir, scale_is_valid, valid_scales};
+use lituus_hypr::{
+    ConfigFile, Hyprland, Mode, Monitor, MonitorRule, WorkspaceRule, config_dir, scale_is_valid, valid_scales,
+};
 use slint::{Model, ModelRc, SharedString, VecModel};
 
 use crate::profiles::{self, Profile, Store, StoredMonitor, StoredWorkspace};
@@ -42,6 +45,9 @@ pub struct State {
     ws_edit: Vec<StoredWorkspace>,
     /// Workspace bindings before the last Apply, to go back to.
     ws_before: Option<Vec<StoredWorkspace>>,
+    /// Where Hyprland's config and displays.toml are, if not the usual places (for tests).
+    hypr_dir: Option<PathBuf>,
+    store_path: Option<PathBuf>,
 }
 
 impl State {
@@ -52,8 +58,33 @@ impl State {
     /// The file's text for these rules.
     fn text(&self, rules: &[MonitorRule]) -> String {
         let profile = self.store.active(rules).map(|i| self.store.profiles[i].name.clone());
-        let ws: Vec<lituus_hypr::WorkspaceRule> = self.store.workspaces.iter().map(StoredWorkspace::rule).collect();
-        lituus_hypr::file(self.lua(), profile.as_deref(), rules, &ws)
+        let ws = self.named_workspaces(&self.store.workspaces);
+        lituus_hypr::file(self.lua(), profile.as_deref(), &self.named_rules(rules), &ws)
+    }
+
+    /// How the written and applied rules name a monitor that the page knows by its selector:
+    /// as that (`desc:…` when it has a serial), or by its port when "Name monitors by
+    /// description" is off. Profiles and workspaces keep the selector, so they match either way.
+    fn named(&self, selector: &str) -> String {
+        match self.monitors.iter().find(|m| m.selector() == selector) {
+            Some(m) if !self.store.name_by_description => m.name.clone(),
+            _ => selector.to_owned(),
+        }
+    }
+
+    fn named_rules(&self, rules: &[MonitorRule]) -> Vec<MonitorRule> {
+        rules
+            .iter()
+            .map(|r| MonitorRule {
+                output: self.named(&r.output),
+                mirror: r.mirror.as_deref().map(|m| self.named(m)),
+                ..r.clone()
+            })
+            .collect()
+    }
+
+    fn named_workspaces(&self, workspaces: &[StoredWorkspace]) -> Vec<WorkspaceRule> {
+        workspaces.iter().map(|w| WorkspaceRule { monitor: self.named(&w.monitor), ..w.rule() }).collect()
     }
 
     /// Apply is waiting for Keep.
@@ -116,7 +147,8 @@ fn auto_switch(weak: &slint::Weak<MainWindow>, state: &mut State) {
     state.ws_edit = ws.clone();
     state.store.workspaces = ws;
     save_store(state);
-    send(weak, state, changed, state.ws_edit.clone());
+    let ws = state.ws_edit.clone();
+    send(weak, state, changed, ws);
     if let Some(file) = &state.file {
         let text = state.text(&rules);
         if file.write(&text).is_ok() {
@@ -142,31 +174,45 @@ fn profile_rules(state: &State, profile: &Profile) -> Vec<MonitorRule> {
 }
 
 fn save_store(state: &mut State) {
-    if let Err(e) = profiles::save(&profiles::path(), &state.store) {
+    let path = state.store_path.clone().unwrap_or_else(profiles::path);
+    if let Err(e) = profiles::save(&path, &state.store) {
         state.error = Some(format!("Couldn't save the profiles: {e}"));
     }
 }
 
 fn loaded(state: &mut State, read: Result<(Hyprland, bool, Vec<Monitor>), lituus_hypr::Error>) {
     if !state.store_read {
-        state.store = profiles::load(&profiles::path());
+        state.store = profiles::load(&state.store_path.clone().unwrap_or_else(profiles::path));
         state.ws_edit = state.store.workspaces.clone();
         state.store_read = true;
     }
     match read {
         Ok((h, lua, mut monitors)) => {
             monitors.sort_by_key(|m| (m.disabled, m.x, m.y));
-            let file = ConfigFile::new(config_dir(), lua);
+            let file = ConfigFile::new(state.hypr_dir.clone().unwrap_or_else(config_dir), lua);
             state.loaded = file.loaded();
             state.saved = file.read();
             state.file = Some(file);
             state.hypr = Some(h);
             state.not_running = false;
-            state.live = monitors.iter().map(|m| MonitorRule::from_monitor(m, &monitors)).collect();
-            // Keep edits in progress across a refresh, unless the monitors changed.
+            let mut live: Vec<MonitorRule> = monitors.iter().map(|m| MonitorRule::from_monitor(m, &monitors)).collect();
+            // Hyprland doesn't report a monitor's VRR setting or reserved area: they stay as last
+            // read or applied, or else come from Lituus's file.
+            let written = state.saved.as_deref().map(lituus_hypr::unreported).unwrap_or_default();
+            for (r, m) in live.iter_mut().zip(&monitors) {
+                if let Some(old) = state.live.iter().find(|o| o.output == r.output) {
+                    (r.vrr, r.reserved) = (old.vrr, old.reserved);
+                } else if let Some(w) = written.iter().find(|w| w.output == r.output || w.output == m.name) {
+                    (r.vrr, r.reserved) = (w.vrr, w.reserved);
+                }
+            }
+            // Keep edits in progress across a refresh, unless the monitors changed. A change made
+            // outside Lituus isn't an edit.
+            let editing = state.dirty();
+            state.live = live;
             let same = state.edit.len() == state.live.len()
                 && state.edit.iter().zip(&state.live).all(|(a, b)| a.output == b.output);
-            if !same || state.keep.is_none() && !state.dirty() {
+            if !same || state.keep.is_none() && !editing {
                 state.edit = state.live.clone();
             }
             state.monitors = monitors;
@@ -181,9 +227,18 @@ fn loaded(state: &mut State, read: Result<(Hyprland, bool, Vec<Monitor>), lituus
 }
 
 /// Sets rules live, on a thread, then reads the monitors again.
-fn send(weak: &slint::Weak<MainWindow>, state: &State, rules: Vec<MonitorRule>, workspaces: Vec<StoredWorkspace>) {
+fn send(weak: &slint::Weak<MainWindow>, state: &mut State, rules: Vec<MonitorRule>, workspaces: Vec<StoredWorkspace>) {
+    // Hyprland doesn't report these back; the next read keeps them from here.
+    for r in &rules {
+        if let Some(l) = state.live.iter_mut().find(|l| l.output == r.output) {
+            (l.vrr, l.reserved) = (r.vrr, r.reserved);
+        }
+    }
     let Some(h) = state.hypr.clone() else { return };
     let lua = state.lua();
+    // Named as in the file, so a rule applied now replaces the one Hyprland read from it.
+    let rules = state.named_rules(&rules);
+    let workspaces = state.named_workspaces(&workspaces);
     let weak = weak.clone();
     std::thread::spawn(move || {
         let mut error = None;
@@ -193,7 +248,7 @@ fn send(weak: &slint::Weak<MainWindow>, state: &State, rules: Vec<MonitorRule>, 
                 error = Some(format!("Hyprland didn't take the settings for {}: {e}", r.output));
             }
         }
-        for w in workspaces.iter().map(StoredWorkspace::rule) {
+        for w in &workspaces {
             let result = if lua { h.eval(&w.lua()) } else { h.keyword("workspace", &w.hyprlang()) };
             if let Err(e) = result {
                 error = Some(format!("Hyprland didn't take the rule for workspace {}: {e}", w.workspace));
@@ -242,6 +297,11 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
         "ws-monitor" | "ws-default" | "ws-persistent" => edit_workspace(state, verb, index, value),
         "switch-hotplug" => {
             state.store.switch_on_hotplug = !state.store.switch_on_hotplug;
+            save_store(state);
+        }
+        // Lituus's file says it's older then, until it's saved.
+        "name-by-description" => {
+            state.store.name_by_description = !state.store.name_by_description;
             save_store(state);
         }
         "profile-save" => {
@@ -680,7 +740,8 @@ pub fn view(state: &State) -> DisplaysView {
                         .map_or("", |o| o.name.as_str())
                 )
             } else {
-                format!("{} × {} · {} Hz · {}×", r.mode.width, r.mode.height, r.mode.refresh_text(), short(r.scale))
+                // Short enough for the smallest monitor on the layout; the card has the details.
+                format!("{} × {} · {} Hz", r.mode.width, r.mode.height, (f64::from(r.mode.refresh) / 1000.0).round())
             }),
             x: r.x as f32,
             y: r.y as f32,
@@ -799,17 +860,21 @@ pub fn view(state: &State) -> DisplaysView {
             parts.push("workspaces changed".to_owned());
         }
         (parts.join(" · "), "accent")
+    } else if state.saved.is_none() {
+        // Lituus hasn't written its file yet, and nothing changed.
+        ("No changes".to_owned(), "faint")
     } else if saved {
         ("Everything is applied and saved".to_owned(), "muted")
     } else {
-        ("Applied live only, not saved yet".to_owned(), "warn")
+        // Changed outside Lituus, or by "Name monitors by description".
+        ("The config file has older settings than the monitors now".to_owned(), "warn")
     };
     v.status = s(status);
     v.status_tone = s(tone);
     let dirty = changed > 0 || ws_changed;
     v.can_apply = dirty && problem.is_none() && state.keep.is_none();
     v.can_revert = dirty && state.keep.is_none();
-    v.can_save = !dirty && !saved && state.keep.is_none();
+    v.can_save = !dirty && state.saved.is_some() && !saved && state.keep.is_none();
     if let Some((deadline, _)) = &state.keep {
         let left = deadline.saturating_duration_since(Instant::now());
         v.keep_open = true;
@@ -823,6 +888,7 @@ pub fn view(state: &State) -> DisplaysView {
         v.config_main = s(shorten_home(&file.main_path().display().to_string()));
     }
     v.config_open = state.config_open;
+    v.by_description = state.store.name_by_description;
     // Workspaces.
     v.ws_monitors = strings(
         std::iter::once("Any monitor".to_owned())
@@ -909,14 +975,34 @@ mod tests {
     fn state() -> State {
         let monitors: Vec<Monitor> =
             serde_json::from_str(include_str!("../../hypr/tests/fixtures/monitors.json")).unwrap();
-        // Not the real displays.toml.
-        let mut st = State { store_read: true, ..State::default() };
+        // Not the real displays.toml or Hyprland config.
+        let mut st = State { store_read: true, hypr_dir: Some("/nonexistent".into()), ..State::default() };
         loaded(&mut st, Ok((Hyprland::at("/nonexistent"), true, monitors)));
         st
     }
 
     fn weak() -> slint::Weak<MainWindow> {
         slint::Weak::default()
+    }
+
+    fn fixture() -> Vec<Monitor> {
+        serde_json::from_str(include_str!("../../hypr/tests/fixtures/monitors.json")).unwrap()
+    }
+
+    /// A state with Hyprland's config and displays.toml in a new folder.
+    fn state_in(name: &str) -> (State, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("lituus-displays-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut st =
+            State { hypr_dir: Some(dir.clone()), store_path: Some(dir.join("displays.toml")), ..State::default() };
+        loaded(&mut st, Ok((Hyprland::at("/nonexistent"), true, fixture())));
+        (st, dir)
+    }
+
+    /// Hyprland's monitors read again.
+    fn reread(st: &mut State, monitors: &[Monitor]) {
+        loaded(st, Ok((Hyprland::at("/nonexistent"), true, monitors.to_vec())));
     }
 
     #[test]
@@ -928,7 +1014,9 @@ mod tests {
         assert_eq!(v.state, "list");
         assert_eq!(v.sub, "4 monitors");
         assert_eq!((v.bounds_w, v.bounds_h), (7680.0, 2880.0));
-        assert_eq!(v.monitors.row_data(2).unwrap().sub, "3840 × 2160 · 240 Hz · 1.5×");
+        assert_eq!(v.monitors.row_data(2).unwrap().sub, "3840 × 2160 · 240 Hz");
+        // 239.76 Hz, rounded on the layout.
+        assert_eq!(v.monitors.row_data(0).unwrap().sub, "2560 × 1440 · 240 Hz");
     }
 
     #[test]
@@ -1071,6 +1159,112 @@ mod tests {
         let names: Vec<&str> = st.store.profiles.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["TV"]);
         assert!(!change_profile(&mut st, "profile-delete", "Desk"));
+    }
+
+    #[test]
+    fn nothing_to_save_before_lituus_wrote_its_file() {
+        let (st, dir) = state_in("first");
+        let v = view(&st);
+        assert_eq!(v.status, "No changes");
+        assert!(!v.can_save && !v.can_apply && !v.can_revert);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_change_made_outside_lituus_isnt_an_edit() {
+        let mut st = state();
+        let mut moved = fixture();
+        moved[2].x += 100; // DP-4
+        reread(&mut st, &moved);
+        assert_eq!(st.edit, st.live);
+        assert_eq!(st.edit[3].x, 6438);
+        // An edit in progress stays.
+        act(&weak(), &mut st, "select", "3", 0.0);
+        act(&weak(), &mut st, "x", "7000", 0.0);
+        reread(&mut st, &moved);
+        assert_eq!(st.edit[3].x, 7000);
+    }
+
+    #[test]
+    fn a_file_with_older_settings_can_be_saved() {
+        let (mut st, dir) = state_in("older");
+        std::fs::write(dir.join("lituus.lua"), "-- Written by Lituus (Displays).\n").unwrap();
+        reread(&mut st, &fixture());
+        let v = view(&st);
+        assert_eq!(v.status, "The config file has older settings than the monitors now");
+        assert!(v.can_save);
+        act(&weak(), &mut st, "save", "", 0.0);
+        let v = view(&st);
+        assert_eq!(v.status, "Everything is applied and saved");
+        assert!(!v.can_save);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn apply_then_keep_ends_saved() {
+        let (mut st, dir) = state_in("keep");
+        let w = weak();
+        // DP-4 from 59.95 Hz to its fastest mode, with VRR on.
+        act(&w, &mut st, "select", "3", 0.0);
+        act(&w, &mut st, "rate", "0", 0.0);
+        act(&w, &mut st, "vrr", "2", 0.0);
+        assert_eq!(view(&st).status, "1 monitor changed");
+        act(&w, &mut st, "apply", "", 0.0);
+        assert!(st.keep_pending());
+        // Hyprland reports the mode it listed as 239.76 Hz as 239.757, and not the VRR setting.
+        let mut after = fixture();
+        after[2].refresh_rate = 239.757;
+        reread(&mut st, &after);
+        act(&w, &mut st, "keep", "", 0.0);
+        reread(&mut st, &after);
+        let v = view(&st);
+        assert_eq!(v.status, "Everything is applied and saved");
+        assert!(!v.can_apply && !v.can_save);
+        assert_eq!(st.live[3].vrr, Some(1));
+        // After a restart, the VRR setting comes from the file.
+        let mut again = State { hypr_dir: st.hypr_dir.clone(), store_path: st.store_path.clone(), ..State::default() };
+        reread(&mut again, &after);
+        assert_eq!(again.live[3].vrr, Some(1));
+        assert_eq!(view(&again).status, "Everything is applied and saved");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn monitors_can_be_named_by_port() {
+        let (mut st, dir) = state_in("names");
+        let w = weak();
+        // The G8 mirrors DP-3, and workspace 1 opens on the G8.
+        let mut mirrored = fixture();
+        mirrored[1].mirror_of = "0".into();
+        reread(&mut st, &mirrored);
+        act(&w, &mut st, "ws-monitor", "0", 3.0);
+        act(&w, &mut st, "keep", "", 0.0);
+        act(&w, &mut st, "profile-save", "Desk", 0.0);
+        let text = st.text(&st.edit);
+        assert!(text.contains(r#"output = "desc:Samsung Electric Company Odyssey G61SH HNAL600836""#), "{text}");
+        assert!(text.contains(r#"mirror = "desc:Samsung Electric Company Odyssey G61SH HNAL600836""#), "{text}");
+        assert!(text.contains(r#"monitor = "desc:Samsung Electric Company Odyssey G81SF HNAY500052""#), "{text}");
+        assert_eq!(view(&st).status, "Everything is applied and saved");
+
+        act(&w, &mut st, "name-by-description", "", 0.0);
+        assert!(!view(&st).by_description);
+        let text = st.text(&st.edit);
+        assert!(!text.contains("desc:"), "{text}");
+        assert!(text.contains(r#"output = "DP-3""#) && text.contains(r#"mirror = "DP-3""#), "{text}");
+        assert!(text.contains(r#"hl.workspace_rule({ workspace = "1", monitor = "DP-5" })"#), "{text}");
+        assert!(text.contains("-- Profile: Desk"), "{text}");
+        // The file still names them by description until it's saved.
+        let v = view(&st);
+        assert_eq!(v.status, "The config file has older settings than the monitors now");
+        assert!(v.can_save && !v.can_apply);
+        act(&w, &mut st, "save", "", 0.0);
+        assert_eq!(view(&st).status, "Everything is applied and saved");
+        // Profiles still match the monitors, and the setting is remembered.
+        let connected: Vec<String> = st.monitors.iter().map(Monitor::selector).collect();
+        assert_eq!(st.store.matching(&connected).map(|p| p.name.as_str()), Some("Desk"));
+        assert_eq!(st.store.active(&st.live), Some(0));
+        assert!(!profiles::load(&dir.join("displays.toml")).name_by_description);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

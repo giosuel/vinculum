@@ -32,7 +32,7 @@ component NavButton inherits Rectangle {
         // The sidebar's list would cut off a ring outside it.
         ring-gap: -2px;
         border-radius: root.item.indent ? 9px : 10px;
-        background: root.item.current ? Theme.accent-soft-bg : self.has-hover ? Theme.sel-bg : transparent;
+        background: root.item.current ? Theme.accent-soft-bg : self.has-hover ? Theme.hover : transparent;
         activated => { root.clicked(); }
         // The accent bar on the current page's left edge.
         if root.item.current: Rectangle { x: 0; width: 3px; height: parent.height - 12px; y: 6px; border-radius: 1.5px; background: Theme.accent; }
@@ -207,7 +207,7 @@ export component Sidebar inherits Rectangle {
             height: host-row.preferred-height;
             border-radius: 8px;
             ring-gap: -2px;
-            background: self.has-hover ? Theme.sel-bg : transparent;
+            background: self.has-hover ? Theme.hover : transparent;
             accessible-role: button;
             accessible-label: "Change the hostname";
             accessible-action-default => { root.hostname-clicked(); }

@@ -107,7 +107,7 @@ export component Button inherits Focusable {
     border-radius: 8px;
     border-width: kind == "danger" || kind == "destructive" ? 0 : 1px;
     border-color: kind == "primary" ? Theme.accent : Theme.ctrl-border;
-    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (self.has-hover && root.enabled ? Theme.sel-bg : Theme.ctrl-bg);
+    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (self.has-hover && root.enabled ? Theme.hovered(Theme.ctrl-bg) : Theme.ctrl-bg);
     opacity: root.enabled ? 1 : 0.45;
     accessible-role: button;
     accessible-label: label;
@@ -137,7 +137,7 @@ export component IconButton inherits Focusable {
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.ctrl-border;
-    background: self.has-hover ? Theme.sel-bg : transparent;
+    background: self.has-hover ? Theme.hover : transparent;
     accessible-role: button;
     accessible-label: label;
     accessible-action-default => { clicked(); }
@@ -182,7 +182,7 @@ export component PillSwitch inherits Focusable {
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.ctrl-border;
-    background: self.has-hover ? Theme.sel-bg : Theme.input-bg;
+    background: self.has-hover ? Theme.hovered(Theme.input-bg) : Theme.input-bg;
     activated => { root.toggled(); }
     pill := HorizontalLayout {
         padding-left: 12px;
@@ -236,6 +236,8 @@ export component Scroll inherits Rectangle {
     /// The scrollbar's distance from the right edge; a negative one puts it in the padding
     /// beside the area instead of over its content.
     in property <length> bar-inset: 2px;
+    /// The height the content asks for, for a page that sizes the area after it.
+    out property <length> content-height: body.preferred-height;
     /// Scrolled by the user, with the wheel or the scrollbar.
     callback scrolled();
     // Its size comes from where it's put, never from the content; the content's width is still

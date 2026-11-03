@@ -78,7 +78,7 @@ component BtListRow inherits Focusable {
     ring-gap: -2px;
     focus-key: "row:" + entry.id;
     selected-key: entry.selected ? "list:selected" : "";
-    background: entry.selected ? Theme.accent-soft-bg : self.has-hover ? Theme.sel-bg : transparent;
+    background: entry.selected ? Theme.accent-soft-bg : self.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
     accessible-label: entry.name + ", " + entry.meta;
     accessible-item-selected: entry.selected;
@@ -163,7 +163,8 @@ export component BluetoothPage inherits HorizontalLayout {
                     padding: 10px;
                     padding-right: 6px;
                     spacing: 10px;
-                    Icon { name: root.page.message-tone == "warn" ? "warning" : "error"; tint: root.page.message-tone == "danger" ? Theme.danger : root.page.message-tone == "warn" ? Theme.warn-text : Theme.muted; y: 2px; }
+                    // On the first line of the text.
+                    VerticalLayout { alignment: start; Icon { name: root.page.message-tone == "warn" ? "warning" : "error"; tint: root.page.message-tone == "danger" ? Theme.danger : root.page.message-tone == "warn" ? Theme.warn-text : Theme.muted; } }
                     VerticalLayout {
                         spacing: 2px;
                         horizontal-stretch: 1;
@@ -181,7 +182,7 @@ export component BluetoothPage inherits HorizontalLayout {
                         width: 24px;
                         height: 24px;
                         border-radius: 6px;
-                        background: self.has-hover ? Theme.sel-bg : transparent;
+                        background: self.has-hover ? Theme.hover : transparent;
                         accessible-role: button;
                         accessible-label: "Dismiss";
                         accessible-action-default => { root.act("dismiss", ""); }
@@ -308,7 +309,7 @@ export component BluetoothPage inherits HorizontalLayout {
                     for option[i] in root.page.audio: Rectangle {
                         horizontal-stretch: 1;
                         border-radius: 7px;
-                        background: i == root.page.audio-selected ? Theme.accent-soft-bg : audio-touch.has-hover ? Theme.sel-bg : transparent;
+                        background: i == root.page.audio-selected ? Theme.accent-soft-bg : audio-touch.has-hover ? Theme.hover : transparent;
                         accessible-role: tab;
                         accessible-label: option.label;
                         accessible-item-selected: i == root.page.audio-selected;

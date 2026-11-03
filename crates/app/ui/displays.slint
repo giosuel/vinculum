@@ -70,6 +70,8 @@ export struct DisplaysView {
     config-main: string,
     config-open: bool,
     config-text: string,
+    /// "Name monitors by description" is on.
+    by-description: bool,
     workspaces: [WorkspaceRow],
     ws-monitors: [string],
     profiles: [ProfileRow],
@@ -81,13 +83,14 @@ export struct DisplaysView {
 component Badge inherits Rectangle {
     in property <int> n;
     in property <bool> on;
-    width: 22px;
-    height: 22px;
-    border-radius: 11px;
+    in property <length> size: 22px;
+    width: size;
+    height: size;
+    border-radius: size / 2;
     background: on ? Theme.accent : Theme.ctrl-bg;
     border-width: on ? 0 : 1px;
     border-color: Theme.ctrl-border;
-    Text { text: root.n; color: root.on ? Theme.on-accent : Theme.muted; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+    Text { text: root.n; color: root.on ? Theme.on-accent : Theme.muted; font-size: max(11px, round(root.size / 2px) * 1px); font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
 }
 
 /// The monitors to scale, draggable.
@@ -97,18 +100,29 @@ component Layout inherits Rectangle {
     callback select(int);
     callback drag(int, float, float, bool);
     in property <length> margin: 18px;
+    property <length> gap: 6px;
     // Layout pixels to screen.
     property <float> k: min((self.width - 2 * margin) / 1px / max(1, view.bounds-w), (self.height - 2 * margin) / 1px / max(1, view.bounds-h));
     property <length> ox: (self.width - view.bounds-w * k * 1px) / 2;
     property <length> oy: (self.height - view.bounds-h * k * 1px) / 2;
     // Space or Enter selects one; dragging stays a mouse thing.
-    for m[i] in root.view.monitors: Focusable {
+    for m[i] in root.view.monitors: tile := Focusable {
         property <length> dx: touch.pressed ? touch.mouse-x - touch.pressed-x : 0;
         property <length> dy: touch.pressed ? touch.mouse-y - touch.pressed-y : 0;
-        x: root.ox + (m.x - root.view.bounds-x) * root.k * 1px + 1.5px + dx;
-        y: root.oy + (m.y - root.view.bounds-y) * root.k * 1px + 1.5px + dy;
-        width: m.w * root.k * 1px - 3px;
-        height: m.h * root.k * 1px - 3px;
+        // The edges on whole pixels, so borders and text stay sharp, and a gap between monitors
+        // that touch.
+        property <length> left: round((root.ox + (m.x - root.view.bounds-x) * root.k * 1px) / 1px) * 1px;
+        property <length> top: round((root.oy + (m.y - root.view.bounds-y) * root.k * 1px) / 1px) * 1px;
+        property <length> right: round((root.ox + (m.x + m.w - root.view.bounds-x) * root.k * 1px) / 1px) * 1px;
+        property <length> bottom: round((root.oy + (m.y + m.h - root.view.bounds-y) * root.k * 1px) / 1px) * 1px;
+        // Text, badge and padding grow with the monitor, from their size at a 1200 × 760 window;
+        // on a smaller monitor the padding and badge shrink, but the text doesn't.
+        property <float> f: clamp(min(self.width / 165px, self.height / 92px), 0.7, 1.5);
+        property <float> text-f: max(1, f);
+        x: left + root.gap / 2 + dx;
+        y: top + root.gap / 2 + dy;
+        width: right - left - root.gap;
+        height: bottom - top - root.gap;
         border-radius: 8px;
         border-width: m.selected ? 2px : 1px;
         border-color: m.selected ? Theme.accent : Theme.ctrl-border;
@@ -125,18 +139,18 @@ component Layout inherits Rectangle {
         accessible-action-default => { root.select(i); }
         activated => { root.select(i); }
         VerticalLayout {
-            padding: 10px;
-            spacing: 2px;
+            padding: round(10 * tile.f) * 1px;
+            spacing: round(2 * tile.f) * 1px;
             HorizontalLayout {
-                spacing: 7px;
+                spacing: round(7 * tile.f) * 1px;
                 alignment: start;
-                Badge { n: m.n; on: m.selected; }
-                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: 11px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+                Badge { n: m.n; on: m.selected; size: round(22 * tile.f) * 1px; }
+                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: round(12 * tile.text-f) * 1px; font-family: "JetBrains Mono"; vertical-alignment: center; }
             }
             Rectangle { vertical-stretch: 1; }
-            Text { text: m.name; color: Theme.text; font-size: 12px; font-weight: 600; overflow: elide; }
-            if !root.show-workspaces: Text { text: m.sub; color: Theme.muted; font-size: 11px; overflow: elide; }
-            if root.show-workspaces: Text { text: m.workspaces == "" ? "No workspaces bound" : m.workspaces; color: m.workspaces == "" ? Theme.faint : Theme.accent; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+            Text { text: m.name; color: Theme.text; font-size: round(13 * tile.text-f) * 1px; font-weight: 600; overflow: elide; }
+            if !root.show-workspaces: Text { text: m.sub; color: Theme.muted; font-size: round(12 * tile.text-f) * 1px; overflow: elide; }
+            if root.show-workspaces: Text { text: m.workspaces == "" ? "No workspaces bound" : m.workspaces; color: m.workspaces == "" ? Theme.faint : Theme.accent; font-size: round(12 * tile.text-f) * 1px; font-family: "JetBrains Mono"; overflow: elide; }
         }
         touch := TouchArea {
             mouse-cursor: m.disabled || m.mirrored ? pointer : move;
@@ -185,7 +199,8 @@ export component DisplaysPage inherits VerticalLayout {
             padding: 6px;
             padding-left: 14px;
             spacing: 10px;
-            Icon { name: "warning"; tint: Theme.warn-text; y: (parent.height - 16px) / 2; }
+            // Centred by a layout: a `y` here put the icon at the top when the text is one line.
+            VerticalLayout { alignment: center; Icon { name: "warning"; tint: Theme.warn-text; } }
             Text {
                 text: "Your Hyprland config doesn't load Lituus's file yet, so changes are lost when Hyprland restarts.";
                 color: Theme.warn-text;
@@ -194,61 +209,76 @@ export component DisplaysPage inherits VerticalLayout {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
-            Button {
-                label: "Copy " + root.view.load-line;
-                button-height: 30px;
-                min-width: self.preferred-width;
-                y: (parent.height - self.height) / 2;
-                clicked => { copy-field.select-all(); copy-field.copy(); }
+            VerticalLayout {
+                alignment: center;
+                Button {
+                    label: "Copy " + root.view.load-line;
+                    button-height: 30px;
+                    min-width: self.preferred-width;
+                    horizontal-stretch: 0;
+                    clicked => { copy-field.select-all(); copy-field.copy(); }
+                }
             }
         }
     }
 
-    Hero {
-        title: "Displays";
-        sub: root.view.sub;
-        // Smaller in a shorter window, down to where the monitors are still readable; the banner
-        // takes its height from the hero's, so the settings keep theirs.
-        hero-height: root.view.state != "list" ? 140px : clamp(root.window-height - 400px, 236px, 330px) - (root.view.not-loaded ? 44px : 0);
-        compact: root.compact;
-        aside: display-tools.width + 18px;
-        if root.view.state == "list": Layout {
-            x: 20px;
-            y: root.compact ? 54px : 76px;
-            width: parent.width - 40px;
-            height: parent.height - self.y - (root.compact ? 22px : 28px);
-            margin: root.compact ? 8px : 18px;
-            view: root.view;
-            show-workspaces: root.page-tab == 1;
-            select(i) => { root.act("select", "" + i, 0); }
-            drag(i, x, y, done) => { root.drag(i, x, y, done); }
-        }
-        if root.view.state == "list": Text {
-            x: 24px;
-            y: parent.height - 24px;
-            text: root.view.logical;
-            color: Theme.faint;
-            font-size: 11px;
-        }
-        display-tools := HorizontalLayout {
-            x: parent.width - self.width - 18px;
-            y: 18px;
-            width: self.preferred-width;
-            height: 36px;
-            spacing: 8px;
-            if root.view.state == "list": Segmented {
-                label: "Displays";
-                height: 36px;
-                options: ["Monitor", "Workspaces", "Profiles"];
-                selected <=> root.page-tab;
+    // On the Monitor tab the hero (with the monitors) grows into the room the settings leave, up
+    // to 720 px. Workspaces and Profiles keep it at its smallest: their lists need the room.
+    hero-box := Rectangle {
+        // Smaller in a shorter window, down to where the monitors are still readable, and the
+        // settings scroll; the banner takes its height from the hero's, so the settings keep theirs.
+        property <length> smallest: root.view.state != "list" ? 140px : clamp(root.window-height - 400px, 236px, 330px) - (root.view.not-loaded ? 44px : 0);
+        property <bool> grows: root.view.state == "list" && root.page-tab == 0;
+        min-height: smallest;
+        max-height: grows ? 720px : smallest;
+        vertical-stretch: grows ? 1 : 0;
+        Hero {
+            title: "Displays";
+            sub: root.view.sub;
+            hero-height: hero-box.height;
+            compact: root.compact;
+            aside: display-tools.width + 18px;
+            if root.view.state == "list": Layout {
+                x: 20px;
+                y: root.compact ? 54px : 76px;
+                width: parent.width - 40px;
+                height: parent.height - self.y - (root.compact ? 22px : 28px);
+                margin: root.compact ? 8px : 18px;
+                view: root.view;
+                show-workspaces: root.page-tab == 1;
+                select(i) => { root.act("select", "" + i, 0); }
+                drag(i, x, y, done) => { root.drag(i, x, y, done); }
             }
-            if root.view.state == "list": Button { label: "View config"; button-height: 36px; clicked => { root.act("view-config", "", 0); } }
+            if root.view.state == "list": Text {
+                x: 24px;
+                y: parent.height - 24px;
+                text: root.view.logical;
+                color: Theme.faint;
+                font-size: 12px;
+            }
+            display-tools := HorizontalLayout {
+                x: parent.width - self.width - 18px;
+                y: 18px;
+                width: self.preferred-width;
+                height: 36px;
+                spacing: 8px;
+                if root.view.state == "list": Segmented {
+                    label: "Displays";
+                    height: 36px;
+                    options: ["Monitor", "Workspaces", "Profiles"];
+                    selected <=> root.page-tab;
+                }
+                if root.view.state == "list": Button { label: "View config"; button-height: 36px; clicked => { root.act("view-config", "", 0); } }
+            }
         }
     }
 
     // The settings scroll in a short window; the bar with Apply stays below them.
     if root.view.state == "list": Scroll {
-        vertical-stretch: 1;
+        // On the Monitor tab it asks for the settings' height and grows only once the hero has
+        // all it takes; shorter, it scrolls.
+        preferred-height: root.page-tab == 0 ? self.content-height : 0;
+        vertical-stretch: root.page-tab == 0 ? 0 : 1;
         fill: true;
         spacing: 14px;
         bar-inset: -16px;
@@ -525,7 +555,7 @@ export component DisplaysPage inherits VerticalLayout {
             background: root.view.status-tone == "danger" ? Theme.danger : root.view.status-tone == "warn" ? Theme.warn-text : root.view.status-tone == "accent" ? Theme.accent : Theme.faint;
         }
         Text { text: root.view.status; color: root.view.status-tone == "danger" ? Theme.danger : Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-        if root.view.can-save: Button { label: "Save"; button-height: 34px; horizontal-stretch: 0; min-width: 84px; clicked => { root.act("save", "", 0); } }
+        if root.view.can-save: Button { label: "Save to config file"; button-height: 34px; horizontal-stretch: 0; min-width: 84px; clicked => { root.act("save", "", 0); } }
         Button { label: "Revert"; button-height: 34px; horizontal-stretch: 0; min-width: 84px; enabled: root.view.can-revert; clicked => { root.act("revert", "", 0); } }
         Button { label: "Apply"; kind: "primary"; button-height: 34px; horizontal-stretch: 0; min-width: 96px; enabled: root.view.can-apply; clicked => { root.act("apply", "", 0); } }
     }
@@ -570,6 +600,7 @@ export component KeepDialog inherits Modal {
 export component ConfigDialog inherits Modal {
     in property <DisplaysView> view;
     callback closed();
+    callback name-by-description();
     card-width: min(self.width - 80px, 820px);
     card-spacing: 12px;
     label: "Config file";
@@ -591,6 +622,21 @@ export component ConfigDialog inherits Modal {
             viewport-width: max(self.width, code.preferred-width);
             viewport-height: code.preferred-height;
             code := TextInput { text: root.view.config-text; read-only: true; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; wrap: no-wrap; }
+        }
+    }
+    // Like nwg-displays' "Use desc:". The text above shows the change at once; the file changes
+    // with "Save to config file".
+    VerticalLayout {
+        spacing: 4px;
+        CheckBox { checked: root.view.by-description; text: "Name monitors by description"; toggled(on) => { root.name-by-description(); } }
+        HorizontalLayout {
+            padding-left: 28px;
+            Text {
+                text: "By make, model and serial, so a monitor keeps its settings on another port. Off: by port, such as DP-1.";
+                color: Theme.faint;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
         }
     }
     HorizontalLayout {

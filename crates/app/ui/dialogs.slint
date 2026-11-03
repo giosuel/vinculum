@@ -69,7 +69,7 @@ export component TextField inherits Rectangle {
             height: 28px;
             y: (parent.height - self.height) / 2;
             border-radius: 6px;
-            background: self.has-hover ? Theme.sel-bg : transparent;
+            background: self.has-hover ? Theme.hover : transparent;
             accessible-role: button;
             accessible-label: root.shown ? "Hide password" : "Show password";
             accessible-action-default => { root.shown = !root.shown; }
@@ -110,7 +110,7 @@ export component Segmented inherits Focusable {
             // Measured in the selected (heavier) weight, so choosing an option doesn't resize it.
             min-width: widest.preferred-width + 24px;
             border-radius: 7px;
-            background: i == root.selected ? Theme.accent-soft-bg : option-touch.has-hover && root.enabled ? Theme.sel-bg : transparent;
+            background: i == root.selected ? Theme.accent-soft-bg : option-touch.has-hover && root.enabled ? Theme.hover : transparent;
             accessible-role: tab;
             accessible-label: option;
             accessible-item-selected: i == root.selected;
@@ -180,7 +180,7 @@ export component Select inherits Focusable {
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.border2;
-    background: self.has-hover ? Theme.sel-bg : Theme.input-bg;
+    background: self.has-hover ? Theme.hovered(Theme.input-bg) : Theme.input-bg;
     accessible-role: combobox;
     accessible-label: label;
     accessible-value: root.options[root.selected];
@@ -232,7 +232,7 @@ export component Select inherits Focusable {
                 for option[i] in root.options: Rectangle {
                     height: root.details.length > i ? 44px : 32px;
                     border-radius: 6px;
-                    background: item.has-hover ? Theme.sel-bg : i == root.selected ? Theme.accent-soft-bg : transparent;
+                    background: item.has-hover ? Theme.hover : i == root.selected ? Theme.accent-soft-bg : transparent;
                     // The arrow keys' option, drawn like the focus ring.
                     border-width: i == root.highlighted && Focus.keyboard ? 2px : 0;
                     border-color: Theme.accent;

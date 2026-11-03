@@ -21,6 +21,7 @@ export global Theme {
     in-out property <color> off-track: #3a3f46;
     in-out property <color> knob-off: #c9ced4;
     in-out property <color> bar-off: #3a3f46;
+    /// The old hover colour; use `hover` instead.
     in-out property <color> sel-bg: #23272b;
     in-out property <color> danger: #f08a7a;
     in-out property <color> warn-bg: #2a2518;
@@ -29,6 +30,15 @@ export global Theme {
     /// The accent glow behind a page's hero, and whether to draw it.
     in-out property <color> glow: #173a33;
     in-out property <bool> gradient: true;
+
+    /// Hover, on a transparent background: a light tint of the text colour, so it fits on any
+    /// background (the hero's glow too) and stays weaker than the selected state.
+    out property <color> hover: text.transparentize(0.94);
+
+    /// Hover on a filled control: its background with the same tint.
+    public pure function hovered(background: color) -> color {
+        return background.mix(text, 0.94);
+    }
 
     // A tone name from Rust ("accent", "danger", "muted", "faint") as a colour.
     public pure function tone(name: string) -> color {
