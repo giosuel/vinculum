@@ -60,7 +60,7 @@ export component DetailsPane inherits Rectangle {
                     height: 24px;
                     y: (parent.height - self.height) / 2;
                     border-radius: 6px;
-                    background: pencil.has-hover ? Theme.sel-bg : transparent;
+                    background: pencil.has-hover ? Theme.hover : transparent;
                     accessible-role: button;
                     accessible-label: "Rename";
                     accessible-action-default => { root.rename(); }

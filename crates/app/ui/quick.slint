@@ -14,7 +14,7 @@ component NetworkRow inherits Rectangle {
     callback connect();
     height: 48px;
     border-radius: 8px;
-    background: network.active ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    background: network.active ? Theme.accent-soft-bg : touch.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
     accessible-label: network.name + ", " + network.meta;
     touch := TouchArea {}
@@ -130,7 +130,7 @@ export component QuickWindow inherits Window {
                     border-radius: 8px;
                     border-width: 1px;
                     border-color: Theme.ctrl-border;
-                    background: settings.has-hover ? Theme.sel-bg : Theme.ctrl-bg;
+                    background: settings.has-hover ? Theme.hovered(Theme.ctrl-bg) : Theme.ctrl-bg;
                     accessible-role: button;
                     accessible-label: "Settings";
                     accessible-action-default => { root.open-settings(); }

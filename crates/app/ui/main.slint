@@ -34,7 +34,7 @@ component ListRow inherits Rectangle {
     callback clicked();
     height: 52px;
     border-radius: 8px;
-    background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
     accessible-label: entry.name + ", " + entry.meta;
     accessible-item-selected: entry.selected;
@@ -499,7 +499,7 @@ export component MainWindow inherits Window {
                                     width: 24px;
                                     height: 24px;
                                     border-radius: 6px;
-                                    background: close-touch.has-hover ? Theme.sel-bg : transparent;
+                                    background: close-touch.has-hover ? Theme.hover : transparent;
                                     accessible-role: button;
                                     accessible-label: "Dismiss";
                                     accessible-action-default => { root.dismiss-message(); }
@@ -547,7 +547,7 @@ export component MainWindow inherits Window {
                             border-radius: 8px;
                             border-width: 1px;
                             border-color: Theme.ctrl-border;
-                            background: bottom-touch.has-hover ? Theme.sel-bg : transparent;
+                            background: bottom-touch.has-hover ? Theme.hover : transparent;
                             accessible-role: button;
                             accessible-label: root.bottom-label;
                             accessible-action-default => { root.bottom-clicked(); }
@@ -934,7 +934,7 @@ export component MainWindow inherits Window {
                         border-radius: 10px;
                         border-width: 1px;
                         border-color: Theme.border2;
-                        background: tile.has-hover && kind.ready ? Theme.sel-bg : transparent;
+                        background: tile.has-hover && kind.ready ? Theme.hover : transparent;
                         opacity: kind.ready ? 1 : 0.5;
                         accessible-role: button;
                         accessible-label: kind.title;

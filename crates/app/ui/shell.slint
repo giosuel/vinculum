@@ -17,7 +17,7 @@ component NavButton inherits Rectangle {
     callback clicked();
     height: 36px;
     border-radius: 10px;
-    background: item.current ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    background: item.current ? Theme.accent-soft-bg : touch.has-hover ? Theme.hover : transparent;
     accessible-role: button;
     accessible-label: item.sub == "" ? item.label : item.label + ", " + item.sub;
     accessible-action-default => { clicked(); }
@@ -139,7 +139,7 @@ export component Sidebar inherits Rectangle {
         if root.hostname != "": Rectangle {
             height: host-row.preferred-height;
             border-radius: 8px;
-            background: host-touch.has-hover ? Theme.sel-bg : transparent;
+            background: host-touch.has-hover ? Theme.hover : transparent;
             accessible-role: button;
             accessible-label: "Change the hostname";
             accessible-action-default => { root.hostname-clicked(); }

@@ -16,7 +16,7 @@ export component Button inherits Rectangle {
     border-radius: 8px;
     border-width: kind == "danger" || kind == "destructive" ? 0 : 1px;
     border-color: kind == "primary" ? Theme.accent : Theme.ctrl-border;
-    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (touch.has-hover && enabled ? Theme.sel-bg : Theme.ctrl-bg);
+    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (touch.has-hover && enabled ? Theme.hovered(Theme.ctrl-bg) : Theme.ctrl-bg);
     opacity: enabled ? 1 : 0.45;
     accessible-role: button;
     accessible-label: label;
@@ -50,7 +50,7 @@ export component IconButton inherits Rectangle {
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.ctrl-border;
-    background: touch.has-hover ? Theme.sel-bg : transparent;
+    background: touch.has-hover ? Theme.hover : transparent;
     accessible-role: button;
     accessible-label: label;
     accessible-action-default => { clicked(); }

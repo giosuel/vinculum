@@ -70,7 +70,7 @@ component BtListRow inherits Rectangle {
     callback button-clicked();
     height: 52px;
     border-radius: 8px;
-    background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
     accessible-label: entry.name + ", " + entry.meta;
     accessible-item-selected: entry.selected;
@@ -119,7 +119,7 @@ component Pill inherits Rectangle {
     border-radius: 13px;
     border-width: 1px;
     border-color: on ? Theme.accent-soft-border : Theme.ctrl-border;
-    background: on ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    background: on ? Theme.accent-soft-bg : touch.has-hover ? Theme.hover : transparent;
     accessible-role: checkbox;
     accessible-label: label;
     accessible-checked: on;
@@ -208,7 +208,7 @@ export component BluetoothPage inherits HorizontalLayout {
                         width: 24px;
                         height: 24px;
                         border-radius: 6px;
-                        background: dismiss.has-hover ? Theme.sel-bg : transparent;
+                        background: dismiss.has-hover ? Theme.hover : transparent;
                         accessible-role: button;
                         accessible-label: "Dismiss";
                         accessible-action-default => { root.act("dismiss", ""); }
@@ -325,7 +325,7 @@ export component BluetoothPage inherits HorizontalLayout {
                     for option[i] in root.page.audio: Rectangle {
                         horizontal-stretch: 1;
                         border-radius: 7px;
-                        background: i == root.page.audio-selected ? Theme.accent-soft-bg : audio-touch.has-hover ? Theme.sel-bg : transparent;
+                        background: i == root.page.audio-selected ? Theme.accent-soft-bg : audio-touch.has-hover ? Theme.hover : transparent;
                         accessible-role: tab;
                         accessible-label: option.label;
                         accessible-item-selected: i == root.page.audio-selected;
