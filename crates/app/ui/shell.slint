@@ -3,7 +3,7 @@
 // the cards below it.
 import { Theme } from "theme.slint";
 import { Icon, Logo } from "icons.slint";
-import { Switch, SectionLabel } from "controls.slint";
+import { Switch, SectionLabel, Focusable } from "controls.slint";
 
 /// sub: a short status on the right ("Home", "2 on", "45%"). open: an item showing its
 /// sub-items under it (Network, on one of its pages). indent: a sub-item.
@@ -21,11 +21,16 @@ component NavButton inherits Rectangle {
     accessible-role: button;
     accessible-label: item.sub == "" ? item.label : item.label + ", " + item.sub;
     accessible-action-default => { clicked(); }
-    Rectangle {
+    forward-focus: body;
+    body := Focusable {
         x: root.item.indent ? 20px : 0;
         width: parent.width - self.x;
+        focus-key: "nav:" + root.item.id;
+        // The sidebar's list would cut off a ring outside it.
+        ring-gap: -2px;
         border-radius: root.item.indent ? 9px : 10px;
-        background: root.item.current ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+        background: root.item.current ? Theme.accent-soft-bg : self.has-hover ? Theme.sel-bg : transparent;
+        activated => { root.clicked(); }
         // The accent bar on the current page's left edge.
         if root.item.current: Rectangle { x: 0; width: 3px; height: parent.height - 12px; y: 6px; border-radius: 1.5px; background: Theme.accent; }
         HorizontalLayout {
@@ -57,7 +62,6 @@ component NavButton inherits Rectangle {
                 max-width: 90px;
             }
         }
-        touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
     }
 }
 
@@ -170,13 +174,15 @@ export component Sidebar inherits Rectangle {
             Text { text: "Airplane mode"; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
             Switch { on: root.airplane; label: "Airplane mode"; y: (parent.height - self.height) / 2; toggled => { root.airplane-toggled(); } }
         }
-        if root.hostname != "": Rectangle {
+        if root.hostname != "": Focusable {
             height: host-row.preferred-height;
             border-radius: 8px;
-            background: host-touch.has-hover ? Theme.sel-bg : transparent;
+            ring-gap: -2px;
+            background: self.has-hover ? Theme.sel-bg : transparent;
             accessible-role: button;
             accessible-label: "Change the hostname";
             accessible-action-default => { root.hostname-clicked(); }
+            activated => { root.hostname-clicked(); }
             host-row := HorizontalLayout {
                 padding: 10px;
                 padding-top: 6px;
@@ -185,7 +191,6 @@ export component Sidebar inherits Rectangle {
                 Text { text: "Hostname"; color: Theme.faint; font-size: 12px; }
                 Text { text: root.hostname; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; horizontal-stretch: 1; }
             }
-            host-touch := TouchArea { mouse-cursor: pointer; clicked => { root.hostname-clicked(); } }
         }
     }
     Rectangle { x: parent.width - 1px; width: 1px; background: Theme.border; }

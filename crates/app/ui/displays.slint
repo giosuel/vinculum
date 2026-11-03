@@ -3,7 +3,7 @@
 // what's applied and saved. What it shows comes from Rust (src/displays.rs).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Scroll } from "controls.slint";
+import { Button, IconButton, Switch, SectionLabel, Scroll, Focusable } from "controls.slint";
 import { Segmented, Select, TextField, CheckBox, Modal } from "dialogs.slint";
 import { Hero, Card } from "shell.slint";
 import { Slider } from "sound.slint";
@@ -101,7 +101,8 @@ component Layout inherits Rectangle {
     property <float> k: min((self.width - 2 * margin) / 1px / max(1, view.bounds-w), (self.height - 2 * margin) / 1px / max(1, view.bounds-h));
     property <length> ox: (self.width - view.bounds-w * k * 1px) / 2;
     property <length> oy: (self.height - view.bounds-h * k * 1px) / 2;
-    for m[i] in root.view.monitors: Rectangle {
+    // Space or Enter selects one; dragging stays a mouse thing.
+    for m[i] in root.view.monitors: Focusable {
         property <length> dx: touch.pressed ? touch.mouse-x - touch.pressed-x : 0;
         property <length> dy: touch.pressed ? touch.mouse-y - touch.pressed-y : 0;
         x: root.ox + (m.x - root.view.bounds-x) * root.k * 1px + 1.5px + dx;
@@ -114,9 +115,15 @@ component Layout inherits Rectangle {
         background: m.selected ? Theme.accent-soft-bg : Theme.ctrl-bg;
         opacity: m.disabled || m.mirrored ? 0.55 : 1;
         clip: true;
+        focus-key: "monitor:" + m.port;
+        clickable: false;
+        // Inside its border, which the clip would cut a ring outside of, and which is already
+        // the accent colour when it's selected.
+        ring-gap: -5px;
         accessible-role: button;
         accessible-label: m.port + ", " + m.name + ", " + m.sub;
         accessible-action-default => { root.select(i); }
+        activated => { root.select(i); }
         VerticalLayout {
             padding: 10px;
             spacing: 2px;
@@ -268,6 +275,7 @@ export component DisplaysPage inherits VerticalLayout {
                         horizontal-stretch: 1;
                         select-height: 32px;
                         label: "Monitor for workspace " + w.name;
+                        focus-key: "ws-monitor:" + i;
                         options: root.view.ws-monitors;
                         selected: w.monitor;
                         y: (parent.height - self.height) / 2;
@@ -275,11 +283,11 @@ export component DisplaysPage inherits VerticalLayout {
                     }
                     HorizontalLayout {
                         width: 220px;
-                        Switch { on: w.default; label: "Default for its monitor"; opacity: w.bound ? 1 : 0.4; y: (parent.height - self.height) / 2; toggled => { root.act("ws-default", "" + i, 0); } }
+                        Switch { on: w.default; label: "Default for its monitor"; focus-key: "ws-default:" + i; opacity: w.bound ? 1 : 0.4; y: (parent.height - self.height) / 2; toggled => { root.act("ws-default", "" + i, 0); } }
                     }
                     HorizontalLayout {
                         width: 120px;
-                        Switch { on: w.persistent; label: "Kept when empty"; opacity: w.bound ? 1 : 0.4; y: (parent.height - self.height) / 2; toggled => { root.act("ws-persistent", "" + i, 0); } }
+                        Switch { on: w.persistent; label: "Kept when empty"; focus-key: "ws-persistent:" + i; opacity: w.bound ? 1 : 0.4; y: (parent.height - self.height) / 2; toggled => { root.act("ws-persistent", "" + i, 0); } }
                     }
                 }
             }
@@ -325,10 +333,10 @@ export component DisplaysPage inherits VerticalLayout {
                                 Text { text: p.summary; color: Theme.faint; font-size: 12px; }
                             }
                             Text { text: "By itself"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
-                            Switch { on: p.auto; label: "Switch to " + p.name + " by itself"; y: (parent.height - self.height) / 2; toggled => { root.act("profile-auto", "" + i, 0); } }
-                            Button { label: "Use"; button-height: 30px; horizontal-stretch: 0; enabled: !p.active; y: (parent.height - self.height) / 2; clicked => { root.act("profile-use", "" + i, 0); } }
-                            Button { label: "Update"; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-update", "" + i, 0); } }
-                            Button { label: "Delete"; kind: "danger"; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-delete", "" + i, 0); } }
+                            Switch { on: p.auto; label: "Switch to " + p.name + " by itself"; focus-key: "profile-auto:" + i; y: (parent.height - self.height) / 2; toggled => { root.act("profile-auto", "" + i, 0); } }
+                            Button { label: "Use"; focus-key: "profile-use:" + i; button-height: 30px; horizontal-stretch: 0; enabled: !p.active; y: (parent.height - self.height) / 2; clicked => { root.act("profile-use", "" + i, 0); } }
+                            Button { label: "Update"; focus-key: "profile-update:" + i; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-update", "" + i, 0); } }
+                            Button { label: "Delete"; kind: "danger"; focus-key: "profile-delete:" + i; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-delete", "" + i, 0); } }
                         }
                         HorizontalLayout {
                             spacing: 10px;
@@ -399,8 +407,9 @@ export component DisplaysPage inherits VerticalLayout {
                                 Text { text: root.view.scale-text; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
                             }
                             IconButton { icon: "plus"; label: "Larger scale"; width: 34px; height: 34px; clicked => { root.act("scale-step", "", 1); } }
-                            for c[k] in root.view.scale-chips: Rectangle {
+                            for c[k] in root.view.scale-chips: Focusable {
                                 width: chip.preferred-width + 18px;
+                                focus-key: "scale:" + c;
                                 height: 26px;
                                 y: 4px;
                                 border-radius: 13px;
@@ -410,8 +419,8 @@ export component DisplaysPage inherits VerticalLayout {
                                 accessible-role: button;
                                 accessible-label: "Scale " + c;
                                 accessible-action-default => { root.act("scale", "", c.to-float()); }
+                                activated => { root.act("scale", "", c.to-float()); }
                                 chip := Text { text: c; color: Theme.text; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
-                                TouchArea { mouse-cursor: pointer; clicked => { root.act("scale", "", c.to-float()); } }
                             }
                         }
                     }

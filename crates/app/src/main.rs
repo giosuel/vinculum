@@ -2747,8 +2747,8 @@ mod tests {
     use std::rc::Rc;
 
     use i_slint_backend_testing::{AccessibleRole, ElementHandle, mock_elapsed_time};
-    use slint::platform::{PointerEventButton, WindowEvent};
-    use slint::{ComponentHandle, LogicalPosition, LogicalSize};
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, SharedString};
 
     use super::{App, BtPage, MainWindow, act, mark_failed, openconnect, view};
 
@@ -2796,6 +2796,202 @@ mod tests {
         mark_failed(&mut app, "The network rejected the password.".into(), None, None);
         assert_eq!(app.message_title, "Couldn't connect to Aster Café");
         assert_eq!(app.ui.failed.unwrap().0, "wifi:Aster Café");
+    }
+
+    fn press(window: &MainWindow, text: impl Into<SharedString>) {
+        let text = text.into();
+        window.window().dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window.window().dispatch_event(WindowEvent::KeyReleased { text });
+    }
+
+    /// The window with the sidebar filled in, as the app shows it.
+    fn window() -> MainWindow {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
+        window.set_hostname("thinkpad-x1".into());
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.show().unwrap();
+        window
+    }
+
+    /// Whether the focus ring is drawn, and around an element with this accessible label (a
+    /// text with the same words is one too).
+    fn ring_on(window: &MainWindow, label: &str) -> bool {
+        let Some(ring) = ElementHandle::find_by_element_id(window, "Focusable::ring").next() else { return false };
+        let (r, rs) = (ring.absolute_position(), ring.size());
+        ElementHandle::find_by_accessible_label(window, label).any(|e| {
+            let (p, s) = (e.absolute_position(), e.size());
+            let (cx, cy) = (p.x + s.width / 2.0, p.y + s.height / 2.0);
+            r.x <= cx && cx <= r.x + rs.width && r.y <= cy && cy <= r.y + rs.height && rs.height <= s.height + 8.0
+        })
+    }
+
+    /// Presses Tab until the ring is on `label`; how many presses that took.
+    fn tab_to(window: &MainWindow, label: &str) -> usize {
+        for n in 1..=120 {
+            press(window, Key::Tab);
+            if ring_on(window, label) {
+                return n;
+            }
+        }
+        panic!("Tab never reached {label}");
+    }
+
+    /// The sidebar's label for a page ("Bluetooth, 2 on"), as its button reads it out.
+    fn nav_label(window: &MainWindow, id: &str) -> String {
+        let groups = window.get_nav_groups();
+        let item = groups.iter().flat_map(|g| g.items.iter().collect::<Vec<_>>()).find(|i| i.id == id).unwrap();
+        if item.sub.is_empty() { item.label.to_string() } else { format!("{}, {}", item.label, item.sub) }
+    }
+
+    /// Tab goes down the sidebar, sub-items included, and on to the page; Shift+Tab comes back;
+    /// Space and Enter work the control with the ring, which is drawn only once the keyboard
+    /// moved the focus.
+    #[test]
+    fn the_keyboard_reaches_the_sidebar_and_works_its_controls() {
+        let window = window();
+        let navigated = Rc::new(RefCell::new(Vec::new()));
+        let n = navigated.clone();
+        window.on_navigate(move |id| n.borrow_mut().push(id.to_string()));
+        let airplane = Rc::new(RefCell::new(0));
+        let a = airplane.clone();
+        window.on_airplane_toggled(move || *a.borrow_mut() += 1);
+        window.set_net_hero_actions(super::model(vec![super::Action {
+            id: "disconnect".into(),
+            label: "Disconnect".into(),
+            kind: "secondary".into(),
+            enabled: true,
+        }]));
+        assert!(ElementHandle::find_by_element_id(&window, "Focusable::ring").next().is_none());
+
+        let wired = tab_to(&window, &nav_label(&window, "wired"));
+        let settings = tab_to(&window, "Settings") + wired;
+        let plane = tab_to(&window, "Airplane mode") + settings;
+        let hostname = tab_to(&window, "Change the hostname") + plane;
+        assert!(wired < settings && settings < plane && plane < hostname);
+        // After the sidebar, the page: the hero's button.
+        tab_to(&window, "Disconnect");
+
+        press(&window, Key::Backtab);
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Airplane mode"));
+        press(&window, " ");
+        assert_eq!(*airplane.borrow(), 1);
+        // The switch keeps the focus, so Tab carries on from it.
+        assert!(ring_on(&window, "Airplane mode"));
+        press(&window, Key::Backtab);
+        press(&window, Key::Return);
+        assert_eq!(*navigated.borrow(), ["settings"]);
+    }
+
+    /// Rust sends the sidebar again after every change, and Slint rebuilds its buttons: the
+    /// focus moves to the rebuilt one instead of getting lost.
+    #[test]
+    fn a_rebuilt_sidebar_keeps_the_focus() {
+        let window = window();
+        let label = nav_label(&window, "bluetooth");
+        tab_to(&window, &label);
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
+        assert!(ring_on(&window, &label));
+        // And keeps it: the window doesn't take it for a control that's gone.
+        for _ in 0..5 {
+            mock_elapsed_time(std::time::Duration::from_millis(100));
+        }
+        assert!(ring_on(&window, &label));
+    }
+
+    #[test]
+    fn the_arrow_keys_move_a_segmented_control() {
+        let window = window();
+        window.set_page("hotspot".into());
+        window.set_hotspot_available(true);
+        tab_to(&window, "Band");
+        press(&window, Key::RightArrow);
+        assert_eq!(window.get_hotspot_band(), 1);
+        press(&window, Key::RightArrow);
+        press(&window, Key::RightArrow);
+        assert_eq!(window.get_hotspot_band(), 2);
+        press(&window, Key::LeftArrow);
+        assert_eq!(window.get_hotspot_band(), 1);
+    }
+
+    #[test]
+    fn a_select_opens_with_space_and_moves_with_the_arrows() {
+        let window = window();
+        window.set_join_mode("hidden".into());
+        window.set_join_securities(super::model(vec!["None".into(), "WPA2 Personal".into(), "WPA3 Personal".into()]));
+        window.set_join_password_hints(super::model(vec![SharedString::new(); 3]));
+        window.set_join_storage_hints(super::model(vec![SharedString::new(); 3]));
+        window.set_join_open(true);
+        tab_to(&window, "Security");
+        press(&window, " ");
+        press(&window, Key::DownArrow);
+        press(&window, Key::DownArrow);
+        press(&window, Key::Return);
+        assert_eq!(window.get_join_security(), 2);
+        // Esc closes the list and keeps the choice.
+        press(&window, Key::Return);
+        press(&window, Key::UpArrow);
+        press(&window, Key::Escape);
+        assert_eq!(window.get_join_security(), 2);
+        assert!(window.get_join_open());
+    }
+
+    /// The single-letter keys work wherever the focus is on the page, but not while typing.
+    #[test]
+    fn shortcuts_wait_while_a_text_field_has_the_focus() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        let keys = Rc::new(RefCell::new(Vec::new()));
+        let k = keys.clone();
+        window.on_bt_act(move |verb, arg| k.borrow_mut().push(format!("{verb} {arg}")));
+        press(&window, "s");
+        assert_eq!(*keys.borrow(), ["key s"]);
+        // On a control.
+        tab_to(&window, "Airplane mode");
+        press(&window, "p");
+        assert_eq!(*keys.borrow(), ["key s", "key p"]);
+        // Into the sidebar's search field: typed, not a shortcut.
+        for _ in 0..30 {
+            press(&window, Key::Backtab);
+            if ElementHandle::find_by_element_id(&window, "Focusable::ring").next().is_none() {
+                break;
+            }
+        }
+        press(&window, "s");
+        press(&window, "p");
+        assert_eq!(*keys.borrow(), ["key s", "key p"]);
+        press(&window, Key::Escape);
+        press(&window, "s");
+        assert_eq!(*keys.borrow(), ["key s", "key p", "key s"]);
+    }
+
+    /// A dialog's button closes the dialog and goes with it: the window takes the focus back,
+    /// so its keys work again.
+    #[test]
+    fn the_window_takes_the_focus_when_the_focused_control_goes() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        let keys = Rc::new(RefCell::new(Vec::new()));
+        let k = keys.clone();
+        window.on_bt_act(move |verb, arg| k.borrow_mut().push(format!("{verb} {arg}")));
+        let weak = window.as_weak();
+        window.on_confirm_cancelled(move || weak.unwrap().set_confirm_open(false));
+        window.set_confirm_title("Forget Aster Café?".into());
+        window.set_confirm_open(true);
+        tab_to(&window, "Cancel");
+        press(&window, " ");
+        assert!(!window.get_confirm_open());
+        // Drawing the window removes the dialog, as the next frame does.
+        assert!(ElementHandle::find_by_accessible_label(&window, "Forget Aster Café?").next().is_none());
+        for _ in 0..5 {
+            mock_elapsed_time(std::time::Duration::from_millis(100));
+        }
+        press(&window, "s");
+        assert_eq!(*keys.borrow(), ["key s"]);
     }
 
     /// Widening the window must not show the closed editor in the new space, not even while

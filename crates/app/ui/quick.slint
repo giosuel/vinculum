@@ -4,7 +4,7 @@
 // extras/hyprland.lua).
 import { Theme } from "theme.slint";
 import { Icon, SignalBars } from "icons.slint";
-import { Button, IconButton, Switch } from "controls.slint";
+import { Button, IconButton, Switch, Focusable, Focus } from "controls.slint";
 
 export struct QuickRow { id: string, name: string, meta: string, bars: int, active: bool, connecting: bool }
 export struct QuickToggle { id: string, name: string, meta: string, on: bool }
@@ -38,6 +38,7 @@ component NetworkRow inherits Rectangle {
         }
         if !root.network.active: Button {
             label: "Connect";
+            focus-key: "quick:" + root.network.id;
             button-height: 28px;
             width: 76px;
             y: (parent.height - self.height) / 2;
@@ -68,7 +69,22 @@ export component QuickWindow inherits Window {
     default-font-family: "Inter";
     default-font-size: 13px;
 
-    FocusScope {
+    // As in the main window (see there): when the control with the focus goes away, the
+    // window takes it.
+    Timer {
+        interval: 150ms;
+        running: Focus.on-control;
+        triggered => {
+            if Focus.answer != Focus.probe {
+                Focus.on-control = false;
+                Focus.key = "";
+                keys.focus();
+            }
+            Focus.probe += 1;
+        }
+    }
+
+    keys := FocusScope {
         key-pressed(event) => {
             if event.text == Key.Escape {
                 root.dismissed();
@@ -117,25 +133,25 @@ export component QuickWindow inherits Window {
                         Text { text: t.name; color: Theme.text; font-size: 13px; overflow: elide; }
                         Text { text: t.meta; color: Theme.muted; font-size: 11px; overflow: elide; }
                     }
-                    Switch { on: t.on; label: t.name; y: (parent.height - self.height) / 2; toggled => { root.toggled(t.id); } }
+                    Switch { on: t.on; label: t.name; focus-key: "quick-toggle:" + t.id; y: (parent.height - self.height) / 2; toggled => { root.toggled(t.id); } }
                 }
             }
             Rectangle { vertical-stretch: 1; }
             HorizontalLayout {
                 spacing: 8px;
                 Button { label: "Open Lituus"; button-height: 36px; horizontal-stretch: 1; clicked => { root.open-main(); } }
-                Rectangle {
+                Focusable {
                     width: 36px;
                     height: 36px;
                     border-radius: 8px;
                     border-width: 1px;
                     border-color: Theme.ctrl-border;
-                    background: settings.has-hover ? Theme.sel-bg : Theme.ctrl-bg;
+                    background: self.has-hover ? Theme.sel-bg : Theme.ctrl-bg;
                     accessible-role: button;
                     accessible-label: "Settings";
                     accessible-action-default => { root.open-settings(); }
+                    activated => { root.open-settings(); }
                     Icon { name: "settings"; tint: Theme.icon-soft; }
-                    settings := TouchArea { mouse-cursor: pointer; clicked => { root.open-settings(); } }
                 }
             }
         }

@@ -4,7 +4,7 @@
 // whenever it changes (see src/editor.rs) and sends back the errors.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, Switch, SectionLabel } from "controls.slint";
+import { Button, Switch, SectionLabel, Focusable } from "controls.slint";
 import { TextField, Segmented, CheckBox, Select, Modal } from "dialogs.slint";
 
 export struct AddressRow { address: string, prefix: string }
@@ -267,27 +267,27 @@ component Row inherits HorizontalLayout {
 }
 
 /// A small "×" button.
-component Remove inherits Rectangle {
+component Remove inherits Focusable {
     in property <string> label: "Remove";
     callback clicked();
     width: 28px;
     height: 28px;
     border-radius: 6px;
-    background: touch.has-hover ? Theme.sel-bg : transparent;
+    background: self.has-hover ? Theme.sel-bg : transparent;
     accessible-role: button;
     accessible-label: label;
     accessible-action-default => { clicked(); }
+    activated => { root.clicked(); }
     Path {
         width: 12px; height: 12px;
         viewbox-width: 16; viewbox-height: 16;
         stroke: Theme.faint; stroke-width: 1.6px; fill: transparent;
         commands: "M4 4l8 8M12 4l-8 8";
     }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 /// A dashed "Add address" style button.
-component AddButton inherits Rectangle {
+component AddButton inherits Focusable {
     in property <string> label;
     callback clicked();
     height: 32px;
@@ -295,12 +295,12 @@ component AddButton inherits Rectangle {
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.ctrl-border;
-    background: touch.has-hover ? Theme.sel-bg : transparent;
+    background: self.has-hover ? Theme.sel-bg : transparent;
     accessible-role: button;
     accessible-label: label;
     accessible-action-default => { clicked(); }
+    activated => { root.clicked(); }
     text := Text { text: root.label; color: Theme.icon-soft; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 /// A bridge's or bond's ports, with Remove, and "Add port…".
@@ -469,12 +469,15 @@ component PeerCard inherits Rectangle {
                 horizontal-stretch: 1;
                 overflow: elide;
             }
-            Text {
-                text: "Remove peer";
-                color: Theme.danger;
-                font-size: 13px;
+            Focusable {
+                width: remove-peer.preferred-width;
                 horizontal-stretch: 0;
-                TouchArea { mouse-cursor: pointer; clicked => { root.remove(); } }
+                border-radius: 4px;
+                accessible-role: button;
+                accessible-label: "Remove peer";
+                accessible-action-default => { root.remove(); }
+                activated => { root.remove(); }
+                remove-peer := Text { text: "Remove peer"; color: Theme.danger; font-size: 13px; }
             }
         }
         for row[r] in [
@@ -692,24 +695,24 @@ export component Editor inherits Rectangle {
             padding-left: 24px;
             padding-bottom: 12px;
             spacing: 14px;
-            Rectangle {
+            Focusable {
                 width: 34px;
                 height: 34px;
                 y: 2px;
                 border-radius: 8px;
                 border-width: 1px;
                 border-color: Theme.ctrl-border;
-                background: back.has-hover ? Theme.sel-bg : transparent;
+                background: self.has-hover ? Theme.sel-bg : transparent;
                 accessible-role: button;
                 accessible-label: "Back";
                 accessible-action-default => { root.back(); }
+                activated => { root.back(); }
                 Path {
                     width: 14px; height: 14px;
                     viewbox-width: 16; viewbox-height: 16;
                     stroke: Theme.icon-soft; stroke-width: 1.8px; fill: transparent;
                     commands: "M10 3l-5 5 5 5";
                 }
-                back := TouchArea { mouse-cursor: pointer; clicked => { root.back(); } }
             }
             VerticalLayout {
                 spacing: 2px;
@@ -732,12 +735,16 @@ export component Editor inherits Rectangle {
                 padding-left: 20px;
                 spacing: 4px;
                 alignment: start;
-                for t in root.tabs: Rectangle {
+                for t in root.tabs: Focusable {
                     width: label.preferred-width + (t.errors > 0 ? 38px : 24px);
+                    focus-key: "editor-tab:" + t.id;
+                    border-radius: 6px;
+                    ring-gap: -2px;
                     accessible-role: AccessibleRole.tab;
                     accessible-label: t.label;
                     accessible-item-selected: t.id == root.tab;
                     accessible-action-default => { root.tab = t.id; }
+                    activated => { root.tab = t.id; }
                     label := Text {
                         x: 12px;
                         text: t.label;
@@ -756,7 +763,6 @@ export component Editor inherits Rectangle {
                         background: Theme.danger;
                     }
                     Rectangle { y: parent.height - 2px; height: 2px; background: t.id == root.tab ? Theme.accent : transparent; }
-                    TouchArea { mouse-cursor: pointer; clicked => { root.tab = t.id; } }
                 }
             }
             Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
