@@ -177,6 +177,9 @@ struct App {
     airplane: Option<airplane::Airplane>,
     /// The sidebar's search.
     nav_query: String,
+    /// The sidebar items whose sub-items are folded away, for this session only (config.toml
+    /// holds settings, not the window's state).
+    nav_folded: Vec<String>,
     /// The Network sub-page last open, for coming back to it from the sidebar.
     net_page: view::Page,
 }
@@ -562,6 +565,13 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_navigate(move |id| update(&weak, |app| go(app, &id)));
     let weak = window.as_weak();
     window.on_nav_search(move |text| update(&weak, |app| app.nav_query = text.to_string()));
+    let weak = window.as_weak();
+    window.on_nav_fold(move |id| {
+        update(&weak, |app| match app.nav_folded.iter().position(|f| *f == id.as_str()) {
+            Some(i) => _ = app.nav_folded.remove(i),
+            None => app.nav_folded.push(id.into()),
+        })
+    });
     let weak = window.as_weak();
     window.on_nav_search_accepted(move || {
         let Some(window) = weak.upgrade() else { return };
@@ -1307,7 +1317,7 @@ fn render(window: &MainWindow) {
         for (entry, status) in entries.iter_mut().zip(statuses) {
             entry.status = status.clone();
         }
-        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, app.ui.page.id())));
+        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, app.ui.page.id(), &app.nav_folded)));
         window.set_net_sub(v.net_hero.sub.as_str().into());
         window.set_count(v.count.as_str().into());
         window.set_net_hero(HeroInfo {
@@ -2809,7 +2819,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let window = MainWindow::new().unwrap();
         let entries = super::nav_entries(&super::App::default());
-        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
         window.set_hostname("thinkpad-x1".into());
         window.window().set_size(LogicalSize::new(1200.0, 760.0));
         window.show().unwrap();
@@ -2894,13 +2904,34 @@ mod tests {
         let label = nav_label(&window, "bluetooth");
         tab_to(&window, &label);
         let entries = super::nav_entries(&super::App::default());
-        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
         assert!(ring_on(&window, &label));
         // And keeps it: the window doesn't take it for a control that's gone.
         for _ in 0..5 {
             mock_elapsed_time(std::time::Duration::from_millis(100));
         }
         assert!(ring_on(&window, &label));
+    }
+
+    /// Network's chevron is a Tab stop after its label: Enter and Space fold, and the folded
+    /// sidebar, rebuilt, keeps the focus on it.
+    #[test]
+    fn the_keyboard_folds_network() {
+        let window = window();
+        let folds = Rc::new(RefCell::new(0));
+        let f = folds.clone();
+        window.on_nav_fold(move |id| {
+            assert_eq!(id, "network");
+            *f.borrow_mut() += 1;
+        });
+        let label = tab_to(&window, &nav_label(&window, "network"));
+        assert_eq!(tab_to(&window, "Network pages, expanded"), 1, "after {label} presses");
+        press(&window, Key::Return);
+        press(&window, " ");
+        assert_eq!(*folds.borrow(), 2);
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &["network".to_owned()])));
+        assert!(ring_on(&window, "Network pages, collapsed"));
     }
 
     #[test]
@@ -3048,7 +3079,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let window = MainWindow::new().unwrap();
         let entries = super::nav_entries(&super::App::default());
-        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
         window.set_hostname("thinkpad-x1".into());
         window.window().set_size(LogicalSize::new(1040.0, 600.0));
         window.show().unwrap();
@@ -3262,5 +3293,37 @@ mod tests {
         assert_eq!(row(0), None);
         let (top, bottom) = row(15).expect("the selected row");
         assert!(top >= list_top && bottom <= 570.0, "{top} {bottom}");
+    }
+
+    /// Network's chevron says whether its pages are shown, and folds them without going to a
+    /// page.
+    #[test]
+    fn the_network_chevron_folds_its_pages() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        let show = |folded: &[String]| {
+            window.set_nav_groups(super::model(super::nav::groups(&entries, "", "bluetooth", folded)))
+        };
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let c = calls.clone();
+        window.on_nav_fold(move |id| c.borrow_mut().push(format!("fold {id}")));
+        let c = calls.clone();
+        window.on_navigate(move |id| c.borrow_mut().push(format!("go {id}")));
+        show(&[]);
+        window.show().unwrap();
+        let hotspots = || ElementHandle::find_by_accessible_label(&window, "Hotspot").count();
+        let shown = hotspots();
+
+        let chevron = ElementHandle::find_by_accessible_label(&window, "Network pages, expanded").next().unwrap();
+        assert_eq!(chevron.accessible_expanded(), Some(true));
+        chevron.invoke_accessible_default_action();
+        assert_eq!(*calls.borrow(), ["fold network"]);
+
+        show(&["network".to_owned()]);
+        let chevron = ElementHandle::find_by_accessible_label(&window, "Network pages, collapsed").next().unwrap();
+        assert_eq!(chevron.accessible_expanded(), Some(false));
+        // The Hotspot item is gone.
+        assert!(hotspots() < shown, "{} {shown}", hotspots());
     }
 }

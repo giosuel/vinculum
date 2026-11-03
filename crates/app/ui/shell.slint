@@ -6,17 +6,20 @@ import { Icon, Logo } from "icons.slint";
 import { Switch, SectionLabel, Focusable } from "controls.slint";
 
 /// sub: a short status on the right ("Home", "2 on", "45%"). open: an item showing its
-/// sub-items under it (Network, on one of its pages). indent: a sub-item.
-export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool, open: bool, indent: bool }
+/// sub-items, on one of their pages. indent: a sub-item. foldable: an item with sub-items, which
+/// its chevron folds away (folded).
+export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool, open: bool, indent: bool, foldable: bool, folded: bool }
 export struct NavGroup { title: string, items: [NavItem] }
 /// What a page's hero shows: a big icon, a name, a line under it and a monospaced line.
 /// tone: the colour of `meta` ("accent", "muted", "danger", "faint").
 export struct HeroInfo { icon: string, name: string, meta: string, tone: string, detail: string }
 
-// A sub-item is smaller and indented, under its item.
+// A sub-item is smaller and indented, under its item. An item with sub-items has a chevron that
+// folds them away; the rest of the row goes to the page.
 component NavButton inherits Rectangle {
     in property <NavItem> item;
     callback clicked();
+    callback fold-clicked();
     height: item.indent ? 32px : 36px;
     accessible-role: button;
     accessible-label: item.sub == "" ? item.label : item.label + ", " + item.sub;
@@ -61,6 +64,29 @@ component NavButton inherits Rectangle {
                 overflow: elide;
                 max-width: 90px;
             }
+            // A Tab stop of its own: Space or Enter folds, as a click does.
+            if root.item.foldable: Focusable {
+                width: 24px;
+                height: 24px;
+                y: (parent.height - self.height) / 2;
+                focus-key: "nav-fold:" + root.item.id;
+                border-radius: 6px;
+                activated => { root.fold-clicked(); }
+                accessible-role: button;
+                accessible-label: root.item.label + " pages, " + (root.item.folded ? "collapsed" : "expanded");
+                accessible-expandable: true;
+                accessible-expanded: !root.item.folded;
+                accessible-action-default => { root.fold-clicked(); }
+                accessible-action-expand => { root.fold-clicked(); }
+                Icon {
+                    name: "chevron";
+                    size: 16px;
+                    tint: parent.has-hover ? Theme.text : Theme.muted;
+                    // Down when unfolded, right when folded.
+                    transform-rotation: root.item.folded ? -90deg : 0deg;
+                    animate transform-rotation { duration: 120ms; easing: ease-out; }
+                }
+            }
         }
     }
 }
@@ -73,6 +99,8 @@ export component Sidebar inherits Rectangle {
     /// Incremented to move the keyboard focus into the search field (Ctrl+K).
     in property <int> focus-requests;
     callback navigate(string);
+    /// The chevron of an item with sub-items.
+    callback fold(string);
     callback search(string);
     /// Enter in the search field: go to the first page found.
     callback search-accepted();
@@ -150,6 +178,7 @@ export component Sidebar inherits Rectangle {
                     for item in group.items: NavButton {
                         item: item;
                         clicked => { root.navigate(item.id); }
+                        fold-clicked => { root.fold(item.id); }
                     }
                 }
                 if root.groups.length == 0: HorizontalLayout {
