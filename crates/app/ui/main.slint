@@ -448,7 +448,7 @@ export component MainWindow inherits Window {
                     if root.network-page && root.page != "hotspot" && root.placeholder == "": HorizontalLayout {
                         vertical-stretch: 1;
                         spacing: 14px;
-                        Card {
+                        list-card := Card {
                             horizontal-stretch: 1;
                             min-width: 330px;
                             preferred-width: 440px;
@@ -534,7 +534,7 @@ export component MainWindow inherits Window {
                             vertical-stretch: 1;
                             alignment: center;
                             spacing: 14px;
-                            Icon { name: root.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+                            HorizontalLayout { alignment: center; Icon { name: root.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
                             Text { text: root.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
                             Text { text: root.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
                             if root.empty-action != "": HorizontalLayout {
@@ -572,7 +572,7 @@ export component MainWindow inherits Window {
                     if !root.hotspot-available: VerticalLayout {
                         alignment: center;
                         spacing: 12px;
-                        Icon { name: "hotspot"; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+                        HorizontalLayout { alignment: center; Icon { name: "hotspot"; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
                         Text { text: "No Wi-Fi card"; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
                         Text { text: "A hotspot needs a Wi-Fi card to share the connection over."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
                     }
