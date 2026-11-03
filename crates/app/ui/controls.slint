@@ -12,6 +12,23 @@ export global Focus {
     in-out property <bool> on-control;
     in-out property <int> probe;
     in-out property <int> answer;
+    /// Counts the times a control gained the focus; each control keeps its number, so that a
+    /// dialog can give the focus back to the one that had it when it opened (`opener`, noted by
+    /// FocusTrap). `back-to` and `back-key` call that control, or its rebuilt copy.
+    in-out property <int> serial;
+    in-out property <int> opener;
+    in-out property <string> opener-key;
+    in-out property <int> back-to;
+    in-out property <string> back-key;
+    /// Moves the focus on as Tab (true) or Shift+Tab (false) would: Rust presses the key.
+    callback step(bool);
+    /// A dialog closed: the control that had the focus before it opened takes it back.
+    public function give-back() {
+        self.back-to = self.opener;
+        self.back-key = self.opener-key;
+        self.opener = 0;
+        self.opener-key = "";
+    }
 }
 
 /// What every control the keyboard reaches is built on: Tab and Shift+Tab reach it, Space and
@@ -47,6 +64,10 @@ export component Focusable inherits Rectangle {
     // control makes the generated code too big to compile in 8 GB.)
     property <int> probe: scope.has-focus ? Focus.probe : -1;
     changed probe => { if scope.has-focus { Focus.answer = self.probe; } }
+    // Its number from the last time it gained the focus (Focus.serial).
+    property <int> serial;
+    property <bool> called-back: Focus.back-to != 0 && (Focus.back-to == root.serial || (root.focus-key != "" && Focus.back-key == root.focus-key));
+    changed called-back => { if self.called-back { scope.focus(); } }
     scope := FocusScope {
         enabled: root.enabled;
         // A click doesn't take the focus from the page, so the window's shortcuts keep working.
@@ -54,6 +75,10 @@ export component Focusable inherits Rectangle {
         focus-gained(reason) => {
             if reason == FocusReason.tab-navigation { Focus.keyboard = true; }
             Focus.key = root.focus-key;
+            Focus.serial += 1;
+            root.serial = Focus.serial;
+            Focus.back-to = 0;
+            Focus.back-key = "";
             Focus.on-control = true;
             Focus.answer = Focus.probe;
         }
@@ -91,6 +116,56 @@ export component Focusable inherits Rectangle {
         border-width: 2px;
         border-color: Theme.accent;
         border-radius: root.border-radius == 0 ? 0 : root.border-radius - self.x;
+    }
+}
+
+/// A dialog's card. Tab and Shift+Tab stay among its controls, going round from the last to the
+/// first and back, instead of on to the page behind the dialog. Slint has no such scope, so two
+/// empty stops, before and after the controls, catch the focus as it leaves and send it round:
+/// the stop at the other end takes it, and Rust presses Tab again from there (Focus.step).
+/// When the card opens, it notes the control with the focus, for Focus.give-back().
+export component FocusTrap inherits Rectangle {
+    // Which way the last Tab in the card went.
+    property <bool> backward;
+    init => {
+        Focus.opener = Focus.on-control ? Focus.serial : 0;
+        Focus.opener-key = Focus.on-control ? Focus.key : "";
+    }
+    FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        capture-key-pressed(event) => {
+            if event.text == Key.Tab || event.text == Key.Backtab {
+                root.backward = event.text == Key.Backtab || event.modifiers.shift;
+            }
+            reject
+        }
+        // Only a stop going backwards, past the first control, and `end` only going forwards.
+        start := FocusScope {
+            width: 0;
+            height: 0;
+            focus-on-click: false;
+            focus-on-tab-navigation: root.backward;
+            focus-gained(reason) => {
+                if reason == FocusReason.tab-navigation {
+                    end.focus();
+                    Focus.step(false);
+                }
+            }
+        }
+        @children
+        end := FocusScope {
+            width: 0;
+            height: 0;
+            focus-on-click: false;
+            focus-on-tab-navigation: !root.backward;
+            focus-gained(reason) => {
+                if reason == FocusReason.tab-navigation {
+                    start.focus();
+                    Focus.step(true);
+                }
+            }
+        }
     }
 }
 

@@ -9,7 +9,7 @@ import "fonts/JetBrainsMono-Medium.ttf";
 import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
-import { Button, IconButton, Switch, PillSwitch, SectionLabel, Kbd, Scroll, Focusable, Focus } from "controls.slint";
+import { Button, IconButton, Switch, PillSwitch, SectionLabel, Kbd, Scroll, Focusable, Focus, FocusTrap } from "controls.slint";
 import { JoinDialog, TextField, Segmented, Modal } from "dialogs.slint";
 import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
@@ -21,7 +21,7 @@ import { SoundPage, SoundView, SoundDevice, SoundApp, SoundCard } from "sound.sl
 import { BluetoothPage, BtAudio, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, FilesView, FileRow, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, Focus, FilesView, FileRow, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -888,11 +888,12 @@ export component MainWindow inherits Window {
 
     // A dialog that closes takes the keyboard focus with it, and not every dialog closes through
     // its own buttons (the time after Apply runs out, NetworkManager withdraws its question, a
-    // choice in "Add a connection" opens the editor): the window's keys get it back.
-    property <bool> modal-open: root.join-open || root.add-open || root.hostname-open || root.share-open
+    // choice in "Add a connection" opens the editor): the window's keys get it back, and then the
+    // control that had the focus before the dialog opened, if there was one.
+    property <bool> modal-open: root.confirm-open || root.join-open || root.add-open || root.hostname-open || root.share-open
         || root.bt-pair-open || root.bt-adapter-open || root.bt-rename-open || root.files.sending || root.files.incoming
         || (root.page == "displays" && (root.displays.keep-open || root.displays.config-open));
-    changed modal-open => { if !self.modal-open { keys.focus(); } }
+    changed modal-open => { if !self.modal-open { keys.focus(); Focus.give-back(); } }
 
     // The control with the focus can go away (a dialog closes, a button isn't offered any more),
     // and Slint drops the focus with it: no key would arrive anywhere. While a control has the
@@ -914,7 +915,7 @@ export component MainWindow inherits Window {
     if root.confirm-open: Rectangle {
         background: #05060799;
         TouchArea { clicked => { root.confirm-cancelled(); } }
-        Rectangle {
+        FocusTrap {
             width: 420px;
             height: dialog.preferred-height;
             x: (parent.width - self.width) / 2;

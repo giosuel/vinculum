@@ -4,7 +4,7 @@
 // whenever it changes (see src/editor.rs) and sends back the errors.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, Switch, SectionLabel, Focusable } from "controls.slint";
+import { Button, Switch, SectionLabel, Focusable, Focus } from "controls.slint";
 import { TextField, Segmented, CheckBox, Select, Modal } from "dialogs.slint";
 
 export struct AddressRow { address: string, prefix: string }
@@ -681,8 +681,8 @@ export component Editor inherits Rectangle {
     TouchArea {}
     // Esc from any field closes the editor. Its dialogs take the keyboard while open and give
     // it back here when they close.
-    changed routes-open => { if root.routes-open == "" { keys.focus(); } }
-    changed ports-open => { if !root.ports-open { keys.focus(); } }
+    changed routes-open => { if root.routes-open == "" { keys.focus(); Focus.give-back(); } }
+    changed ports-open => { if !root.ports-open { keys.focus(); Focus.give-back(); } }
     keys := FocusScope {
         key-pressed(event) => {
             if event.text == Key.Escape { root.back(); return accept; }

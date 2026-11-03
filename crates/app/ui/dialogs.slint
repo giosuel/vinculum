@@ -2,7 +2,7 @@
 // mockups (Password, Hidden network).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, Focusable, Focus } from "controls.slint";
+import { Button, Focusable, Focus, FocusTrap } from "controls.slint";
 
 component FieldLabel inherits Text {
     color: Theme.text;
@@ -260,7 +260,7 @@ export component Modal inherits Rectangle {
     callback dismissed();
     background: #05060799;
     TouchArea { clicked => { if root.backdrop-dismisses { root.dismissed(); } } }
-    Rectangle {
+    FocusTrap {
         width: root.card-width;
         height: body.preferred-height;
         x: (parent.width - self.width) / 2;
@@ -279,6 +279,8 @@ export component Modal inherits Rectangle {
         // keys never see it.
         FocusScope {
             init => { self.focus(); }
+            // Not a stop for Tab of its own: Shift+Tab from the first control goes round.
+            focus-on-tab-navigation: false;
             key-pressed(event) => {
                 if event.text == Key.Escape { root.dismissed(); return accept; }
                 reject
