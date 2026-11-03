@@ -114,10 +114,19 @@ component Layout inherits Rectangle {
         property <length> top: round((root.oy + (m.y - root.view.bounds-y) * root.k * 1px) / 1px) * 1px;
         property <length> right: round((root.ox + (m.x + m.w - root.view.bounds-x) * root.k * 1px) / 1px) * 1px;
         property <length> bottom: round((root.oy + (m.y + m.h - root.view.bounds-y) * root.k * 1px) / 1px) * 1px;
-        // Text, badge and padding grow with the monitor, from their size at a 1200 × 760 window;
-        // on a smaller monitor the padding and badge shrink, but the text doesn't.
-        property <float> f: clamp(min(self.width / 165px, self.height / 92px), 0.7, 1.5);
-        property <float> text-f: max(1, f);
+        // Text, badge and padding grow with the monitor, from their size at a 1200 × 760 window,
+        // and shrink on a smaller one, the text later and less than the rest.
+        property <float> scale: min(self.width / 165px, self.height / 92px);
+        property <float> f: clamp(scale, 0.7, 1.5);
+        property <float> text-f: max(0.85, min(f + 0.15, max(1, f)));
+        // The padding goes down further, to keep room for the name.
+        property <length> pad: round(10 * clamp(scale, 0.5, 1.5)) * 1px;
+        property <length> line: round(2 * f) * 1px;
+        // A tile too short for every line drops the last ones; the number and the port stay.
+        property <length> name-size: round(13 * text-f) * 1px;
+        property <length> sub-size: round(12 * text-f) * 1px;
+        property <bool> show-name: self.height >= 2 * pad + round(22 * f) * 1px + line + 1.3 * name-size;
+        property <bool> show-sub: show-name && self.height >= 2 * pad + round(22 * f) * 1px + 2 * line + 1.3 * (name-size + sub-size);
         x: left + root.gap / 2 + dx;
         y: top + root.gap / 2 + dy;
         width: right - left - root.gap;
@@ -132,18 +141,17 @@ component Layout inherits Rectangle {
         accessible-label: m.port + ", " + m.name + ", " + m.sub;
         accessible-action-default => { root.select(i); }
         VerticalLayout {
-            padding: round(10 * tile.f) * 1px;
-            spacing: round(2 * tile.f) * 1px;
+            padding: tile.pad;
+            spacing: tile.line;
             HorizontalLayout {
                 spacing: round(7 * tile.f) * 1px;
-                alignment: start;
                 Badge { n: m.n; on: m.selected; size: round(22 * tile.f) * 1px; }
-                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: round(12 * tile.text-f) * 1px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: round(12 * tile.text-f) * 1px; font-family: "JetBrains Mono"; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
             }
             Rectangle { vertical-stretch: 1; }
-            Text { text: m.name; color: Theme.text; font-size: round(13 * tile.text-f) * 1px; font-weight: 600; overflow: elide; }
-            if !root.show-workspaces: Text { text: m.sub; color: Theme.muted; font-size: round(12 * tile.text-f) * 1px; overflow: elide; }
-            if root.show-workspaces: Text { text: m.workspaces == "" ? "No workspaces bound" : m.workspaces; color: m.workspaces == "" ? Theme.faint : Theme.accent; font-size: round(12 * tile.text-f) * 1px; font-family: "JetBrains Mono"; overflow: elide; }
+            if tile.show-name: Text { text: m.name; color: Theme.text; font-size: tile.name-size; font-weight: 600; overflow: elide; }
+            if tile.show-sub && !root.show-workspaces: Text { text: m.sub; color: Theme.muted; font-size: tile.sub-size; overflow: elide; }
+            if tile.show-sub && root.show-workspaces: Text { text: m.workspaces == "" ? "No workspaces bound" : m.workspaces; color: m.workspaces == "" ? Theme.faint : Theme.accent; font-size: tile.sub-size; font-family: "JetBrains Mono"; overflow: elide; }
         }
         touch := TouchArea {
             mouse-cursor: m.disabled || m.mirrored ? pointer : move;

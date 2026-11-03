@@ -986,6 +986,51 @@ mod tests {
         assert_eq!(v.monitors.row_data(0).unwrap().sub, "2560 × 1440 · 240 Hz");
     }
 
+    /// A small tile's text shrinks with it, the port elides instead of running past the edge,
+    /// and the lines that don't fit go: the number and the port stay.
+    #[test]
+    fn small_tiles_keep_their_text_inside() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::{ComponentHandle, LogicalSize};
+        i_slint_backend_testing::init_no_event_loop();
+        let window = crate::MainWindow::new().unwrap();
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.set_page("displays".into());
+        // One monitor far off to the right, so that the layout draws them all small.
+        let mut monitors = fixture();
+        monitors.iter_mut().find(|m| m.name == "DP-4").unwrap().x += 14000;
+        let mut st = state();
+        reread(&mut st, &monitors);
+        window.set_displays(view(&st));
+        window.show().unwrap();
+        let v = view(&st);
+        for m in v.monitors.iter() {
+            let label = format!("{}, {}, {}", m.port, m.name, m.sub);
+            let tile = ElementHandle::find_by_accessible_label(&window, &label).next().unwrap();
+            let (t, ts) = (tile.absolute_position(), tile.size());
+            assert!(ts.height < 60.0, "{label} is {ts:?}, not small");
+            let inside = |e: &ElementHandle| {
+                let (p, s) = (e.absolute_position(), e.size());
+                p.x >= t.x
+                    && p.y >= t.y
+                    && p.x + s.width <= t.x + ts.width + 0.5
+                    && p.y + s.height <= t.y + ts.height + 0.5
+            };
+            let overlaps = |e: &ElementHandle| {
+                let (p, s) = (e.absolute_position(), e.size());
+                p.x < t.x + ts.width && t.x < p.x + s.width && p.y < t.y + ts.height && t.y < p.y + s.height
+            };
+            let port: Vec<_> = ElementHandle::find_by_accessible_label(&window, &m.port).filter(overlaps).collect();
+            assert_eq!(port.len(), 1, "{label}: the port");
+            assert!(inside(&port[0]), "{label}: the port runs past the edge");
+            for text in [&m.name, &m.sub] {
+                for e in ElementHandle::find_by_accessible_label(&window, text).filter(overlaps) {
+                    assert!(inside(&e), "{label}: {text} is cut off");
+                }
+            }
+        }
+    }
+
     #[test]
     fn edits_wait_for_apply() {
         let mut st = state();
