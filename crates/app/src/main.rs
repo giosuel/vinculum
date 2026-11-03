@@ -3247,6 +3247,107 @@ mod tests {
         assert_eq!(switch("Bluetooth").and_then(|s| s.accessible_checked()), Some(false));
     }
 
+    /// In the smallest window with Network's sub-items shown, and more pages than fit, the wheel
+    /// brings every page of the sidebar into view, between the search field and Settings, which
+    /// stays where it is.
+    #[test]
+    fn the_sidebar_scrolls_to_every_page() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        let mut groups = super::nav::groups(&entries, "", "wifi", &[]);
+        // Pages still to come, so that they don't fit whatever pages there are now.
+        let item = |label: &str| super::NavItem {
+            id: label.into(),
+            label: label.into(),
+            icon: "settings".into(),
+            ..Default::default()
+        };
+        groups.push(super::NavGroup {
+            title: "MORE".into(),
+            items: super::model(["Input", "Keyboard", "Mouse", "Power", "Night light"].map(item).to_vec()),
+        });
+        window.set_nav_groups(super::model(groups));
+        window.set_hostname("thinkpad-x1".into());
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        let list = ElementHandle::find_by_element_id(&window, "Sidebar::page-list").next().expect("the pages");
+        let (top, end) = (list.absolute_position().y, list.absolute_position().y + list.size().height);
+        let labels: Vec<String> = window
+            .get_nav_groups()
+            .iter()
+            .flat_map(|g| g.items.iter().collect::<Vec<_>>())
+            .map(|i| if i.sub.is_empty() { i.label.to_string() } else { format!("{}, {}", i.label, i.sub) })
+            .collect();
+        let in_view = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label).any(|e| {
+                let y = e.absolute_position().y;
+                y >= top - 0.5 && y + e.size().height <= end + 0.5
+            })
+        };
+        let wheel = |dy: f32| {
+            window.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(120.0, top + 40.0),
+                delta_x: 0.0,
+                delta_y: dy,
+            });
+            mock_elapsed_time(Duration::from_millis(300));
+        };
+        // It doesn't all fit, or there'd be nothing to scroll.
+        assert!(!labels.iter().all(|l| in_view(l)));
+        let (settings, airplane) = (bottom(&window, "Settings"), bottom(&window, "Airplane mode"));
+        assert!(airplane < 590.0, "{airplane}");
+        for label in &labels {
+            wheel(1000.0);
+            for _ in 0..20 {
+                if in_view(label) {
+                    break;
+                }
+                wheel(-30.0);
+            }
+            assert!(in_view(label), "{label} never came into view");
+            assert_eq!((bottom(&window, "Settings"), bottom(&window, "Airplane mode")), (settings, airplane));
+        }
+    }
+
+    /// Tab down the sidebar scrolls its pages, so the control with the ring is in view.
+    #[test]
+    fn tab_scrolls_the_sidebar_to_the_ring() {
+        let window = window();
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        let entries = super::nav_entries(&super::App::default());
+        let mut groups = super::nav::groups(&entries, "", "wifi", &[]);
+        let item = |label: &str| super::NavItem {
+            id: label.into(),
+            label: label.into(),
+            icon: "settings".into(),
+            ..Default::default()
+        };
+        groups.push(super::NavGroup {
+            title: "MORE".into(),
+            items: super::model(["Input", "Keyboard", "Mouse", "Power", "Night light"].map(item).to_vec()),
+        });
+        window.set_nav_groups(super::model(groups));
+        mock_elapsed_time(Duration::from_millis(50));
+        let list = ElementHandle::find_by_element_id(&window, "Sidebar::page-list").next().expect("the pages");
+        let (top, end) = (list.absolute_position().y, list.absolute_position().y + list.size().height);
+        let in_view = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label).any(|e| {
+                let y = e.absolute_position().y;
+                y >= top - 0.5 && y + e.size().height <= end + 0.5
+            })
+        };
+        assert!(!in_view("Night light"));
+        tab_to(&window, "Night light");
+        mock_elapsed_time(Duration::from_millis(300));
+        assert!(in_view("Night light"));
+        // And round to the top again.
+        tab_to(&window, &nav_label(&window, "wifi"));
+        mock_elapsed_time(Duration::from_millis(300));
+        assert!(in_view(&nav_label(&window, "wifi")));
+    }
+
     /// The bottom edge of the first element with this accessible label.
     fn bottom(window: &MainWindow, label: &str) -> f32 {
         let e = ElementHandle::find_by_accessible_label(window, label).next().expect(label);
