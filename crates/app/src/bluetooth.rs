@@ -189,7 +189,7 @@ impl State {
         self.snapshot.as_ref().and_then(|s| s.device(path))
     }
 
-    fn send(&mut self, command: Command) {
+    pub fn send(&mut self, command: Command) {
         if let Some(device) = command.device() {
             self.busy.insert(device.to_owned());
         }

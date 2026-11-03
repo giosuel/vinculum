@@ -7,6 +7,7 @@ use clap::Parser;
 use futures_util::StreamExt;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+mod airplane;
 mod audio;
 mod bluetooth;
 mod config;
@@ -155,6 +156,8 @@ struct App {
     displays: displays::State,
     /// The Sound page.
     sound: sound::State,
+    /// Airplane mode, from when it's turned on until it ends.
+    airplane: Option<airplane::Airplane>,
     /// The sidebar's search.
     nav_query: String,
     /// The Network tab last open, for coming back to it from the sidebar.
@@ -338,7 +341,7 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
         tray::Event::Connect(id) | tray::Event::Toggle(id) => {
             update(&weak, |app| {
                 let Some(snap) = &app.snapshot else { return };
-                let q = quick::build(Some(snap), &app.signing_in);
+                let q = quick::build(Some(snap), app.quick.airplane, &app.signing_in);
                 let page = if id.starts_with("wifi:") { view::Page::Wifi } else { view::Page::Vpn };
                 let action = if id.starts_with("wifi:") {
                     if q.networks.iter().any(|n| n.id == id && n.active) {
@@ -365,7 +368,7 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
             }
         }
         tray::Event::SetWifi(on) => update(&weak, |app| send(app, view::Command::SetWifi(on))),
-        tray::Event::SetAirplane(on) => update(&weak, |app| send(app, view::Command::SetAirplane(on))),
+        tray::Event::SetAirplane(on) => update(&weak, |app| set_airplane(app, on)),
         tray::Event::Open => {
             hide_quick();
             let _ = window.show();
@@ -479,8 +482,8 @@ fn toggle_quick(window: &MainWindow) {
 }
 
 /// The tray and the popup show what changed.
-fn render_quick(app: &mut App) {
-    let q = quick::build(app.snapshot.as_ref(), &app.signing_in);
+fn render_quick(app: &mut App, airplane: bool) {
+    let q = quick::build(app.snapshot.as_ref(), airplane, &app.signing_in);
     let bt = bluetooth::quick(&app.bt);
     if q == app.quick && bt == app.quick_bt && !std::mem::take(&mut app.quick_new) {
         return;
@@ -527,7 +530,7 @@ fn render_quick(app: &mut App) {
         toggles.push(QuickToggle {
             id: "airplane".into(),
             name: "Airplane mode".into(),
-            meta: "Turns off Wi-Fi and mobile broadband".into(),
+            meta: "Turns off Wi-Fi, Bluetooth and mobile broadband".into(),
             on: q.airplane,
         });
         popup.set_toggles(model(toggles));
@@ -871,13 +874,7 @@ fn connect_callbacks(window: &MainWindow) {
         })
     });
     let weak = window.as_weak();
-    window.on_airplane_toggled(move || {
-        update(&weak, |app| {
-            if let Some(command) = app.snapshot.as_ref().map(view::airplane_switch) {
-                send(app, command);
-            }
-        })
-    });
+    window.on_airplane_toggled(move || update(&weak, |app| set_airplane(app, !app.quick.airplane)));
     window.on_join_check(|mode, name, security, password| {
         let password_ok = |index| key_mgmt_at(index).is_some_and(|k| k.accepts(&password));
         if mode == "hidden" {
@@ -1067,6 +1064,16 @@ fn send(app: &mut App, command: view::Command) {
     }
 }
 
+/// Airplane mode on or off: NetworkManager switches Wi-Fi and mobile broadband, the Bluetooth
+/// thread the adapters.
+fn set_airplane(app: &mut App, on: bool) {
+    let change = airplane::switch(&mut app.airplane, on, app.snapshot.as_ref(), app.bt.snapshot.as_ref());
+    send(app, view::Command::SetAirplane { on, wifi: change.wifi, wwan: change.wwan });
+    for (adapter, on) in change.bluetooth {
+        app.bt.send(bluetooth::Command::Power { adapter, on });
+    }
+}
+
 /// Changes the state, then shows it.
 fn update(weak: &slint::Weak<MainWindow>, change: impl FnOnce(&mut App)) {
     APP.with(|app| change(&mut app.borrow_mut()));
@@ -1241,6 +1248,8 @@ fn render(window: &MainWindow) {
     APP.with(|app| {
         let mut app = app.borrow_mut();
         app.ui.signing_in = app.signing_in.clone();
+        let state = &mut *app;
+        let airplane = airplane::follow(&mut state.airplane, state.snapshot.as_ref(), state.bt.snapshot.as_ref());
         let v = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui);
         let current = if app.ui.page.is_network() { "network" } else { app.ui.page.id() };
         let mut entries = nav_entries(&app);
@@ -1317,7 +1326,7 @@ fn render(window: &MainWindow) {
         }
         window.set_message_title(if app.message.is_some() { app.message_title.as_str().into() } else { "".into() });
         window.set_message_action(if app.retry.is_some() { "Try again".into() } else { "".into() });
-        window.set_airplane(app.snapshot.as_ref().is_some_and(|s| s.airplane()));
+        window.set_airplane(airplane);
         let keyring = app.keyring;
         window.set_keyring_label(
             match keyring {
@@ -1358,7 +1367,7 @@ fn render(window: &MainWindow) {
         sound::render(window, &app.sound);
         displays::render(window, &app.displays);
         files::render(window, &app.files);
-        render_quick(&mut app);
+        render_quick(&mut app, airplane);
     });
 }
 
@@ -1760,7 +1769,7 @@ async fn run(
             (active, Some(device.clone()), retry)
         }
         SetWifi(on) => return client.set_wireless_enabled(*on).await.map(|()| None),
-        SetAirplane(on) => return client.set_airplane(*on).await.map(|()| None),
+        SetAirplane { wifi, wwan, .. } => return client.set_radios(*wifi, *wwan).await.map(|()| None),
         Rescan { device } => return client.request_scan(device).await.map(|()| None),
         Deactivate { active } => return client.deactivate(active).await.map(|()| None),
         Forget { connection } => return client.forget(connection).await.map(|()| None),
@@ -2222,8 +2231,8 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituu
     let what = match command {
         SetWifi(true) => "Couldn't turn Wi-Fi on",
         SetWifi(false) => "Couldn't turn Wi-Fi off",
-        SetAirplane(true) => "Couldn't turn airplane mode on",
-        SetAirplane(false) => "Couldn't turn airplane mode off",
+        SetAirplane { on: true, .. } => "Couldn't turn airplane mode on",
+        SetAirplane { on: false, .. } => "Couldn't turn airplane mode off",
         Rescan { .. } => "Couldn't scan",
         Activate { .. } | ConnectOpen { .. } | Join { .. } => "Couldn't connect",
         CancelSignIn { .. } => "Couldn't close the sign-in window",
@@ -2251,9 +2260,13 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituu
         ),
         other => (format!("{what}: {other}."), "danger"),
     };
+    let airplane_failed = matches!(command, SetAirplane { on: true, .. });
     let _ = weak.upgrade_in_event_loop(move |window| {
         APP.with(|app| {
             let mut app = app.borrow_mut();
+            if airplane_failed {
+                app.airplane = None;
+            }
             app.message_title.clear();
             app.retry = None;
             app.message = Some((text, tone));
