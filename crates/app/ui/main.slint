@@ -9,7 +9,7 @@ import "fonts/JetBrainsMono-Medium.ttf";
 import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Kbd } from "controls.slint";
+import { Button, IconButton, Switch, PillSwitch, SectionLabel, Kbd } from "controls.slint";
 import { JoinDialog, TextField, Segmented, Modal } from "dialogs.slint";
 import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
@@ -701,25 +701,16 @@ export component MainWindow inherits Window {
                             spacing: 8px;
                             if root.bt.state == "list": IconButton { icon: "rescan"; label: "Look for devices again"; width: 34px; height: 34px; clicked => { root.bt-act("rescan", ""); keys.focus(); } }
                             if root.bt.state == "list": IconButton { icon: "gear"; label: "Adapter settings"; width: 34px; height: 34px; clicked => { root.bt-act("adapter", ""); } }
-                            if root.bt.state == "list" || root.bt.state == "off": Rectangle {
-                                width: bt-pill.preferred-width;
-                                border-radius: 8px;
-                                border-width: 1px;
-                                border-color: Theme.ctrl-border;
-                                background: Theme.input-bg;
-                                bt-pill := HorizontalLayout {
-                                    padding-left: 12px;
-                                    padding-right: 6px;
-                                    spacing: 10px;
-                                    Text { text: "Bluetooth"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
-                                    Switch {
-                                        on: root.bt.powered;
-                                        label: "Bluetooth";
-                                        switch-width: 40px;
-                                        y: (parent.height - self.height) / 2;
-                                        toggled => { root.bt-act("power", ""); keys.focus(); }
-                                    }
-                                }
+                            if root.bt.state == "list": PillSwitch {
+                                label: "Visible";
+                                on: root.bt.visible;
+                                note: root.bt.visible-left;
+                                toggled => { root.bt-act("visible", ""); keys.focus(); }
+                            }
+                            if root.bt.state == "list" || root.bt.state == "off": PillSwitch {
+                                label: "Bluetooth";
+                                on: root.bt.powered;
+                                toggled => { root.bt-act("power", ""); keys.focus(); }
                             }
                         }
                     }

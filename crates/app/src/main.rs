@@ -286,7 +286,7 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
     std::mem::forget(countdown);
-    // The Bluetooth page's "Visible · 2:41" counts down.
+    // The Bluetooth Visible switch counts down ("2:41").
     let countdown = slint::Timer::default();
     let weak = window.as_weak();
     countdown.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
@@ -1261,7 +1261,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             label: "Bluetooth",
             icon: "bluetooth",
             group: "CONNECTIONS",
-            keywords: "pair pairing headphones headset keyboard mouse speaker devices",
+            keywords: "pair pairing headphones headset keyboard mouse speaker devices visible discoverable pairable adapter",
             status: bluetooth::nav(&app.bt, false).sub.to_string(),
             parent: None,
         },
@@ -2743,10 +2743,14 @@ mod dialog_tests {
 mod tests {
     use std::time::Duration;
 
-    use i_slint_backend_testing::{ElementHandle, mock_elapsed_time};
-    use slint::{ComponentHandle, LogicalSize};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
-    use super::{App, MainWindow, act, mark_failed, openconnect, view};
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle, mock_elapsed_time};
+    use slint::platform::{PointerEventButton, WindowEvent};
+    use slint::{ComponentHandle, LogicalPosition, LogicalSize};
+
+    use super::{App, BtPage, MainWindow, act, mark_failed, openconnect, view};
 
     /// An app with a saved AnyConnect VPN, selected, whose commands go to the receiver.
     fn with_a_vpn() -> (App, tokio::sync::mpsc::UnboundedReceiver<view::Command>) {
@@ -2861,5 +2865,70 @@ mod tests {
         assert!(bottom("Settings") < bottom("Airplane mode"));
         // The last page is still there, below the fold.
         assert!(bottom("Appearance") > 0.0);
+    }
+
+    /// The Bluetooth hero has a Visible switch beside the Bluetooth one, with the time it has
+    /// left, while Bluetooth is on; a click anywhere on its pill switches it. The adapter dialog
+    /// sets how long it lasts.
+    #[test]
+    fn the_visible_switch_is_in_the_bluetooth_hero() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.set_page("bluetooth".into());
+        let list = BtPage { state: "list".into(), powered: true, visible: true, ..BtPage::default() };
+        window.set_bt(BtPage { visible_left: "2:41".into(), ..list.clone() });
+        let acts = Rc::new(RefCell::new(Vec::new()));
+        let seen = acts.clone();
+        window.on_bt_act(move |verb, argument| seen.borrow_mut().push(format!("{verb} {argument}")));
+        window.show().unwrap();
+        let switch = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Switch))
+        };
+
+        let visible = switch("Visible").expect("the Visible switch");
+        let bluetooth = switch("Bluetooth").expect("the Bluetooth switch");
+        assert_eq!(visible.accessible_checked(), Some(true));
+        assert!(visible.absolute_position().x < bluetooth.absolute_position().x);
+        let left = ElementHandle::find_by_accessible_label(&window, "2:41").next().expect("the time left");
+        assert!(left.absolute_position().x < visible.absolute_position().x);
+        // The old card's chips are gone.
+        assert_eq!(ElementHandle::find_by_accessible_label(&window, "Pairable").count(), 0);
+
+        // On the label, beside the switch itself.
+        let (at, size) = (visible.absolute_position(), visible.size());
+        let position = LogicalPosition::new(at.x - 60.0, at.y + size.height / 2.0);
+        window.window().dispatch_event(WindowEvent::PointerMoved { position });
+        window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+        assert_eq!(*acts.borrow(), ["visible "]);
+
+        // Hidden: no time.
+        window.set_bt(BtPage { visible: false, ..list.clone() });
+        assert_eq!(switch("Visible").and_then(|s| s.accessible_checked()), Some(false));
+        assert_eq!(ElementHandle::find_by_accessible_label(&window, "2:41").count(), 0);
+
+        // The adapter dialog: how long, not whether.
+        acts.borrow_mut().clear();
+        window.set_bt_adapter_open(true);
+        let choices: Vec<String> = ElementHandle::find_by_accessible_label(&window, "Visible switch")
+            .find(|e| e.accessible_role() == Some(AccessibleRole::TabList))
+            .expect("the Visible switch's time")
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::Tab)
+            .find_all()
+            .iter()
+            .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
+            .collect();
+        assert_eq!(choices, ["3 minutes", "Always"]);
+        ElementHandle::find_by_accessible_label(&window, "Always").next().unwrap().invoke_accessible_default_action();
+        assert_eq!(*acts.borrow(), ["adapter-visible 1"]);
+        window.set_bt_adapter_open(false);
+
+        // Bluetooth off: only the Bluetooth switch.
+        window.set_bt(BtPage { state: "off".into(), ..BtPage::default() });
+        assert!(switch("Visible").is_none());
+        assert_eq!(switch("Bluetooth").and_then(|s| s.accessible_checked()), Some(false));
     }
 }

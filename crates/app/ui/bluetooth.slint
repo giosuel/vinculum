@@ -20,11 +20,9 @@ export struct BtSection { title: string, rows: [BtRow], busy: string, empty: str
 export struct BtPage {
     state: string,
     powered: bool,
-    alias: string,
-    adapter: string,
+    /// The Visible switch in the hero, and the time it has left ("2:41") when Lituus knows it.
     visible: bool,
-    visible-label: string,
-    pairable: bool,
+    visible-left: string,
     /// The hero: the connected device (or the adapter), and the line under the page title.
     hero: HeroInfo,
     hero-sub: string,
@@ -109,31 +107,6 @@ component BtListRow inherits Rectangle {
     }
 }
 
-/// A small switch-like label on the adapter card ("✓ Visible · 2:41").
-component Pill inherits Rectangle {
-    in property <string> label;
-    in property <bool> on;
-    callback clicked();
-    height: 26px;
-    width: pill.preferred-width;
-    border-radius: 13px;
-    border-width: 1px;
-    border-color: on ? Theme.accent-soft-border : Theme.ctrl-border;
-    background: on ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
-    accessible-role: checkbox;
-    accessible-label: label;
-    accessible-checked: on;
-    accessible-action-default => { clicked(); }
-    pill := HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 12px;
-        spacing: 5px;
-        if root.on: Icon { name: "check"; tint: Theme.accent; size: 12px; y: (parent.height - 12px) / 2; }
-        Text { text: root.label; color: root.on ? Theme.text : Theme.muted; font-size: 12px; vertical-alignment: center; }
-    }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
-}
-
 export component BluetoothPage inherits HorizontalLayout {
     spacing: 14px;
     in property <BtPage> page;
@@ -155,30 +128,6 @@ export component BluetoothPage inherits HorizontalLayout {
         VerticalLayout {
             padding: 10px;
             spacing: 10px;
-            if root.page.state == "list": Rectangle {
-                border-radius: 10px;
-                border-width: 1px;
-                border-color: Theme.border2;
-                background: Theme.surface;
-                height: card.preferred-height;
-                card := VerticalLayout {
-                    padding: 12px;
-                    padding-top: 8px;
-                    spacing: 8px;
-                    HorizontalLayout {
-                        spacing: 8px;
-                        height: 30px;
-                        Text { text: "Visible as"; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
-                        Text { text: root.page.alias; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                    }
-                    HorizontalLayout {
-                        spacing: 6px;
-                        Pill { label: root.page.visible-label; on: root.page.visible; clicked => { root.act("visible", ""); } }
-                        Pill { label: "Pairable"; on: root.page.pairable; clicked => { root.act("pairable", ""); } }
-                        Text { text: root.page.adapter; color: Theme.muted; font-size: 12px; horizontal-alignment: right; vertical-alignment: center; horizontal-stretch: 1; }
-                    }
-                }
-            }
             if root.page.state == "list" && root.page.message != "": Rectangle {
                 border-radius: 8px;
                 border-width: 1px;
@@ -455,6 +404,7 @@ export component BtAdapterDialog inherits Modal {
     in property <string> adapter;
     in property <bool> pairable;
     in-out property <string> name;
+    /// How long the Visible switch keeps the computer visible: 0 "3 minutes", 1 "Always".
     in-out property <int> visible-choice;
     callback name-saved();
     callback visible-chosen(int);
@@ -482,10 +432,14 @@ export component BtAdapterDialog inherits Modal {
             }
         }
         Row {
-            Text { text: "Visible"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
-            HorizontalLayout {
-                alignment: start;
-                Segmented { options: ["Hidden", "3 minutes", "Always"]; selected <=> root.visible-choice; label: "Visible"; changed(i) => { root.visible-chosen(i); } }
+            Text { text: "Visible switch"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+            VerticalLayout {
+                spacing: 4px;
+                HorizontalLayout {
+                    alignment: start;
+                    Segmented { options: ["3 minutes", "Always"]; selected <=> root.visible-choice; label: "Visible switch"; changed(i) => { root.visible-chosen(i); } }
+                }
+                Text { text: "How long the Visible switch keeps the computer visible"; color: Theme.muted; font-size: 12px; }
             }
         }
         Row {
