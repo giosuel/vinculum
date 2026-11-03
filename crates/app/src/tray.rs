@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn menu_follows_the_mockup() {
-        let q = crate::quick::build(Some(&home()));
+        let q = crate::quick::build(Some(&home()), false);
         assert_eq!(
             labels(&menu(&q)),
             [

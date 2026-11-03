@@ -495,7 +495,7 @@ fn network_summary(snapshot: Option<&Snapshot>, view: &mut View) {
     let vpn = if vpns.is_empty() { "VPN off".to_owned() } else { format!("VPN: {}", vpns.join(", ")) };
     view.net_sub = wifi.into_iter().chain(wired).chain(std::iter::once(vpn)).collect::<Vec<_>>().join(" · ");
     view.net_hero = network_hero(snap);
-    view.net_status = if snap.airplane() {
+    view.net_status = if snap.wireless_off() {
         "Off".to_owned()
     } else if view.net_hero.row.is_some() {
         view.net_hero.name.clone()
@@ -1202,7 +1202,13 @@ pub enum Command {
         access_point: Option<String>,
         join: WifiJoin,
     },
-    SetAirplane(bool),
+    /// Airplane mode on or off: Wi-Fi and mobile broadband switched to these (Bluetooth is the
+    /// Bluetooth thread's; see `airplane.rs`).
+    SetAirplane {
+        on: bool,
+        wifi: bool,
+        wwan: bool,
+    },
     /// Read a connection's settings (or none, for a new one) and open the editor.
     OpenEditor {
         connection: Option<String>,
@@ -1460,11 +1466,6 @@ pub fn row_name(snap: &Snapshot, id: &str) -> Option<String> {
     }
     let uuid = id.strip_prefix("conn:")?;
     snap.connections.iter().find(|c| c.uuid == uuid).map(|c| c.id.clone())
-}
-
-/// Airplane mode on or off.
-pub fn airplane_switch(snap: &Snapshot) -> Command {
-    Command::SetAirplane(!snap.airplane())
 }
 
 /// The Wi-Fi device a hidden network is joined on.
@@ -1798,13 +1799,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn airplane_mode_is_wifi_and_mobile_broadband_off() {
+    fn hidden_networks_are_joined_on_the_wifi_device() {
         let mut snap = home();
-        assert_eq!(airplane_switch(&snap), Command::SetAirplane(true));
         snap.wireless_enabled = false;
-        assert!(!snap.airplane(), "mobile broadband is still on");
-        snap.wwan_enabled = false;
-        assert_eq!(airplane_switch(&snap), Command::SetAirplane(false));
         assert_eq!(hidden_network_device(&snap).as_deref(), Some("/d/wlan"));
     }
 

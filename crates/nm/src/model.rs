@@ -24,8 +24,8 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// Airplane mode is Wi-Fi and mobile broadband both switched off.
-    pub fn airplane(&self) -> bool {
+    /// Wi-Fi and mobile broadband both switched off.
+    pub fn wireless_off(&self) -> bool {
         !self.wireless_enabled && !self.wwan_enabled
     }
 
