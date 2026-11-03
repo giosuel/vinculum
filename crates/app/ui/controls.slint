@@ -134,6 +134,8 @@ export component Scroll inherits Rectangle {
     max-width: 100000px;
     max-height: 100000px;
     property <length> range: flick.content-height - flick.height;
+    /// The content doesn't fit, so it scrolls (and the scrollbar shows).
+    out property <bool> overflows: root.range > 0.5px;
     // Content that got shorter (other details, say) stays at the bottom, not below it.
     changed range => { flick.content-y = max(flick.content-y, -max(0, root.range)); }
 
@@ -163,7 +165,7 @@ export component Scroll inherits Rectangle {
         }
     }
 
-    if root.range > 0.5px: Rectangle {
+    if root.overflows: Rectangle {
         property <length> thumb: max(32px, self.height * flick.height / flick.content-height);
         property <length> start;
         x: root.width - self.width - root.bar-inset;

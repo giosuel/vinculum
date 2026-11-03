@@ -3,7 +3,7 @@
 // the cards below it.
 import { Theme } from "theme.slint";
 import { Icon, Logo } from "icons.slint";
-import { Switch, SectionLabel } from "controls.slint";
+import { Switch, SectionLabel, Scroll } from "controls.slint";
 
 /// sub: a short status on the right ("Home", "2 on", "45%"). open: an item showing its
 /// sub-items, on one of their pages. indent: a sub-item. foldable: an item with sub-items, which
@@ -157,33 +157,30 @@ export component Sidebar inherits Rectangle {
                 }
             }
         }
-        // The pages scroll when they don't fit above Settings (Network's sub-items in a short
-        // window).
-        page-list := Flickable {
+        // The pages scroll when they don't fit between the search and Settings (Network's
+        // sub-items in a short window), with the scrollbar in the padding on the right.
+        page-list := Scroll {
             vertical-stretch: 1;
-            content-height: pages.preferred-height;
-            pages := VerticalLayout {
-                alignment: start;
+            spacing: 1px;
+            bar-inset: -8px;
+            for group in root.groups: VerticalLayout {
                 spacing: 1px;
-                for group in root.groups: VerticalLayout {
-                    spacing: 1px;
-                    SectionLabel { text: group.title; height: 30px; vertical-alignment: bottom; x: 12px; }
-                    Rectangle { height: 4px; }
-                    for item in group.items: NavButton {
-                        item: item;
-                        clicked => { root.navigate(item.id); }
-                        fold-clicked => { root.fold(item.id); }
-                    }
+                SectionLabel { text: group.title; height: 30px; vertical-alignment: bottom; x: 12px; }
+                Rectangle { height: 4px; }
+                for item in group.items: NavButton {
+                    item: item;
+                    clicked => { root.navigate(item.id); }
+                    fold-clicked => { root.fold(item.id); }
                 }
-                if root.groups.length == 0: HorizontalLayout {
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    Text { text: "No setting matches the search."; color: Theme.faint; font-size: 12px; wrap: word-wrap; height: 40px; vertical-alignment: center; }
-                }
+            }
+            if root.groups.length == 0: HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                Text { text: "No setting matches the search."; color: Theme.faint; font-size: 12px; wrap: word-wrap; height: 40px; vertical-alignment: center; }
             }
         }
         // A line where the pages are cut off; always there, so the layout doesn't change.
-        Rectangle { height: 1px; background: pages.preferred-height > page-list.height ? Theme.border : transparent; }
+        Rectangle { height: 1px; background: page-list.overflows ? Theme.border : transparent; }
         NavButton {
             item: { id: "settings", label: "Settings", sub: "", icon: "settings", current: root.settings-current };
             clicked => { root.navigate("settings"); }
