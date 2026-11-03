@@ -341,13 +341,14 @@ pub async fn sign_in(
     let stderr = child.stderr.take().expect("piped");
     let last_words = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
-        let mut last = String::new();
+        let (mut before, mut last) = (String::new(), String::new());
         while let Ok(Some(line)) = lines.next_line().await {
             if !line.trim().is_empty() {
-                last = line;
+                before = std::mem::replace(&mut last, line);
             }
         }
-        last
+        // Its settings were wrong: the line before says how.
+        if last.starts_with("Failed to find VPN UUID") && !before.is_empty() { before } else { last }
     });
     // It reads everything up to DONE before it shows the window; a closed pipe means it quit.
     let _ = stdin.write_all(dialog_input(s.data, s.secrets).as_bytes()).await;
@@ -754,6 +755,15 @@ pub(crate) mod tests {
         assert_eq!(
             run(&failed),
             Err(SignInError::Failed("The sign-in window stopped: cannot open display: :0.".into()))
+        );
+        let no_gateway = fake_dialog(
+            &dir,
+            "no-gateway",
+            "echo 'No gateway configured' >&2\necho 'Failed to find VPN UUID u-1' >&2\nexit 1",
+        );
+        assert_eq!(
+            run(&no_gateway),
+            Err(SignInError::Failed("The sign-in window stopped: No gateway configured.".into()))
         );
         let silent = fake_dialog(&dir, "silent", "exit 3");
         assert_eq!(
