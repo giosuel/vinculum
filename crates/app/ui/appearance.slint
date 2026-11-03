@@ -2,7 +2,7 @@
 // first, a built-in theme when they're off or missing, dark or light, and the hero glow.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Switch, SectionLabel } from "controls.slint";
+import { Switch, SectionLabel, Scroll } from "controls.slint";
 import { Segmented } from "dialogs.slint";
 import { Hero, Card } from "shell.slint";
 
@@ -124,6 +124,8 @@ export component AppearancePage inherits VerticalLayout {
     in property <bool> gradient;
     in property <[SourceRow]> sources;
     in property <string> config-path;
+    /// A short window: a smaller hero, without the window in miniature.
+    in property <bool> compact;
     callback follow-toggled();
     callback theme-chosen(int);
     callback mode-chosen(int);
@@ -133,8 +135,10 @@ export component AppearancePage inherits VerticalLayout {
     Hero {
         title: "Appearance";
         sub: root.sub;
-        hero-height: 286px;
-        HorizontalLayout {
+        hero-height: root.compact ? 136px : 286px;
+        compact: root.compact;
+        aside: follow.width + 18px;
+        if !root.compact: HorizontalLayout {
             x: 24px;
             y: parent.height - self.height - 24px;
             width: parent.width - 48px;
@@ -162,7 +166,32 @@ export component AppearancePage inherits VerticalLayout {
                 }
             }
         }
-        Rectangle {
+        // The name, and the wallpaper's colours as small swatches beside it.
+        if root.compact: HorizontalLayout {
+            x: 24px;
+            y: parent.height - self.height - 16px;
+            width: parent.width - 48px;
+            height: 56px;
+            spacing: 24px;
+            VerticalLayout {
+                alignment: end;
+                spacing: 5px;
+                padding-bottom: 4px;
+                horizontal-stretch: 1;
+                Text { text: root.name; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; }
+                Text { text: root.name-text; color: Theme.muted; font-size: 13px; overflow: elide; }
+            }
+            if root.wallpaper-in-use: HorizontalLayout {
+                spacing: 12px;
+                for chip in root.chips: VerticalLayout {
+                    alignment: end;
+                    spacing: 4px;
+                    Rectangle { width: 34px; height: 34px; border-radius: 9px; background: chip.value; border-width: 1px; border-color: Theme.ctrl-border; }
+                    Text { text: chip.label; color: Theme.text; font-size: 11px; horizontal-alignment: center; }
+                }
+            }
+        }
+        follow := Rectangle {
             x: parent.width - self.width - 18px;
             y: 18px;
             width: follow-pill.preferred-width;
@@ -188,109 +217,116 @@ export component AppearancePage inherits VerticalLayout {
         }
     }
 
-    Card {
-        height: theme-card.preferred-height;
-        theme-card := VerticalLayout {
-            padding: 18px;
-            spacing: 12px;
-            HorizontalLayout {
-                spacing: 10px;
-                Text { text: "Built-in theme"; color: Theme.text; font-weight: 600; vertical-alignment: center; }
-                Text {
-                    text: root.note != "" ? root.note : "Used when Follow wallpaper is off or no colours are found";
-                    color: Theme.muted;
-                    font-size: 12px;
-                    horizontal-alignment: right;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    overflow: elide;
-                }
-            }
-            HorizontalLayout {
-                spacing: 14px;
-                for swatch[i] in root.swatches: Swatch {
-                    horizontal-stretch: 1;
-                    swatch: swatch;
-                    enabled: root.note == "";
-                    clicked => { root.theme-chosen(i); }
-                }
-            }
-        }
-    }
-
-    HorizontalLayout {
-        spacing: 14px;
+    // Below the hero, the page scrolls when the window is too short for it.
+    Scroll {
         vertical-stretch: 1;
+        fill: true;
+        spacing: 14px;
+        bar-inset: -16px;
         Card {
-            horizontal-stretch: 1;
-            VerticalLayout {
+            height: theme-card.preferred-height;
+            theme-card := VerticalLayout {
                 padding: 18px;
-                spacing: 4px;
-                alignment: start;
-                Text { text: "Look"; color: Theme.text; font-weight: 600; height: 26px; }
+                spacing: 12px;
                 HorizontalLayout {
-                    spacing: 16px;
-                    min-height: 52px;
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
+                    spacing: 10px;
+                    Text { text: "Built-in theme"; color: Theme.text; font-weight: 600; vertical-alignment: center; }
+                    Text {
+                        text: root.note != "" ? root.note : "Used when Follow wallpaper is off or no colours are found";
+                        color: Theme.muted;
+                        font-size: 12px;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
                         horizontal-stretch: 1;
-                        Text { text: "Mode"; color: Theme.text; font-size: 13px; }
-                        Text { text: "Auto follows the desktop"; color: Theme.faint; font-size: 12px; }
-                    }
-                    Segmented {
-                        label: "Mode";
-                        options: ["Auto", "Dark", "Light"];
-                        selected: root.mode;
-                        enabled: !root.wallpaper-in-use;
-                        y: (parent.height - self.height) / 2;
-                        changed(i) => { root.mode-chosen(i); }
+                        overflow: elide;
                     }
                 }
-                Rectangle { height: 1px; background: Theme.border; }
                 HorizontalLayout {
-                    spacing: 16px;
-                    min-height: 52px;
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
+                    spacing: 14px;
+                    for swatch[i] in root.swatches: Swatch {
                         horizontal-stretch: 1;
-                        Text { text: "Hero gradient"; color: Theme.text; font-size: 13px; }
-                        Text { text: "The accent glow behind each page's picture"; color: Theme.faint; font-size: 12px; }
+                        swatch: swatch;
+                        enabled: root.note == "";
+                        clicked => { root.theme-chosen(i); }
                     }
-                    Switch { on: root.gradient; label: "Hero gradient"; y: (parent.height - self.height) / 2; toggled => { root.gradient-toggled(); } }
                 }
             }
         }
-        Card {
-            horizontal-stretch: 1;
-            VerticalLayout {
-                padding: 18px;
-                spacing: 0;
-                alignment: start;
-                HorizontalLayout {
-                    height: 30px;
-                    Text { text: "Colour files"; color: Theme.text; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
-                    Text { text: root.config-path; color: Theme.faint; font-size: 11px; font-family: "JetBrains Mono"; vertical-alignment: center; }
-                }
-                for s[i] in root.sources: HorizontalLayout {
-                    min-height: 46px;
-                    spacing: 10px;
-                    Rectangle { width: 8px; height: 8px; border-radius: 4px; y: (parent.height - 8px) / 2; background: Theme.tone(s.tone); }
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
-                        horizontal-stretch: 1;
-                        Text { text: s.path; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
-                        Text { text: s.label + " · " + s.status; color: Theme.faint; font-size: 12px; overflow: elide; }
-                    }
+
+        HorizontalLayout {
+            spacing: 14px;
+            vertical-stretch: 1;
+            Card {
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 4px;
+                    alignment: start;
+                    Text { text: "Look"; color: Theme.text; font-weight: 600; height: 26px; }
                     HorizontalLayout {
-                        spacing: 3px;
-                        alignment: center;
-                        for c in s.swatches: Rectangle { width: 14px; height: 14px; y: (parent.height - 14px) / 2; border-radius: 4px; background: c; border-width: 1px; border-color: Theme.border2; }
+                        spacing: 16px;
+                        min-height: 52px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            horizontal-stretch: 1;
+                            Text { text: "Mode"; color: Theme.text; font-size: 13px; }
+                            Text { text: "Auto follows the desktop"; color: Theme.faint; font-size: 12px; }
+                        }
+                        Segmented {
+                            label: "Mode";
+                            options: ["Auto", "Dark", "Light"];
+                            selected: root.mode;
+                            enabled: !root.wallpaper-in-use;
+                            y: (parent.height - self.height) / 2;
+                            changed(i) => { root.mode-chosen(i); }
+                        }
+                    }
+                    Rectangle { height: 1px; background: Theme.border; }
+                    HorizontalLayout {
+                        spacing: 16px;
+                        min-height: 52px;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            horizontal-stretch: 1;
+                            Text { text: "Hero gradient"; color: Theme.text; font-size: 13px; }
+                            Text { text: "The accent glow behind each page's picture"; color: Theme.faint; font-size: 12px; }
+                        }
+                        Switch { on: root.gradient; label: "Hero gradient"; y: (parent.height - self.height) / 2; toggled => { root.gradient-toggled(); } }
                     }
                 }
-                Text { text: "Add or reorder colour files in config.toml."; color: Theme.faint; font-size: 12px; height: 30px; vertical-alignment: bottom; }
+            }
+            Card {
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 0;
+                    alignment: start;
+                    HorizontalLayout {
+                        height: 30px;
+                        Text { text: "Colour files"; color: Theme.text; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                        Text { text: root.config-path; color: Theme.faint; font-size: 11px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+                    }
+                    for s[i] in root.sources: HorizontalLayout {
+                        min-height: 46px;
+                        spacing: 10px;
+                        Rectangle { width: 8px; height: 8px; border-radius: 4px; y: (parent.height - 8px) / 2; background: Theme.tone(s.tone); }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+                            horizontal-stretch: 1;
+                            Text { text: s.path; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+                            Text { text: s.label + " · " + s.status; color: Theme.faint; font-size: 12px; overflow: elide; }
+                        }
+                        HorizontalLayout {
+                            spacing: 3px;
+                            alignment: center;
+                            for c in s.swatches: Rectangle { width: 14px; height: 14px; y: (parent.height - 14px) / 2; border-radius: 4px; background: c; border-width: 1px; border-color: Theme.border2; }
+                        }
+                    }
+                    Text { text: "Add or reorder colour files in config.toml."; color: Theme.faint; font-size: 12px; height: 30px; vertical-alignment: bottom; }
+                }
             }
         }
     }

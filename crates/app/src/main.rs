@@ -2931,4 +2931,140 @@ mod tests {
         assert!(switch("Visible").is_none());
         assert_eq!(switch("Bluetooth").and_then(|s| s.accessible_checked()), Some(false));
     }
+
+    /// The bottom edge of the first element with this accessible label.
+    fn bottom(window: &MainWindow, label: &str) -> f32 {
+        let e = ElementHandle::find_by_accessible_label(window, label).next().expect(label);
+        e.absolute_position().y + e.size().height
+    }
+
+    fn wifi_rows(n: usize, selected: usize) -> Vec<super::Row> {
+        (0..n)
+            .map(|i| super::Row {
+                id: format!("n{i}").into(),
+                name: format!("Network {i}").into(),
+                meta: "WPA2 · 5 GHz".into(),
+                icon: "bars".into(),
+                bars: 3,
+                selected: i == selected,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// In the smallest window, Wi-Fi keeps its hint bar, the button under the list and a
+    /// details pane that ends inside the window, however long the list and the details are.
+    #[test]
+    fn the_network_page_fits_the_smallest_window() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("wifi".into());
+        window.set_count("12 networks in range".into());
+        window.set_bottom_label("Connect to hidden network…".into());
+        let section = super::Section { title: "AVAILABLE".into(), rows: super::model(wifi_rows(12, 0)) };
+        window.set_sections(super::model(vec![section]));
+        window.set_has_details(true);
+        let toggle = |id: &str| super::Toggle {
+            id: id.into(),
+            label: "Trusted".into(),
+            sub: "Connects and uses its services without asking you first, every time".into(),
+            on: false,
+        };
+        let item =
+            |i: usize| super::DetailItem { label: format!("Item {i}").into(), value: "value".into(), mono: false };
+        window.set_details(super::Details {
+            title: "Network 0".into(),
+            toggles: super::model(vec![toggle("a"), toggle("b")]),
+            items: super::model((0..12).map(item).collect()),
+            ..Default::default()
+        });
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        mock_elapsed_time(Duration::from_millis(50));
+
+        // The hint bar is the bottom 30 px.
+        assert!(
+            bottom(&window, "Connect to hidden network…") <= 570.0,
+            "{}",
+            bottom(&window, "Connect to hidden network…")
+        );
+        let pane = ElementHandle::find_by_element_type_name(&window, "DetailsPane").next().expect("the details");
+        let (pane_at, pane_size) = (pane.absolute_position(), pane.size());
+        assert!(pane_at.y + pane_size.height <= 570.0);
+        assert!(pane_at.x + pane_size.width <= 1040.0);
+        // The details scroll on their own: the last item is out of view, and the wheel brings
+        // it in.
+        assert!(ElementHandle::find_by_accessible_label(&window, "Item 11").next().is_none());
+        window.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(pane_at.x + 100.0, pane_at.y + 100.0),
+            delta_x: 0.0,
+            delta_y: -2000.0,
+        });
+        mock_elapsed_time(Duration::from_millis(500));
+        assert!(bottom(&window, "Item 11") <= pane_at.y + pane_size.height);
+    }
+
+    /// The bar with Apply stays in the smallest window, below the monitor's settings, with the
+    /// banner about the Hyprland config shown too.
+    #[test]
+    fn the_displays_apply_bar_stays_in_the_smallest_window() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("displays".into());
+        window.set_displays(super::DisplaysView {
+            state: "list".into(),
+            not_loaded: true,
+            can_apply: true,
+            ..Default::default()
+        });
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        mock_elapsed_time(Duration::from_millis(50));
+        let apply = ElementHandle::find_by_accessible_label(&window, "Apply").next().expect("Apply");
+        assert!(apply.absolute_position().y > 400.0, "{}", apply.absolute_position().y);
+        assert!(bottom(&window, "Apply") <= 570.0, "{}", bottom(&window, "Apply"));
+    }
+
+    /// Moving the selection with the arrow keys scrolls the list to the selected row.
+    #[test]
+    fn the_selected_row_scrolls_into_view() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("wifi".into());
+        let set = |w: &MainWindow, selected: usize| {
+            let section = super::Section { title: "AVAILABLE".into(), rows: super::model(wifi_rows(20, selected)) };
+            w.set_sections(super::model(vec![section]));
+        };
+        set(&window, 0);
+        let selected = std::rc::Rc::new(std::cell::Cell::new(0));
+        let weak = window.as_weak();
+        let s = selected.clone();
+        window.on_move_selection(move |delta| {
+            s.set((s.get() as i32 + delta).clamp(0, 19) as usize);
+            set(&weak.unwrap(), s.get());
+        });
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        mock_elapsed_time(Duration::from_millis(50));
+        // Where a row is, if it's in view (a scrolled-away element isn't found).
+        let row = |i: usize| {
+            ElementHandle::find_by_accessible_label(&window, &format!("Network {i}, WPA2 · 5 GHz"))
+                .next()
+                .map(|e| (e.absolute_position().y, e.absolute_position().y + e.size().height))
+        };
+        let (list_top, _) = row(0).expect("the first row");
+        assert_eq!(row(15), None);
+
+        for _ in 0..15 {
+            window.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::DownArrow.into(),
+            });
+            mock_elapsed_time(Duration::from_millis(20));
+        }
+        assert_eq!(selected.get(), 15);
+        // Scrolled: the first row went out of the list, and the selected one is in it.
+        assert_eq!(row(0), None);
+        let (top, bottom) = row(15).expect("the selected row");
+        assert!(top >= list_top && bottom <= 570.0, "{top} {bottom}");
+    }
 }

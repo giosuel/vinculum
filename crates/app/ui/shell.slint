@@ -197,6 +197,10 @@ export component Hero inherits Rectangle {
     in property <string> title;
     in property <string> sub;
     in property <length> hero-height: 230px;
+    /// In a short window: the line goes beside the title, so the picture can move up.
+    in property <bool> compact;
+    /// The width of what the page puts in the top right corner, which the line stops before.
+    in property <length> aside;
     height: hero-height;
     border-radius: 20px;
     border-width: 1px;
@@ -212,7 +216,7 @@ export component Hero inherits Rectangle {
         y: -self.height / 2;
         background: @radial-gradient(circle, Theme.glow 0%, Theme.surface 70%);
     }
-    VerticalLayout {
+    if !root.compact: VerticalLayout {
         x: 24px;
         y: 18px;
         width: parent.width - 48px;
@@ -221,13 +225,30 @@ export component Hero inherits Rectangle {
         Text { text: root.title; color: Theme.text; font-size: 30px; font-weight: 600; }
         if root.sub != "": Text { text: root.sub; color: Theme.muted; font-size: 13px; overflow: elide; }
     }
+    if root.compact: HorizontalLayout {
+        x: 24px;
+        y: 16px;
+        width: parent.width - 48px - (root.aside > 0 ? root.aside + 12px : 0);
+        height: self.preferred-height;
+        spacing: 14px;
+        Text { text: root.title; color: Theme.text; font-size: 30px; font-weight: 600; }
+        // On the title's baseline.
+        if root.sub != "": VerticalLayout {
+            alignment: end;
+            padding-bottom: 5px;
+            horizontal-stretch: 1;
+            Text { text: root.sub; color: Theme.muted; font-size: 13px; overflow: elide; }
+        }
+    }
     @children
 }
 
 /// The subject of a hero, in its bottom left: a round icon, a name, and two lines.
 export component HeroSubject inherits HorizontalLayout {
     in property <HeroInfo> info;
-    in property <length> circle: 88px;
+    /// A smaller circle, and no monospaced line.
+    in property <bool> compact;
+    in property <length> circle: compact ? 56px : 88px;
     spacing: 20px;
     alignment: start;
     Rectangle {
@@ -244,7 +265,7 @@ export component HeroSubject inherits HorizontalLayout {
         padding-bottom: 4px;
         Text { text: root.info.name; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; }
         if root.info.meta != "": Text { text: root.info.meta; color: Theme.tone(root.info.tone); font-size: 13px; overflow: elide; }
-        if root.info.detail != "": Text { text: root.info.detail; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+        if root.info.detail != "" && !root.compact: Text { text: root.info.detail; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
     }
 }
 
