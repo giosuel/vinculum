@@ -1085,29 +1085,22 @@ fn spawn_hyprland_watcher(weak: slint::Weak<MainWindow>) {
     });
 }
 
-/// The Appearance page.
+/// Settings' Appearance section, and the look in use in its hero.
 fn render_appearance(window: &MainWindow, app: &App) {
     let in_use = app.palette.is_some();
     let dark = app.mode.dark(window.get_prefers_dark());
     window.set_ap_follow(app.follow_wallpaper);
     window.set_ap_follow_available(app.wallpaper.is_some());
     window.set_ap_wallpaper_in_use(in_use);
-    let mode = ["auto", "dark", "light"][config::Mode::ALL.iter().position(|m| *m == app.mode).unwrap_or(0)];
-    let (sub, name, text) = if in_use {
+    let (name, text) = if in_use {
         (
-            "Following your wallpaper".to_owned(),
             "Wallpaper colours".to_owned(),
             "Made by matugen from your wallpaper; the window recolours when it changes.".to_owned(),
         )
     } else {
-        let why = if app.wallpaper.is_none() { "No wallpaper colours found · " } else { "" };
-        (
-            format!("{why}{} · {}", app.builtin.label(), if dark { "dark" } else { "light" }),
-            app.builtin.label().to_owned(),
-            format!("Built-in theme · {mode} mode"),
-        )
+        let auto = if app.mode == config::Mode::Auto { ", as the desktop prefers" } else { "" };
+        (app.builtin.label().to_owned(), format!("Built-in theme · {}{auto}", if dark { "dark" } else { "light" }))
     };
-    window.set_ap_sub(sub.into());
     window.set_ap_name(name.into());
     window.set_ap_name_text(text.into());
     let chips = app.wallpaper.map(|p| {
@@ -1212,13 +1205,15 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "audio volume speakers headphones microphone input output pipewire mute apps",
             status: sound::status(&app.sound),
         },
+        // Lituus's own look is in Settings; "Appearance" is kept for the desktop's (GTK) later.
         nav::Entry {
-            id: "appearance",
-            label: "Appearance",
-            icon: "palette",
-            group: "PERSONAL",
-            keywords: "theme colours colors dark light mode matugen wallpaper accent gradient",
-            status: if app.palette.is_some() { "Wallpaper".to_owned() } else { app.builtin.label().to_owned() },
+            id: "settings",
+            label: "Settings",
+            icon: "settings",
+            group: nav::LITUUS,
+            keywords: "appearance theme colours colors dark light mode matugen wallpaper accent gradient tray \
+                       notifications passwords keyring config",
+            status: String::new(),
         },
     ]
 }
@@ -2241,5 +2236,33 @@ mod tests {
         assert!(0.0 < x && x < 1600.0, "{x}");
         mock_elapsed_time(Duration::from_millis(500));
         assert_eq!(editor(), Some(0.0));
+    }
+
+    /// Settings starts with the app's look, fits the smallest window, and puts the colour files
+    /// beside the rest when there's room.
+    #[test]
+    fn settings_shows_the_appearance_section_first() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("settings".into());
+        window.set_ap_follow_available(true);
+        window.set_config_path("~/.config/lituus/config.toml".into());
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        let at = |label: &str| {
+            let e = ElementHandle::find_by_accessible_label(&window, label).next().expect(label);
+            (e.absolute_position().x, e.absolute_position().y)
+        };
+        let follow = at("Follow wallpaper");
+        let gradient = at("Hero gradient");
+        assert!(follow.1 < 520.0 && follow.1 < gradient.1, "{follow:?}");
+        // One column: the colour files under the look.
+        let files = at("Read in order; the first usable one wins");
+        assert!(files.1 > gradient.1, "{files:?}");
+
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        let files = at("Read in order; the first usable one wins");
+        let gradient = at("Hero gradient");
+        assert!(files.0 > gradient.0 && files.1 < gradient.1, "{files:?}");
     }
 }

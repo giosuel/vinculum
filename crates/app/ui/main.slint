@@ -13,8 +13,8 @@ import { Button, IconButton, Switch, SectionLabel, Kbd } from "controls.slint";
 import { JoinDialog, TextField, Segmented } from "dialogs.slint";
 import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
-import { Sidebar, Hero, HeroSubject, Card, NavItem, NavGroup, HeroInfo } from "shell.slint";
-import { AppearancePage, ThemeSwatch, ColourChip, SourceRow } from "appearance.slint";
+import { Sidebar, Hero, HeroSubject, Card, SettingRow, NavItem, NavGroup, HeroInfo } from "shell.slint";
+import { SettingsHero, AppearanceSettings, ColourFiles, ThemeSwatch, ColourChip, SourceRow } from "appearance.slint";
 import { SendFilesDialog, IncomingFileDialog, FilesView, FileRow } from "files.slint";
 import { DisplaysPage, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, KeepDialog, ConfigDialog } from "displays.slint";
 import { SoundPage, SoundView, SoundDevice, SoundApp, SoundCard } from "sound.slint";
@@ -105,12 +105,11 @@ export component MainWindow inherits Window {
     in-out property <int> sound-tab;
     /// Everything done on the Sound page: (verb, id, value).
     callback sound-act(string, string, float);
-    // Appearance page (see appearance.slint).
+    // Settings' Appearance section and hero (see appearance.slint).
     in property <[SourceRow]> sources;
     in property <bool> ap-follow;
     in property <bool> ap-follow-available;
     in property <bool> ap-wallpaper-in-use;
-    in property <string> ap-sub;
     in property <string> ap-name;
     in property <string> ap-name-text;
     in property <[ColourChip]> ap-chips;
@@ -118,7 +117,7 @@ export component MainWindow inherits Window {
     in property <string> ap-note;
     in property <int> ap-mode;
     in property <bool> ap-gradient;
-    /// Everything done on the Appearance page: ("follow" | "theme" | "mode" | "gradient", index).
+    /// Everything done in the Appearance section: ("follow" | "theme" | "mode" | "gradient", index).
     callback ap-act(string, int);
     in property <[Toggle]> options;
     callback option-toggled(string);
@@ -724,49 +723,69 @@ export component MainWindow inherits Window {
                         tab <=> root.sound-tab;
                         act(verb, id, value) => { root.sound-act(verb, id, value); }
                     }
-                    if root.page == "appearance": AppearancePage {
-                        vertical-stretch: 1;
-                        follow: root.ap-follow;
-                        follow-available: root.ap-follow-available;
+                    if root.page == "settings": SettingsHero {
+                        sub: "Saved to " + root.config-path;
                         wallpaper-in-use: root.ap-wallpaper-in-use;
-                        sub: root.ap-sub;
                         name: root.ap-name;
                         name-text: root.ap-name-text;
                         chips: root.ap-chips;
-                        swatches: root.ap-swatches;
-                        note: root.ap-note;
-                        mode: root.ap-mode;
-                        gradient: root.ap-gradient;
-                        sources: root.sources;
-                        config-path: root.config-path;
-                        follow-toggled => { root.ap-act("follow", 0); keys.focus(); }
-                        theme-chosen(i) => { root.ap-act("theme", i); keys.focus(); }
-                        mode-chosen(i) => { root.ap-act("mode", i); keys.focus(); }
-                        gradient-toggled => { root.ap-act("gradient", 0); keys.focus(); }
-                    }
-                    if root.page == "settings": Hero {
-                        title: "Settings";
-                        sub: "Saved to " + root.config-path;
-                        hero-height: 96px;
                     }
                     if root.page == "settings": Card {
                         vertical-stretch: 1;
-                        Flickable {
+                        settings-scroll := Flickable {
+                            // Wide enough for the colour files beside the rest.
+                            property <bool> two-columns: self.width >= 1240px;
                             content-height: settings-form.preferred-height;
-                            settings-form := VerticalLayout {
+                            settings-form := HorizontalLayout {
+                                width: settings-scroll.width;
                                 padding: 22px;
-                                spacing: 22px;
+                                padding-top: 10px;
+                                spacing: 40px;
                                 alignment: start;
-                                for o in root.options: HorizontalLayout {
-                                    spacing: 24px;
-                                    Text { text: o.label; color: Theme.icon-soft; width: 200px; vertical-alignment: center; }
-                                    Switch { on: o.on; label: o.label; y: (parent.height - self.height) / 2; toggled => { root.option-toggled(o.id); } }
-                                    Text { text: o.sub; color: Theme.muted; font-size: 13px; vertical-alignment: center; wrap: word-wrap; horizontal-stretch: 1; }
+                                VerticalLayout {
+                                    preferred-width: 720px;
+                                    max-width: 720px;
+                                    horizontal-stretch: 1;
+                                    alignment: start;
+                                    SectionLabel { text: "APPEARANCE"; height: 30px; vertical-alignment: bottom; }
+                                    AppearanceSettings {
+                                        follow: root.ap-follow;
+                                        follow-available: root.ap-follow-available;
+                                        wallpaper-in-use: root.ap-wallpaper-in-use;
+                                        swatches: root.ap-swatches;
+                                        note: root.ap-note;
+                                        mode: root.ap-mode;
+                                        gradient: root.ap-gradient;
+                                        follow-toggled => { root.ap-act("follow", 0); keys.focus(); }
+                                        theme-chosen(i) => { root.ap-act("theme", i); keys.focus(); }
+                                        mode-chosen(i) => { root.ap-act("mode", i); keys.focus(); }
+                                        gradient-toggled => { root.ap-act("gradient", 0); keys.focus(); }
+                                    }
+                                    if !settings-scroll.two-columns: VerticalLayout {
+                                        Rectangle { height: 1px; background: Theme.border; }
+                                        SettingRow { label: "Colour files"; description: "Read in order; the first usable one wins"; }
+                                        ColourFiles { sources: root.sources; config-path: root.config-path; }
+                                    }
+                                    SectionLabel { text: "GENERAL"; height: 46px; vertical-alignment: bottom; }
+                                    for o[i] in root.options: VerticalLayout {
+                                        if i > 0: Rectangle { height: 1px; background: Theme.border; }
+                                        SettingRow {
+                                            label: o.label;
+                                            description: o.sub;
+                                            Switch { on: o.on; label: o.label; y: (parent.height - self.height) / 2; toggled => { root.option-toggled(o.id); } }
+                                        }
+                                    }
+                                    SectionLabel { text: "PASSWORDS"; height: 46px; vertical-alignment: bottom; }
+                                    SettingRow { label: "Passwords \"for me only\""; description: root.keyring-label; }
                                 }
-                                HorizontalLayout {
-                                    spacing: 24px;
-                                    Text { text: "Passwords \"for me only\""; color: Theme.icon-soft; width: 200px; }
-                                    Text { text: root.keyring-label; color: Theme.text; wrap: word-wrap; horizontal-stretch: 1; }
+                                if settings-scroll.two-columns: VerticalLayout {
+                                    preferred-width: 720px;
+                                    max-width: 720px;
+                                    horizontal-stretch: 1;
+                                    alignment: start;
+                                    SectionLabel { text: "COLOUR FILES"; height: 30px; vertical-alignment: bottom; }
+                                    Text { text: "Read in order; the first usable one wins"; color: Theme.faint; font-size: 12px; height: 30px; vertical-alignment: center; }
+                                    ColourFiles { sources: root.sources; config-path: root.config-path; }
                                 }
                             }
                         }

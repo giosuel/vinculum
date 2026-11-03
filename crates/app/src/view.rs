@@ -20,7 +20,6 @@ pub enum Page {
     Saved,
     Displays,
     Sound,
-    Appearance,
     Settings,
 }
 
@@ -35,8 +34,8 @@ impl Page {
             "saved" => Self::Saved,
             "displays" => Self::Displays,
             "sound" => Self::Sound,
-            "appearance" => Self::Appearance,
-            "settings" => Self::Settings,
+            // Lituus's own look moved to Settings.
+            "settings" | "appearance" => Self::Settings,
             _ => return None,
         })
     }
@@ -56,7 +55,6 @@ impl Page {
             Self::Saved => "saved",
             Self::Displays => "displays",
             Self::Sound => "sound",
-            Self::Appearance => "appearance",
             Self::Settings => "settings",
         }
     }
@@ -306,7 +304,7 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
             Vec::new()
         }
         // Bluetooth has a page of its own (bluetooth.rs).
-        Page::Bluetooth | Page::Displays | Page::Sound | Page::Appearance | Page::Settings => Vec::new(),
+        Page::Bluetooth | Page::Displays | Page::Sound | Page::Settings => Vec::new(),
     };
     // Rows grouped by section title, the selection resolved, and the selected row's details.
     view.row_ids = rows.iter().flat_map(|(_, r)| r.iter().map(|r| r.id.clone())).collect();
@@ -354,7 +352,6 @@ fn page_title(page: Page) -> &'static str {
         Page::Saved => "Saved connections",
         Page::Displays => "Displays",
         Page::Sound => "Sound",
-        Page::Appearance => "Appearance",
         Page::Settings => "Settings",
     }
 }
@@ -1723,6 +1720,13 @@ pub(crate) mod tests {
         let view = build(Some(&home()), None, &state);
         assert_eq!(rows(&view), [("ENP3S0 · E1000E".into(), vec!["Cable unplugged".into()])]);
         assert_eq!(view.details.unwrap().status, "Cable unplugged");
+    }
+
+    #[test]
+    fn appearance_is_part_of_settings() {
+        // Lituus's own look moved to Settings; the old id still finds it.
+        assert_eq!(Page::from_id("appearance"), Some(Page::Settings));
+        assert_eq!(Page::from_id("settings").map(Page::id), Some("settings"));
     }
 
     #[test]
