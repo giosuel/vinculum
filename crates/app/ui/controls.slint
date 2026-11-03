@@ -2,11 +2,102 @@
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 
+/// The keyboard focus, shared by every control. `key` names the control that has it, so that a
+/// control Slint rebuilds (every row of a list Rust sends again) takes it back; `keyboard` says
+/// it came from the keyboard, which is when the ring shows. `on-control`, `probe` and `answer`
+/// let the window notice that the control with the focus is gone (see MainWindow).
+export global Focus {
+    in-out property <string> key;
+    in-out property <bool> keyboard;
+    in-out property <bool> on-control;
+    in-out property <int> probe;
+    in-out property <int> answer;
+}
+
+/// What every control the keyboard reaches is built on: Tab and Shift+Tab reach it, Space and
+/// Enter activate it (as a click does), and a 2 px accent ring 2 px outside it shows the focus.
+/// The ring is only for focus from the keyboard: a click doesn't move the focus, and hides it.
+export component Focusable inherits Rectangle {
+    in property <bool> enabled: true;
+    /// Set on a control in a `for`: the rebuilt control with the same key gets the focus back.
+    in property <string> focus-key;
+    /// A second key, for the selected row of a list: when the arrow keys move the selection,
+    /// the newly selected row takes the focus.
+    in property <string> selected-key;
+    /// The gap between the control and its ring. -2px draws the ring on its edge, for rows that
+    /// fill a list, which would cut off a ring outside them.
+    in property <length> ring-gap: 2px;
+    /// False when the control handles the pointer itself (a slider, the options of a segmented
+    /// control).
+    in property <bool> clickable: true;
+    out property <bool> has-focus: scope.has-focus;
+    out property <bool> has-hover: touch.has-hover;
+    out property <bool> pressed: touch.pressed;
+    /// A click, Space or Enter.
+    callback activated();
+    /// Any other key, before Space and Enter; `accept` if it was used.
+    callback key(KeyEvent) -> EventResult;
+    forward-focus: scope;
+    init => {
+        if (root.focus-key != "" && Focus.key == root.focus-key) || (root.selected-key != "" && Focus.key == root.selected-key) {
+            scope.focus();
+        }
+    }
+    // Answers the window's probes while this control has the focus. (No `if` element: one per
+    // control makes the generated code too big to compile in 8 GB.)
+    property <int> probe: scope.has-focus ? Focus.probe : -1;
+    changed probe => { if scope.has-focus { Focus.answer = self.probe; } }
+    scope := FocusScope {
+        enabled: root.enabled;
+        // A click doesn't take the focus from the page, so the window's shortcuts keep working.
+        focus-on-click: false;
+        focus-gained(reason) => {
+            if reason == FocusReason.tab-navigation { Focus.keyboard = true; }
+            Focus.key = root.focus-key;
+            Focus.on-control = true;
+            Focus.answer = Focus.probe;
+        }
+        focus-lost(reason) => {
+            if reason != FocusReason.window-activation && Focus.key == root.focus-key { Focus.key = ""; }
+            Focus.on-control = false;
+        }
+        key-pressed(event) => {
+            if root.key(event) == EventResult.accept { return accept; }
+            if event.modifiers.control || event.modifiers.alt || event.modifiers.meta { return reject; }
+            if event.text == " " || event.text == Key.Return {
+                root.activated();
+                // What it did may have given the window the focus (as a click does); a keyboard
+                // user carries on from here.
+                scope.focus();
+                return accept;
+            }
+            reject
+        }
+    }
+    // Under the children, so that a button in a row still gets its own clicks.
+    touch := TouchArea {
+        enabled: root.enabled && root.clickable;
+        mouse-cursor: pointer;
+        pointer-event(event) => { if event.kind == PointerEventKind.down { Focus.keyboard = false; } }
+        clicked => { root.activated(); }
+    }
+    @children
+    ring := Rectangle {
+        visible: scope.has-focus && Focus.keyboard;
+        x: -root.ring-gap - 2px;
+        y: self.x;
+        width: root.width - 2 * self.x;
+        height: root.height - 2 * self.y;
+        border-width: 2px;
+        border-color: Theme.accent;
+        border-radius: root.border-radius == 0 ? 0 : root.border-radius - self.x;
+    }
+}
+
 /// kind: "primary", "secondary", "danger" (red text) or "destructive" (red button).
-export component Button inherits Rectangle {
+export component Button inherits Focusable {
     in property <string> label;
     in property <string> kind: "secondary";
-    in property <bool> enabled: true;
     in property <length> button-height: 34px;
     callback clicked();
     height: button-height;
@@ -16,12 +107,13 @@ export component Button inherits Rectangle {
     border-radius: 8px;
     border-width: kind == "danger" || kind == "destructive" ? 0 : 1px;
     border-color: kind == "primary" ? Theme.accent : Theme.ctrl-border;
-    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (touch.has-hover && enabled ? Theme.sel-bg : Theme.ctrl-bg);
-    opacity: enabled ? 1 : 0.45;
+    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (self.has-hover && root.enabled ? Theme.sel-bg : Theme.ctrl-bg);
+    opacity: root.enabled ? 1 : 0.45;
     accessible-role: button;
     accessible-label: label;
-    accessible-enabled: enabled;
-    accessible-action-default => { if enabled { clicked(); } }
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { clicked(); } }
+    activated => { root.clicked(); }
     text := Text {
         x: 12px;
         width: parent.width - 24px;
@@ -33,15 +125,10 @@ export component Button inherits Rectangle {
         horizontal-alignment: center;
         overflow: elide;
     }
-    touch := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
 }
 
 /// A square button with only an icon.
-export component IconButton inherits Rectangle {
+export component IconButton inherits Focusable {
     in property <string> icon;
     in property <string> label;
     callback clicked();
@@ -50,18 +137,15 @@ export component IconButton inherits Rectangle {
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.ctrl-border;
-    background: touch.has-hover ? Theme.sel-bg : transparent;
+    background: self.has-hover ? Theme.sel-bg : transparent;
     accessible-role: button;
     accessible-label: label;
     accessible-action-default => { clicked(); }
+    activated => { root.clicked(); }
     Icon { name: root.icon; tint: Theme.icon-soft; }
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
 }
 
-export component Switch inherits Rectangle {
+export component Switch inherits Focusable {
     in property <bool> on;
     in property <string> label;
     in property <length> switch-width: 34px;
@@ -74,6 +158,7 @@ export component Switch inherits Rectangle {
     accessible-label: label;
     accessible-checked: on;
     accessible-action-default => { toggled(); }
+    activated => { root.toggled(); }
     Rectangle {
         x: root.on ? parent.width - self.width - 2px : 2px;
         y: (parent.height - self.height) / 2;
@@ -82,10 +167,6 @@ export component Switch inherits Rectangle {
         border-radius: self.width / 2;
         background: root.on ? Theme.on-accent : Theme.knob-off;
         animate x { duration: 120ms; easing: ease-out; }
-    }
-    TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.toggled(); }
     }
 }
 

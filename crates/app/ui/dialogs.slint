@@ -1,7 +1,7 @@
 // The form controls and the password dialog, styled like the mockups (Password, Hidden network).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button } from "controls.slint";
+import { Button, Focusable, Focus } from "controls.slint";
 
 component FieldLabel inherits Text {
     color: Theme.text;
@@ -63,29 +63,37 @@ export component TextField inherits Rectangle {
                 height: parent.height;
             }
         }
-        if root.password: Rectangle {
+        if root.password: Focusable {
             width: 28px;
             height: 28px;
             y: (parent.height - self.height) / 2;
             border-radius: 6px;
-            background: eye.has-hover ? Theme.sel-bg : transparent;
+            background: self.has-hover ? Theme.sel-bg : transparent;
             accessible-role: button;
             accessible-label: root.shown ? "Hide password" : "Show password";
             accessible-action-default => { root.shown = !root.shown; }
+            activated => { root.shown = !root.shown; }
             Icon { name: root.shown ? "eye-off" : "eye"; tint: Theme.icon-soft; }
-            eye := TouchArea { mouse-cursor: pointer; clicked => { root.shown = !root.shown; } }
         }
     }
 }
 
-/// A row of mutually exclusive choices ("For me only", "All users", "Ask each time").
-export component Segmented inherits Rectangle {
+/// A row of mutually exclusive choices ("For me only", "All users", "Ask each time"). One stop
+/// for Tab; the arrow keys move the choice.
+export component Segmented inherits Focusable {
     in property <[string]> options;
     in property <string> label;
     in-out property <int> selected;
-    in property <bool> enabled: true;
     /// Also called when the user picks one (for a choice that isn't bound two-way).
     callback changed(int);
+    clickable: false;
+    key(event) => {
+        if event.text == Key.LeftArrow && root.selected > 0 { root.selected -= 1; root.changed(root.selected); return accept; }
+        if event.text == Key.RightArrow && root.selected < root.options.length - 1 { root.selected += 1; root.changed(root.selected); return accept; }
+        // At either end, the arrow is used up all the same, rather than moving a list behind.
+        if event.text == Key.LeftArrow || event.text == Key.RightArrow { return accept; }
+        reject
+    }
     height: 40px;
     opacity: root.enabled ? 1 : 0.5;
     border-radius: 9px;
@@ -101,7 +109,7 @@ export component Segmented inherits Rectangle {
             // Measured in the selected (heavier) weight, so choosing an option doesn't resize it.
             min-width: widest.preferred-width + 24px;
             border-radius: 7px;
-            background: i == root.selected ? Theme.accent-soft-bg : touch.has-hover && root.enabled ? Theme.sel-bg : transparent;
+            background: i == root.selected ? Theme.accent-soft-bg : option-touch.has-hover && root.enabled ? Theme.sel-bg : transparent;
             accessible-role: tab;
             accessible-label: option;
             accessible-item-selected: i == root.selected;
@@ -117,20 +125,22 @@ export component Segmented inherits Rectangle {
                 overflow: elide;
             }
             widest := Text { text: option; font-size: 13px; font-weight: 500; visible: false; }
-            touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.selected = i; root.changed(i); } }
+            option-touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.selected = i; root.changed(i); } }
         }
     }
 }
 
-export component CheckBox inherits Rectangle {
+export component CheckBox inherits Focusable {
     in-out property <bool> checked;
     in property <string> text;
     callback toggled(bool);
     height: 24px;
+    border-radius: 4px;
     accessible-role: checkbox;
     accessible-label: text;
     accessible-checked: checked;
     accessible-action-default => { checked = !checked; toggled(checked); }
+    activated => { root.checked = !root.checked; root.toggled(root.checked); }
     HorizontalLayout {
         spacing: 10px;
         alignment: start;
@@ -146,11 +156,11 @@ export component CheckBox inherits Rectangle {
         }
         Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; }
     }
-    TouchArea { mouse-cursor: pointer; clicked => { root.checked = !root.checked; root.toggled(root.checked); } }
 }
 
-/// A drop-down list.
-export component Select inherits Rectangle {
+/// A drop-down list. Space, Enter and the arrow keys open it; in it, the arrows move, Space or
+/// Enter picks, and Esc closes it.
+export component Select inherits Focusable {
     in property <[string]> options;
     /// A second, smaller line under each option, if given.
     in property <[string]> details;
@@ -159,26 +169,56 @@ export component Select inherits Rectangle {
     in property <length> select-height: 38px;
     /// The user picked an option.
     callback chosen(int);
+    // The option the arrow keys are on in the open list.
+    property <int> highlighted;
+    function open() {
+        root.highlighted = root.selected;
+        popup.show();
+    }
     height: select-height;
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.border2;
-    background: touch.has-hover ? Theme.sel-bg : Theme.input-bg;
+    background: self.has-hover ? Theme.sel-bg : Theme.input-bg;
     accessible-role: combobox;
     accessible-label: label;
     accessible-value: root.options[root.selected];
-    accessible-action-default => { popup.show(); }
+    accessible-action-default => { root.open(); }
+    activated => { root.open(); }
+    // Here rather than through `activated`, which would take the focus back from the list.
+    key(event) => {
+        if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow || event.text == Key.UpArrow {
+            root.open();
+            return accept;
+        }
+        reject
+    }
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 10px;
         Text { text: root.options[root.selected]; color: Theme.text; font-size: root.select-height < 38px ? 13px : 14px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
         Icon { name: "chevron"; tint: Theme.icon-soft; y: (parent.height - 16px) / 2; }
     }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { popup.show(); } }
     popup := PopupWindow {
         x: 0;
         y: root.height + 4px;
         width: root.width;
+        forward-focus: list-keys;
+        list-keys := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.DownArrow { root.highlighted = min(root.highlighted + 1, root.options.length - 1); return accept; }
+                if event.text == Key.UpArrow { root.highlighted = max(root.highlighted - 1, 0); return accept; }
+                if event.text == " " || event.text == Key.Return {
+                    root.selected = root.highlighted;
+                    root.chosen(root.highlighted);
+                    popup.close();
+                    return accept;
+                }
+                if event.text == Key.Escape { popup.close(); return accept; }
+                // Nothing behind the list gets the keys while it's open.
+                accept
+            }
+        }
         Rectangle {
             border-radius: 8px;
             border-width: 1px;
@@ -192,6 +232,9 @@ export component Select inherits Rectangle {
                     height: root.details.length > i ? 44px : 32px;
                     border-radius: 6px;
                     background: item.has-hover ? Theme.sel-bg : i == root.selected ? Theme.accent-soft-bg : transparent;
+                    // The arrow keys' option, drawn like the focus ring.
+                    border-width: i == root.highlighted && Focus.keyboard ? 2px : 0;
+                    border-color: Theme.accent;
                     VerticalLayout {
                         padding-left: 10px;
                         alignment: center;
