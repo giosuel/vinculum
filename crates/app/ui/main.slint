@@ -129,7 +129,7 @@ export component MainWindow inherits Window {
     // A bold first line for the message ("Couldn't connect to Aster Café"), and a button on it.
     in property <string> message-title;
     in property <string> message-action;
-    // The confirmation dialog (forgetting a connection).
+    // The confirmation dialog (forgetting a connection or a device, changing a display profile).
     in property <bool> confirm-open;
     in property <string> confirm-title;
     in property <string> confirm-text;
@@ -278,6 +278,9 @@ export component MainWindow inherits Window {
     keys := FocusScope {
         init => { self.focus(); }
         key-pressed(event) => {
+            // The confirmation dialog is over everything: Esc cancels it, and the page gets no keys.
+            if root.confirm-open && event.text == Key.Escape { root.confirm-cancelled(); return accept; }
+            if root.confirm-open { return reject; }
             if event.modifiers.control && (event.text == "k" || event.text == "K") { root.nav-focus-requests += 1; return accept; }
             if event.text == "/" && root.show-search { root.search-focus-requests += 1; return accept; }
             if event.text == Key.DownArrow { root.move-selection(1); return accept; }
@@ -293,9 +296,8 @@ export component MainWindow inherits Window {
             if event.text == Key.Escape && root.add-open { root.add-cancelled(); return accept; }
             if event.text == Key.Escape && root.share-open { root.share-closed(); return accept; }
             if event.text == Key.Escape && root.hostname-open { root.hostname-cancelled(); return accept; }
-            if event.text == "e" && root.has-details && !root.confirm-open && !root.join-open { root.action("edit"); return accept; }
-            if event.text == Key.Return && !root.confirm-open && !root.join-open { root.activate-selected(); return accept; }
-            if event.text == Key.Escape && root.confirm-open { root.confirm-cancelled(); return accept; }
+            if event.text == "e" && root.has-details && !root.join-open { root.action("edit"); return accept; }
+            if event.text == Key.Return && !root.join-open { root.activate-selected(); return accept; }
             if event.text == Key.Escape && root.join-open { root.join-cancelled(); return accept; }
             reject
         }
