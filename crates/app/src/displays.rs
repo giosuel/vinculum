@@ -6,7 +6,9 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use lituus_hypr::{ConfigFile, Hyprland, Mode, Monitor, MonitorRule, config_dir, scale_is_valid, valid_scales};
+use lituus_hypr::{
+    ConfigFile, Hyprland, Mode, Monitor, MonitorRule, WorkspaceRule, config_dir, scale_is_valid, valid_scales,
+};
 use slint::{Model, ModelRc, SharedString, VecModel};
 
 use crate::profiles::{self, Profile, Store, StoredMonitor, StoredWorkspace};
@@ -56,8 +58,33 @@ impl State {
     /// The file's text for these rules.
     fn text(&self, rules: &[MonitorRule]) -> String {
         let profile = self.store.active(rules).map(|i| self.store.profiles[i].name.clone());
-        let ws: Vec<lituus_hypr::WorkspaceRule> = self.store.workspaces.iter().map(StoredWorkspace::rule).collect();
-        lituus_hypr::file(self.lua(), profile.as_deref(), rules, &ws)
+        let ws = self.named_workspaces(&self.store.workspaces);
+        lituus_hypr::file(self.lua(), profile.as_deref(), &self.named_rules(rules), &ws)
+    }
+
+    /// How the written and applied rules name a monitor that the page knows by its selector:
+    /// as that (`desc:…` when it has a serial), or by its port when "Name monitors by
+    /// description" is off. Profiles and workspaces keep the selector, so they match either way.
+    fn named(&self, selector: &str) -> String {
+        match self.monitors.iter().find(|m| m.selector() == selector) {
+            Some(m) if !self.store.name_by_description => m.name.clone(),
+            _ => selector.to_owned(),
+        }
+    }
+
+    fn named_rules(&self, rules: &[MonitorRule]) -> Vec<MonitorRule> {
+        rules
+            .iter()
+            .map(|r| MonitorRule {
+                output: self.named(&r.output),
+                mirror: r.mirror.as_deref().map(|m| self.named(m)),
+                ..r.clone()
+            })
+            .collect()
+    }
+
+    fn named_workspaces(&self, workspaces: &[StoredWorkspace]) -> Vec<WorkspaceRule> {
+        workspaces.iter().map(|w| WorkspaceRule { monitor: self.named(&w.monitor), ..w.rule() }).collect()
     }
 
     /// Apply is waiting for Keep.
@@ -209,6 +236,9 @@ fn send(weak: &slint::Weak<MainWindow>, state: &mut State, rules: Vec<MonitorRul
     }
     let Some(h) = state.hypr.clone() else { return };
     let lua = state.lua();
+    // Named as in the file, so a rule applied now replaces the one Hyprland read from it.
+    let rules = state.named_rules(&rules);
+    let workspaces = state.named_workspaces(&workspaces);
     let weak = weak.clone();
     std::thread::spawn(move || {
         let mut error = None;
@@ -218,7 +248,7 @@ fn send(weak: &slint::Weak<MainWindow>, state: &mut State, rules: Vec<MonitorRul
                 error = Some(format!("Hyprland didn't take the settings for {}: {e}", r.output));
             }
         }
-        for w in workspaces.iter().map(StoredWorkspace::rule) {
+        for w in &workspaces {
             let result = if lua { h.eval(&w.lua()) } else { h.keyword("workspace", &w.hyprlang()) };
             if let Err(e) = result {
                 error = Some(format!("Hyprland didn't take the rule for workspace {}: {e}", w.workspace));
@@ -266,6 +296,11 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
         "ws-monitor" | "ws-default" | "ws-persistent" => edit_workspace(state, verb, index, value),
         "switch-hotplug" => {
             state.store.switch_on_hotplug = !state.store.switch_on_hotplug;
+            save_store(state);
+        }
+        // Lituus's file says it's older then, until it's saved.
+        "name-by-description" => {
+            state.store.name_by_description = !state.store.name_by_description;
             save_store(state);
         }
         "profile-save" => {
@@ -820,6 +855,7 @@ pub fn view(state: &State) -> DisplaysView {
         v.config_main = s(shorten_home(&file.main_path().display().to_string()));
     }
     v.config_open = state.config_open;
+    v.by_description = state.store.name_by_description;
     // Workspaces.
     v.ws_monitors = strings(
         std::iter::once("Any monitor".to_owned())
@@ -1125,6 +1161,44 @@ mod tests {
         reread(&mut again, &after);
         assert_eq!(again.live[3].vrr, Some(1));
         assert_eq!(view(&again).status, "Everything is applied and saved");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn monitors_can_be_named_by_port() {
+        let (mut st, dir) = state_in("names");
+        let w = weak();
+        // The G8 mirrors DP-3, and workspace 1 opens on the G8.
+        let mut mirrored = fixture();
+        mirrored[1].mirror_of = "0".into();
+        reread(&mut st, &mirrored);
+        act(&w, &mut st, "ws-monitor", "0", 3.0);
+        act(&w, &mut st, "keep", "", 0.0);
+        act(&w, &mut st, "profile-save", "Desk", 0.0);
+        let text = st.text(&st.edit);
+        assert!(text.contains(r#"output = "desc:Samsung Electric Company Odyssey G61SH HNAL600836""#), "{text}");
+        assert!(text.contains(r#"mirror = "desc:Samsung Electric Company Odyssey G61SH HNAL600836""#), "{text}");
+        assert!(text.contains(r#"monitor = "desc:Samsung Electric Company Odyssey G81SF HNAY500052""#), "{text}");
+        assert_eq!(view(&st).status, "Everything is applied and saved");
+
+        act(&w, &mut st, "name-by-description", "", 0.0);
+        assert!(!view(&st).by_description);
+        let text = st.text(&st.edit);
+        assert!(!text.contains("desc:"), "{text}");
+        assert!(text.contains(r#"output = "DP-3""#) && text.contains(r#"mirror = "DP-3""#), "{text}");
+        assert!(text.contains(r#"hl.workspace_rule({ workspace = "1", monitor = "DP-5" })"#), "{text}");
+        assert!(text.contains("-- Profile: Desk"), "{text}");
+        // The file still names them by description until it's saved.
+        let v = view(&st);
+        assert_eq!(v.status, "The config file has older settings than the monitors now");
+        assert!(v.can_save && !v.can_apply);
+        act(&w, &mut st, "save", "", 0.0);
+        assert_eq!(view(&st).status, "Everything is applied and saved");
+        // Profiles still match the monitors, and the setting is remembered.
+        let connected: Vec<String> = st.monitors.iter().map(Monitor::selector).collect();
+        assert_eq!(st.store.matching(&connected).map(|p| p.name.as_str()), Some("Desk"));
+        assert_eq!(st.store.active(&st.live), Some(0));
+        assert!(!profiles::load(&dir.join("displays.toml")).name_by_description);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

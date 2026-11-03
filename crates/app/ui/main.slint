@@ -1066,6 +1066,7 @@ export component MainWindow inherits Window {
     if root.page == "displays" && root.displays.config-open: ConfigDialog {
         view: root.displays;
         closed => { root.displays-act("close-config", "", 0); keys.focus(); }
+        name-by-description => { root.displays-act("name-by-description", "", 0); }
     }
     if root.files.sending: SendFilesDialog {
         view: root.files;

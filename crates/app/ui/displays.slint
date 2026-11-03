@@ -70,6 +70,8 @@ export struct DisplaysView {
     config-main: string,
     config-open: bool,
     config-text: string,
+    /// "Name monitors by description" is on.
+    by-description: bool,
     workspaces: [WorkspaceRow],
     ws-monitors: [string],
     profiles: [ProfileRow],
@@ -594,6 +596,7 @@ export component KeepDialog inherits Rectangle {
 export component ConfigDialog inherits Rectangle {
     in property <DisplaysView> view;
     callback closed();
+    callback name-by-description();
     background: #05060799;
     TouchArea { clicked => { root.closed(); } }
     Rectangle {
@@ -627,6 +630,21 @@ export component ConfigDialog inherits Rectangle {
                     viewport-width: max(self.width, code.preferred-width);
                     viewport-height: code.preferred-height;
                     code := TextInput { text: root.view.config-text; read-only: true; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; wrap: no-wrap; }
+                }
+            }
+            // Like nwg-displays' "Use desc:". The text above shows the change at once; the file
+            // changes with "Save to config file".
+            VerticalLayout {
+                spacing: 4px;
+                CheckBox { checked: root.view.by-description; text: "Name monitors by description"; toggled(on) => { root.name-by-description(); } }
+                HorizontalLayout {
+                    padding-left: 28px;
+                    Text {
+                        text: "By make, model and serial, so a monitor keeps its settings on another port. Off: by port, such as DP-1.";
+                        color: Theme.faint;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
                 }
             }
             HorizontalLayout {
