@@ -2207,6 +2207,224 @@ fn set_theme(t: Theme<'_>, p: &theme::Palette) {
 }
 
 #[cfg(test)]
+mod dialog_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use i_slint_backend_testing::mock_elapsed_time;
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
+
+    use super::{DisplaysView, FilesView, MainWindow};
+
+    /// A window on the test backend whose dialog callbacks write down what they were called
+    /// with, and close the dialog as the app does.
+    fn dialogs() -> (MainWindow, Rc<RefCell<Vec<String>>>) {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.show().unwrap();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let (l, w) = (log.clone(), window.as_weak());
+        let note = move |what: &str| {
+            let (log, w) = (l.clone(), w.clone());
+            let what = what.to_owned();
+            move || {
+                log.borrow_mut().push(what.clone());
+                let w = w.unwrap();
+                match what.as_str() {
+                    "hostname-cancelled" | "hostname-save" => w.set_hostname_open(false),
+                    "add-cancelled" => w.set_add_open(false),
+                    "share-closed" => w.set_share_open(false),
+                    "join-cancelled" | "join-accepted" => w.set_join_open(false),
+                    _ => {}
+                }
+            }
+        };
+        window.on_hostname_cancelled(note("hostname-cancelled"));
+        window.on_hostname_save(note("hostname-save"));
+        window.on_add_cancelled(note("add-cancelled"));
+        window.on_share_closed(note("share-closed"));
+        window.on_join_cancelled(note("join-cancelled"));
+        window.on_join_accepted(note("join-accepted"));
+        window.on_join_check(|_, _, _, password| !password.is_empty());
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_bt_act(move |verb, _| {
+            l.borrow_mut().push(format!("bt {verb}"));
+            if verb == "rename-cancel" || verb == "rename-save" {
+                w.unwrap().set_bt_rename_open(false);
+            }
+        });
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_displays_act(move |verb, _, _| {
+            l.borrow_mut().push(format!("displays {verb}"));
+            let w = w.unwrap();
+            w.set_displays(DisplaysView { keep_open: false, config_open: false, ..w.get_displays() });
+        });
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_files_act(move |verb| {
+            l.borrow_mut().push(format!("files {verb}"));
+            w.unwrap().set_files(FilesView::default());
+        });
+        let l = log.clone();
+        window.on_move_selection(move |by| l.borrow_mut().push(format!("move {by}")));
+        (window, log)
+    }
+
+    /// What the password dialog shows under its fields, for one kind of security.
+    fn join_hints(window: &MainWindow) {
+        window.set_join_password_hints([SharedString::new()].as_slice().into());
+        window
+            .set_join_storage_hints([SharedString::new(), SharedString::new(), SharedString::new()].as_slice().into());
+    }
+
+    fn press(window: &MainWindow, key: impl Into<SharedString>) {
+        let key = key.into();
+        window.window().dispatch_event(WindowEvent::KeyPressed { text: key.clone() });
+        window.window().dispatch_event(WindowEvent::KeyReleased { text: key });
+    }
+
+    /// A click in the window's top left corner, beside any dialog.
+    fn click_beside(window: &MainWindow) {
+        let position = LogicalPosition::new(8.0, 8.0);
+        window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+    }
+
+    /// Opens each dialog, types into its field if it has one, and presses Esc.
+    #[test]
+    fn escape_closes_every_dialog_even_from_a_text_field() {
+        let (window, log) = dialogs();
+        let esc = |open: &dyn Fn(), expected: &str| {
+            open();
+            press(&window, Key::Escape);
+            assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), [expected]);
+        };
+
+        esc(
+            &|| {
+                window.set_hostname_input("thinkpad".into());
+                window.set_hostname_open(true);
+                // The field has the keyboard, with its text selected.
+                press(&window, "x");
+                assert_eq!(window.get_hostname_input(), "x");
+            },
+            "hostname-cancelled",
+        );
+        esc(
+            &|| {
+                window.set_join_mode("new".into());
+                join_hints(&window);
+                window.set_join_open(true);
+                press(&window, "x");
+                assert_eq!(window.get_join_password(), "x");
+            },
+            "join-cancelled",
+        );
+        esc(
+            &|| {
+                window.set_bt_rename_open(true);
+                press(&window, "x");
+                assert_eq!(window.get_bt_rename_name(), "x");
+            },
+            "bt rename-cancel",
+        );
+        esc(&|| window.set_add_open(true), "add-cancelled");
+        esc(&|| window.set_share_open(true), "share-closed");
+        esc(
+            &|| {
+                window.set_page("displays".into());
+                window.set_displays(DisplaysView { config_open: true, ..Default::default() });
+            },
+            "displays close-config",
+        );
+        // After Apply, Esc goes back to the old settings.
+        esc(&|| window.set_displays(DisplaysView { keep_open: true, ..Default::default() }), "displays revert-now");
+        esc(&|| window.set_files(FilesView { incoming: true, ..Default::default() }), "files decline");
+        esc(&|| window.set_files(FilesView { sending: true, ..Default::default() }), "files hide");
+    }
+
+    /// A click beside a dialog closes it only when nothing typed in it would be lost.
+    #[test]
+    fn a_click_beside_a_dialog_never_loses_what_was_typed() {
+        let (window, log) = dialogs();
+        let taken = || log.borrow_mut().drain(..).collect::<Vec<_>>();
+
+        window.set_add_open(true);
+        click_beside(&window);
+        assert_eq!(taken(), ["add-cancelled"]);
+        window.set_share_open(true);
+        click_beside(&window);
+        assert_eq!(taken(), ["share-closed"]);
+        window.set_page("displays".into());
+        window.set_displays(DisplaysView { config_open: true, ..Default::default() });
+        click_beside(&window);
+        assert_eq!(taken(), ["displays close-config"]);
+
+        join_hints(&window);
+        window.set_join_open(true);
+        press(&window, "x");
+        click_beside(&window);
+        assert!(window.get_join_open());
+        assert_eq!(window.get_join_password(), "x");
+        window.set_join_open(false);
+
+        window.set_hostname_open(true);
+        click_beside(&window);
+        assert!(window.get_hostname_open());
+        window.set_hostname_open(false);
+
+        window.set_bt_rename_open(true);
+        click_beside(&window);
+        assert!(window.get_bt_rename_open());
+        window.set_bt_rename_open(false);
+        assert_eq!(taken(), Vec::<String>::new());
+    }
+
+    /// Enter in the field of a one-field dialog accepts it.
+    #[test]
+    fn enter_accepts_a_dialog_with_one_field() {
+        let (window, log) = dialogs();
+        window.set_hostname_open(true);
+        press(&window, "a");
+        press(&window, Key::Return);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["hostname-save"]);
+
+        join_hints(&window);
+        window.set_join_open(true);
+        // Not with an empty password.
+        press(&window, Key::Return);
+        assert!(window.get_join_open());
+        press(&window, "x");
+        press(&window, Key::Return);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["join-accepted"]);
+    }
+
+    /// A dialog takes the keyboard from the page while it's open, and gives it back when it
+    /// closes, even when it was closed from Rust rather than by its own buttons.
+    #[test]
+    fn the_page_gets_the_keyboard_back_after_a_dialog() {
+        let (window, log) = dialogs();
+        press(&window, Key::DownArrow);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["move 1"]);
+
+        window.set_page("displays".into());
+        window.set_displays(DisplaysView { keep_open: true, ..Default::default() });
+        press(&window, Key::DownArrow);
+        assert!(log.borrow().is_empty());
+        // The time runs out.
+        window.set_displays(DisplaysView::default());
+        mock_elapsed_time(Duration::from_millis(20));
+        press(&window, Key::DownArrow);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["move 1"]);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
