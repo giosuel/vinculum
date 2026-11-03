@@ -211,6 +211,8 @@ export component MainWindow inherits Window {
     out property <bool> prefers-dark: Palette.color-scheme != ColorScheme.light;
 
     callback navigate(string);
+    /// The chevron of a sidebar item with sub-items (Network).
+    callback nav-fold(string);
     callback nav-search(string);
     callback nav-search-accepted();
     /// A button on the Network hero, for the connection it shows.
@@ -309,6 +311,7 @@ export component MainWindow inherits Window {
                 hostname: root.hostname;
                 focus-requests: root.nav-focus-requests;
                 navigate(id) => { root.navigate(id); keys.focus(); }
+                fold(id) => { root.nav-fold(id); }
                 search(text) => { root.nav-search(text); }
                 search-accepted => { root.nav-search-accepted(); }
                 search-left => { keys.focus(); }

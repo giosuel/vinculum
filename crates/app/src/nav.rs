@@ -1,6 +1,6 @@
 //! The sidebar: its pages in groups, each with a short status, filtered by the search field.
-//! Network's pages (Wi-Fi, Wired, VPN, Hotspot) are its sub-items, shown while one of them is
-//! open or found by the search.
+//! Network's pages (Wi-Fi, Wired, VPN, Hotspot) are its sub-items, shown under it unless it's
+//! folded, and when the search finds them.
 
 use slint::{ModelRc, SharedString, VecModel};
 
@@ -29,17 +29,16 @@ fn matches(entry: &Entry, query: &str) -> bool {
 }
 
 /// The items shown, in order: each top-level item (if it or a sub-item matches the search), then
-/// its sub-items, all of them while one is the current page, else the ones the search found.
-fn shown<'a>(entries: &'a [Entry], query: &str, current: &str) -> Vec<&'a Entry> {
+/// its sub-items: the ones the search found, else all of them unless the item is folded.
+fn shown<'a>(entries: &'a [Entry], query: &str, folded: &[String]) -> Vec<&'a Entry> {
     let searching = !query.trim().is_empty();
-    let open = entries.iter().find(|e| e.id == current).and_then(|e| e.parent);
     let mut shown = Vec::new();
     for &group in &GROUPS {
         for e in entries.iter().filter(|e| e.group == group && e.parent.is_none()) {
             let subs: Vec<&Entry> = entries
                 .iter()
                 .filter(|s| s.parent == Some(e.id))
-                .filter(|s| if searching { matches(s, query) } else { open == Some(e.id) })
+                .filter(|s| if searching { matches(s, query) } else { !folded.iter().any(|f| f == e.id) })
                 .collect();
             if matches(e, query) || !subs.is_empty() {
                 shown.push(e);
@@ -50,10 +49,12 @@ fn shown<'a>(entries: &'a [Entry], query: &str, current: &str) -> Vec<&'a Entry>
     shown
 }
 
-/// The groups that have a page matching the search, in order.
-pub fn groups(entries: &[Entry], query: &str, current: &str) -> Vec<NavGroup> {
-    let open = entries.iter().find(|e| e.id == current).and_then(|e| e.parent);
-    let shown = shown(entries, query, current);
+/// The groups that have a page matching the search, in order. `folded`: the items whose
+/// sub-items are folded away.
+pub fn groups(entries: &[Entry], query: &str, current: &str, folded: &[String]) -> Vec<NavGroup> {
+    let current_parent = entries.iter().find(|e| e.id == current).and_then(|e| e.parent);
+    let shown = shown(entries, query, folded);
+    let current_shown = shown.iter().any(|e| e.id == current);
     GROUPS
         .iter()
         .filter_map(|&group| {
@@ -61,16 +62,20 @@ pub fn groups(entries: &[Entry], query: &str, current: &str) -> Vec<NavGroup> {
                 .iter()
                 .filter(|e| e.group == group)
                 .map(|e| {
-                    // An open item shows its sub-items' statuses instead of its own.
-                    let is_open = open == Some(e.id);
+                    // An item showing sub-items leaves the statuses to them.
+                    let subs_shown = shown.iter().any(|s| s.parent == Some(e.id));
+                    // On a sub-page that's folded away, the item stands for it.
+                    let on_sub = current_parent == Some(e.id);
                     NavItem {
                         id: SharedString::from(e.id),
                         label: SharedString::from(e.label),
-                        sub: SharedString::from(if is_open { "" } else { e.status.as_str() }),
+                        sub: SharedString::from(if subs_shown { "" } else { e.status.as_str() }),
                         icon: SharedString::from(e.icon),
-                        current: e.id == current,
-                        open: is_open,
+                        current: e.id == current || (on_sub && !current_shown),
+                        open: on_sub && current_shown,
                         indent: e.parent.is_some(),
+                        foldable: entries.iter().any(|s| s.parent == Some(e.id)),
+                        folded: folded.iter().any(|f| f == e.id),
                     }
                 })
                 .collect();
@@ -83,7 +88,7 @@ pub fn groups(entries: &[Entry], query: &str, current: &str) -> Vec<NavGroup> {
 /// The page Enter in the search field goes to: the first item whose name matches ("wire" is
 /// Wired, not Wi-Fi for "wireless"), else the first found by a keyword.
 pub fn first_match<'a>(entries: &'a [Entry], query: &str) -> Option<&'a str> {
-    let shown = shown(entries, query, "");
+    let shown = shown(entries, query, &[]);
     let query = query.trim().to_lowercase();
     let by_name = shown.iter().find(|e| e.label.to_lowercase().contains(&query));
     by_name.or_else(|| shown.iter().find(|e| matches(e, &query))).map(|e| e.id)
@@ -155,24 +160,25 @@ mod tests {
 
     #[test]
     fn groups_keep_their_order_and_drop_when_empty() {
-        let g = groups(&entries(), "", "bluetooth");
+        let g = groups(&entries(), "", "bluetooth", &[]);
         let titles: Vec<String> = g.iter().map(|g| g.title.to_string()).collect();
         assert_eq!(titles, ["CONNECTIONS", "PERSONAL"]);
-        assert!(g[0].items.row_data(1).unwrap().current);
-        assert_eq!(g[0].items.row_data(0).unwrap().sub, "Home");
+        assert!(g[0].items.row_data(4).unwrap().current);
+        assert_eq!(g[0].items.row_data(4).unwrap().sub, "2 on");
     }
 
     #[test]
     fn search_finds_labels_and_keywords() {
         let ids = |q: &str| -> Vec<String> {
-            groups(&entries(), q, "")
+            groups(&entries(), q, "", &["network".to_owned()])
                 .iter()
                 .flat_map(|g| g.items.iter().map(|i| i.id.to_string()).collect::<Vec<_>>())
                 .collect()
         };
         assert_eq!(ids("blue"), ["bluetooth"]);
-        // A sub-item is found under its item.
+        // A sub-item is found under its item, even when that's folded.
         assert_eq!(ids("WIFI"), ["network", "wifi"]);
+        assert_eq!(ids(""), ["network", "bluetooth", "appearance"]);
         assert_eq!(ids("dark"), ["appearance"]);
         assert!(ids("zzz").is_empty());
         assert_eq!(first_match(&entries(), "head"), Some("bluetooth"));
@@ -183,29 +189,51 @@ mod tests {
     }
 
     #[test]
-    fn network_opens_into_its_sub_items_on_their_pages() {
-        let items = |current: &str| -> Vec<(String, String, bool, bool, bool)> {
-            groups(&entries(), "", current)[0]
+    fn network_folds_its_sub_items() {
+        let items = |current: &str, folded: &[&str]| -> Vec<(String, String, bool, bool, bool)> {
+            let folded: Vec<String> = folded.iter().map(|f| f.to_string()).collect();
+            groups(&entries(), "", current, &folded)[0]
                 .items
                 .iter()
-                .map(|i| (i.id.to_string(), i.sub.to_string(), i.current, i.open, i.indent))
+                .map(|i| (i.id.to_string(), i.sub.to_string(), i.current, i.open, i.folded))
                 .collect()
         };
-        let row = |id: &str, sub: &str, current, open, indent| (id.to_owned(), sub.to_owned(), current, open, indent);
+        let row = |id: &str, sub: &str, current, open, folded| (id.to_owned(), sub.to_owned(), current, open, folded);
+        // Unfolded, on one of its pages or not, so the list below never moves.
         assert_eq!(
-            items("vpn"),
+            items("vpn", &[]),
             [
                 row("network", "", false, true, false),
-                row("wifi", "Home", false, false, true),
-                row("wired", "unplugged", false, false, true),
-                row("vpn", "off", true, false, true),
+                row("wifi", "Home", false, false, false),
+                row("wired", "unplugged", false, false, false),
+                row("vpn", "off", true, false, false),
                 row("bluetooth", "2 on", false, false, false),
             ]
         );
-        // Elsewhere, Network is one item with its status.
+        assert_eq!(items("bluetooth", &[])[0], row("network", "", false, false, false));
+        assert_eq!(items("bluetooth", &[]).len(), 5);
+        // Folded, Network is one item with its status, and stands for its current sub-page.
         assert_eq!(
-            items("bluetooth"),
-            [row("network", "Home", false, false, false), row("bluetooth", "2 on", true, false, false)]
+            items("vpn", &["network"]),
+            [row("network", "Home", true, false, true), row("bluetooth", "2 on", false, false, false)]
         );
+        assert_eq!(items("bluetooth", &["network"])[0], row("network", "Home", false, false, true));
+        // Only Network has a chevron.
+        let g = groups(&entries(), "", "", &[]);
+        let foldable: Vec<bool> = g[0].items.iter().map(|i| i.foldable).collect();
+        assert_eq!(foldable, [true, false, false, false, false]);
+    }
+
+    #[test]
+    fn the_search_shows_sub_items_of_a_folded_item() {
+        let folded = ["network".to_owned()];
+        let items = |query: &str, current: &str| -> Vec<(String, bool)> {
+            groups(&entries(), query, current, &folded)[0].items.iter().map(|i| (i.id.to_string(), i.current)).collect()
+        };
+        assert_eq!(items("ether", ""), [("network".to_owned(), false), ("wired".to_owned(), false)]);
+        // The current page is among the results: it's marked, not Network.
+        assert_eq!(items("ether", "wired"), [("network".to_owned(), false), ("wired".to_owned(), true)]);
+        // It isn't: Network stands for it.
+        assert_eq!(items("wireg", "wifi"), [("network".to_owned(), true), ("vpn".to_owned(), false)]);
     }
 }

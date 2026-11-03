@@ -152,6 +152,9 @@ struct App {
     sound: sound::State,
     /// The sidebar's search.
     nav_query: String,
+    /// The sidebar items whose sub-items are folded away, for this session only (config.toml
+    /// holds settings, not the window's state).
+    nav_folded: Vec<String>,
     /// The Network sub-page last open, for coming back to it from the sidebar.
     net_page: view::Page,
 }
@@ -535,6 +538,13 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_navigate(move |id| update(&weak, |app| go(app, &id)));
     let weak = window.as_weak();
     window.on_nav_search(move |text| update(&weak, |app| app.nav_query = text.to_string()));
+    let weak = window.as_weak();
+    window.on_nav_fold(move |id| {
+        update(&weak, |app| match app.nav_folded.iter().position(|f| *f == id.as_str()) {
+            Some(i) => _ = app.nav_folded.remove(i),
+            None => app.nav_folded.push(id.into()),
+        })
+    });
     let weak = window.as_weak();
     window.on_nav_search_accepted(move || {
         let Some(window) = weak.upgrade() else { return };
@@ -1262,7 +1272,7 @@ fn render(window: &MainWindow) {
         for (entry, status) in entries.iter_mut().zip(statuses) {
             entry.status = status.clone();
         }
-        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, app.ui.page.id())));
+        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, app.ui.page.id(), &app.nav_folded)));
         window.set_net_sub(v.net_hero.sub.as_str().into());
         window.set_count(v.count.as_str().into());
         window.set_net_hero(HeroInfo {
@@ -2283,7 +2293,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let window = MainWindow::new().unwrap();
         let entries = super::nav_entries(&super::App::default());
-        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
         window.set_hostname("thinkpad-x1".into());
         window.window().set_size(LogicalSize::new(1040.0, 600.0));
         window.show().unwrap();
@@ -2296,5 +2306,38 @@ mod tests {
         assert!(bottom("Settings") < bottom("Airplane mode"));
         // The last page is still there, below the fold.
         assert!(bottom("Appearance") > 0.0);
+    }
+
+    /// Network's chevron says whether its pages are shown, and folds them without going to a
+    /// page.
+    #[test]
+    fn the_network_chevron_folds_its_pages() {
+        use std::{cell::RefCell, rc::Rc};
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        let show = |folded: &[String]| {
+            window.set_nav_groups(super::model(super::nav::groups(&entries, "", "bluetooth", folded)))
+        };
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let c = calls.clone();
+        window.on_nav_fold(move |id| c.borrow_mut().push(format!("fold {id}")));
+        let c = calls.clone();
+        window.on_navigate(move |id| c.borrow_mut().push(format!("go {id}")));
+        show(&[]);
+        window.show().unwrap();
+        let hotspots = || ElementHandle::find_by_accessible_label(&window, "Hotspot").count();
+        let shown = hotspots();
+
+        let chevron = ElementHandle::find_by_accessible_label(&window, "Network pages, expanded").next().unwrap();
+        assert_eq!(chevron.accessible_expanded(), Some(true));
+        chevron.invoke_accessible_default_action();
+        assert_eq!(*calls.borrow(), ["fold network"]);
+
+        show(&["network".to_owned()]);
+        let chevron = ElementHandle::find_by_accessible_label(&window, "Network pages, collapsed").next().unwrap();
+        assert_eq!(chevron.accessible_expanded(), Some(false));
+        // The Hotspot item is gone.
+        assert!(hotspots() < shown, "{} {shown}", hotspots());
     }
 }
