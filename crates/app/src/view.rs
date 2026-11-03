@@ -2195,7 +2195,8 @@ pub(crate) mod tests {
             protocol: "anyconnect".into(),
         };
         with_saved(&mut snap, "u-uzh", "UZH VPN", openconnect, 200);
-        let openvpn = ConnectionKind::Vpn { service: "openvpn".into(), gateway: String::new(), protocol: String::new() };
+        let openvpn =
+            ConnectionKind::Vpn { service: "openvpn".into(), gateway: String::new(), protocol: String::new() };
         with_saved(&mut snap, "u-ovpn", "Office", openvpn, 0);
         let mut state = UiState { page: Page::Vpn, ..UiState::default() };
         let view = build(Some(&snap), None, &state);
