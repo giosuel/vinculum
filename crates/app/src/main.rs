@@ -75,6 +75,24 @@ fn key_mgmt_at(index: i32) -> Option<lituus_nm::KeyMgmt> {
     }
 }
 
+/// The confirmation dialog: its title, text and button, and what accepting it does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Confirm {
+    pub title: String,
+    pub text: String,
+    pub button: String,
+    pub then: Confirmed,
+}
+
+/// What a confirmation dialog runs once it's accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Confirmed {
+    Network(view::Command),
+    Bluetooth(bluetooth::Command),
+    /// A Displays profile change ("profile-update", "profile-delete") and the profile's name.
+    Displays(&'static str, String),
+}
+
 /// The password dialog's three forms.
 enum Dialog {
     /// Joining a secured network from the list.
@@ -105,9 +123,8 @@ struct App {
     commands: Option<tokio::sync::mpsc::UnboundedSender<view::Command>>,
     /// The message above the list, and its tone ("danger", "warn", "info").
     message: Option<(String, &'static str)>,
-    /// The command waiting for the confirmation dialog, and the dialog's title, text and button.
-    confirm: Option<view::Command>,
-    confirm_text: Option<(String, String, String)>,
+    /// The confirmation dialog, while it's open.
+    confirm: Option<Confirm>,
     /// The password dialog, and NetworkManager's requests waiting behind it.
     dialog: Option<Dialog>,
     prompts: VecDeque<secrets::Prompt>,
@@ -660,7 +677,11 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_displays_act(move |verb, arg, value| {
         let w = weak.clone();
-        update(&weak, |app| displays::act(&w, &mut app.displays, &verb, &arg, value))
+        update(&weak, |app| {
+            if let Some(confirm) = displays::act(&w, &mut app.displays, &verb, &arg, value) {
+                app.confirm = Some(confirm);
+            }
+        })
     });
     let weak = window.as_weak();
     window.on_displays_drag(move |i, x, y, done| {
@@ -833,10 +854,11 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_dismiss_message(move || update(&weak, |app| app.message = None));
     let weak = window.as_weak();
     window.on_confirm_accepted(move || {
-        update(&weak, |app| {
-            if let Some(command) = app.confirm.take() {
-                send(app, command);
-            }
+        update(&weak, |app| match app.confirm.take().map(|c| c.then) {
+            Some(Confirmed::Network(command)) => send(app, command),
+            Some(Confirmed::Bluetooth(command)) => app.bt.send(command),
+            Some(Confirmed::Displays(verb, name)) => displays::confirmed(&mut app.displays, verb, &name),
+            None => {}
         })
     });
     let weak = window.as_weak();
@@ -1037,8 +1059,7 @@ fn act(app: &mut App, action: &str) {
         }
         Some(view::Intent::Join(target)) => open_dialog(app, Dialog::Join(target)),
         Some(view::Intent::Confirm { title, text, button, command }) => {
-            app.confirm = Some(command);
-            app.confirm_text = Some((title, text, button));
+            app.confirm = Some(Confirm { title, text, button, then: Confirmed::Network(command) });
         }
         None => {}
     }
@@ -1295,10 +1316,10 @@ fn render(window: &MainWindow) {
         window.set_message(message.into());
         window.set_message_tone(if tone.is_empty() { "info".into() } else { tone.into() });
         window.set_confirm_open(app.confirm.is_some());
-        if let Some((title, text, button)) = &app.confirm_text {
-            window.set_confirm_title(title.into());
-            window.set_confirm_text(text.into());
-            window.set_confirm_button(button.into());
+        if let Some(confirm) = &app.confirm {
+            window.set_confirm_title(confirm.title.as_str().into());
+            window.set_confirm_text(confirm.text.as_str().into());
+            window.set_confirm_button(confirm.button.as_str().into());
         }
         window.set_message_title(if app.message.is_some() { app.message_title.as_str().into() } else { "".into() });
         window.set_message_action(if app.retry.is_some() { "Try again".into() } else { "".into() });
