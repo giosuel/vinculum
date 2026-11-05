@@ -356,8 +356,8 @@ impl InputSettings {
             for d in &self.devices {
                 out += "\n";
                 out += &device_lua(d, true);
+                out += "\n";
             }
-            out += "\n";
         } else {
             let (input, touchpad) = input_fields(self);
             out += "input {\n";

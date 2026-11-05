@@ -5,7 +5,7 @@
 // they show comes from Rust (src/input.rs); everything done goes back through `act`.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Scroll, Focusable, Focus } from "controls.slint";
+import { Button, Switch, SectionLabel, Scroll, Focusable, Focus } from "controls.slint";
 import { Segmented, Select, TextField, Modal } from "dialogs.slint";
 import { Hero, HeroSubject, HeroInfo, Card, LoadBanner } from "shell.slint";
 import { Slider } from "sound.slint";
@@ -93,16 +93,18 @@ component Line inherits Rectangle {
     in property <string> sub;
     in property <string> differs;
     in property <bool> first;
-    min-height: 48px;
+    min-height: 46px;
     Rectangle { y: 0; height: 1px; background: root.first ? transparent : Theme.border; }
     HorizontalLayout {
         spacing: 14px;
-        padding-top: 6px;
-        padding-bottom: 6px;
+        padding-top: 5px;
+        padding-bottom: 5px;
         VerticalLayout {
             alignment: center;
             spacing: 2px;
             horizontal-stretch: 1;
+            // The slider gives way before the name does.
+            min-width: 112px;
             Text { text: root.label; color: Theme.text; font-size: 13px; overflow: elide; }
             if root.differs != "": Differs { text: root.differs; }
             if root.differs == "" && root.sub != "": Text { text: root.sub; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
@@ -123,7 +125,8 @@ component ValueSlider inherits HorizontalLayout {
     callback moved(float);
     spacing: 12px;
     Slider {
-        width: 170px;
+        min-width: 90px;
+        preferred-width: 170px;
         y: (parent.height - self.height) / 2;
         label: root.label;
         focus-key: root.focus-key;
@@ -265,14 +268,19 @@ component LayoutItem inherits Focusable {
             Text { text: root.entry.name; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
             Text { text: root.entry.meta; color: root.entry.active ? Theme.accent : Theme.muted; font-size: 12px; overflow: elide; }
         }
-        if root.count > 1: IconButton {
-            icon: "trash";
-            label: "Remove " + root.entry.name;
-            focus-key: "layout-remove:" + root.entry.code;
+        // A plain icon, as in the mockup: a bordered button on every row was too heavy.
+        if root.count > 1: Focusable {
             width: 30px;
             height: 30px;
             y: (parent.height - self.height) / 2;
-            clicked => { root.remove(); }
+            border-radius: 8px;
+            focus-key: "layout-remove:" + root.entry.code;
+            background: self.has-hover ? Theme.hover : transparent;
+            accessible-role: button;
+            accessible-label: "Remove " + root.entry.name;
+            accessible-action-default => { root.remove(); }
+            activated => { root.remove(); }
+            Icon { name: "trash"; tint: parent.has-hover ? Theme.text : Theme.icon-soft; }
         }
     }
 }
@@ -367,7 +375,6 @@ component TypingCard inherits Card {
         Line {
             label: "Repeat delay";
             differs: root.view.delay-differs;
-            sub: "How long a key is held before it repeats";
             first: true;
             ValueSlider {
                 label: "Repeat delay";
@@ -383,7 +390,6 @@ component TypingCard inherits Card {
         Line {
             label: "Repeat rate";
             differs: root.view.rate-differs;
-            sub: "Characters a second while it repeats";
             ValueSlider {
                 label: "Repeat rate";
                 focus-key: "repeat-rate";
@@ -478,8 +484,10 @@ export component KeyboardPage inherits VerticalLayout {
         }
     }
     if root.view.state == "list": body := Scroll {
-        // Two columns when there's room for them, as in the mockup.
-        property <bool> two-columns: self.width >= 900px;
+        // Two columns when there's room for them, as in the mockup, and three in a wide window,
+        // so a setting's name stays near its control.
+        property <bool> three-columns: self.width >= 1500px;
+        property <bool> two-columns: self.width >= 900px && !self.three-columns;
         // The columns follow its width, so its least width can't follow them.
         min-width: 0;
         vertical-stretch: 1;
@@ -504,9 +512,30 @@ export component KeyboardPage inherits VerticalLayout {
                 KeysCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
             }
         }
-        if !body.two-columns: LayoutsCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
-        if !body.two-columns: TypingCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
-        if !body.two-columns: KeysCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+        if body.three-columns: HorizontalLayout {
+            spacing: 14px;
+            VerticalLayout {
+                preferred-width: 420px;
+                horizontal-stretch: 1;
+                alignment: start;
+                LayoutsCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+            }
+            VerticalLayout {
+                preferred-width: 420px;
+                horizontal-stretch: 1;
+                alignment: start;
+                TypingCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+            }
+            VerticalLayout {
+                preferred-width: 420px;
+                horizontal-stretch: 1;
+                alignment: start;
+                KeysCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+            }
+        }
+        if !body.two-columns && !body.three-columns: LayoutsCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+        if !body.two-columns && !body.three-columns: TypingCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+        if !body.two-columns && !body.three-columns: KeysCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
     }
     if root.view.state == "list": StatusBar { bar: root.view.bar; act(verb) => { root.act(verb, "", 0); } }
     if root.view.state != "list": Empty { icon: "keyboard"; title: root.view.empty-title; text: root.view.empty-text; }

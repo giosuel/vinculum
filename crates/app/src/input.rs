@@ -257,11 +257,11 @@ pub struct State {
     devices: Devices,
     pointers: Vec<Pointer>,
     registry: Option<Registry>,
-    /// The last change: what it was ("Repeat delay"), and the settings before it.
+    /// The last change: what it did ("Repeat delay applied"), and the settings before it.
     last: Option<(String, InputSettings)>,
     /// The last change was applied and saved.
     applied: bool,
-    reverted: Option<String>,
+    reverted: bool,
     pub layout: usize,
     pub selected: Selected,
     pub add_open: bool,
@@ -428,8 +428,9 @@ fn run(job: &Job) -> Done {
             }
         }
     } else if let Some(h) = &job.hypr {
-        let reset = InputSettings { devices: job.reset.clone(), ..job.settings.clone() };
-        for (k, v) in reset.hyprlang_live() {
+        let devices = job.settings.devices.iter().chain(&job.reset).cloned().collect();
+        let all = InputSettings { devices, ..job.settings.clone() };
+        for (k, v) in all.hyprlang_live() {
             if let Err(e) = h.keyword(&k, &v) {
                 error = Some(format!("Hyprland didn't take {k}: {e}"));
             }
@@ -480,8 +481,8 @@ fn defaults(s: &InputSettings, touchpad: bool) -> DeviceSettings {
     }
 }
 
-/// Makes a change: `what` names it for the bar and Revert ("Repeat delay"). Changes to the same
-/// setting in a row (a dragged slider) are one change.
+/// Makes a change: `what` says what it did, for the bar ("Repeat delay applied"). Changes with
+/// the same `what` in a row (a dragged slider) are one change for Revert.
 fn change(weak: &slint::Weak<MainWindow>, state: &mut State, what: String, edit: impl FnOnce(&mut InputSettings)) {
     let before = state.settings.clone();
     edit(&mut state.settings);
@@ -494,7 +495,7 @@ fn change(weak: &slint::Weak<MainWindow>, state: &mut State, what: String, edit:
     };
     state.last = Some((what, before));
     state.applied = false;
-    state.reverted = None;
+    state.reverted = false;
     commit(weak, state);
 }
 
@@ -513,7 +514,7 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
             }
         }
         "revert" => {
-            if let Some((what, before)) = state.last.take() {
+            if let Some((_, before)) = state.last.take() {
                 // Devices given their own settings by the change lose them again.
                 for d in &state.settings.devices {
                     if !before.devices.iter().any(|b| b.name == d.name) {
@@ -522,7 +523,7 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
                 }
                 state.settings = before;
                 state.applied = false;
-                state.reverted = Some(what);
+                state.reverted = true;
                 commit(weak, state);
             }
         }
@@ -546,7 +547,7 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
             if layouts.len() > 1 && i < layouts.len() {
                 let layout = state.settings.keyboard.layouts[i].clone();
                 let name = describe(state, &layout);
-                change(weak, state, format!("Removing {name}"), |s| _ = s.keyboard.layouts.remove(i));
+                change(weak, state, format!("{name} removed"), |s| _ = s.keyboard.layouts.remove(i));
                 state.layout = state.layout.min(state.settings.keyboard.layouts.len() - 1);
             }
         }
@@ -563,28 +564,30 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
                 && state.settings.keyboard.layouts.len() < MAX_LAYOUTS
             {
                 let name = describe(state, &l);
-                change(weak, state, format!("Adding {name}"), |s| s.keyboard.layouts.push(l));
+                change(weak, state, format!("{name} added"), |s| s.keyboard.layouts.push(l));
                 state.layout = state.settings.keyboard.layouts.len() - 1;
                 state.add_open = false;
             }
         }
-        "switch-keys" => change(weak, state, "Switch keys".into(), |s| {
+        "switch-keys" => change(weak, state, "Switch keys applied".into(), |s| {
             s.keyboard.options = xkb::SWITCH.set(&s.keyboard.options, index)
         }),
-        "caps" => {
-            change(weak, state, "Caps Lock".into(), |s| s.keyboard.options = xkb::CAPS.set(&s.keyboard.options, index))
-        }
-        "compose" => change(weak, state, "Compose key".into(), |s| {
+        "caps" => change(weak, state, "Caps Lock applied".into(), |s| {
+            s.keyboard.options = xkb::CAPS.set(&s.keyboard.options, index)
+        }),
+        "compose" => change(weak, state, "Compose key applied".into(), |s| {
             s.keyboard.options = xkb::COMPOSE.set(&s.keyboard.options, index)
         }),
-        "numlock" => change(weak, state, "Num Lock at login".into(), |s| s.keyboard.numlock = !s.keyboard.numlock),
+        "numlock" => {
+            change(weak, state, "Num Lock at login applied".into(), |s| s.keyboard.numlock = !s.keyboard.numlock)
+        }
         "repeat-delay" => {
             let ms = ((value / 10.0).round() * 10.0).clamp(100.0, 1000.0) as i64;
-            change(weak, state, "Repeat delay".into(), |s| s.keyboard.repeat_delay = ms);
+            change(weak, state, "Repeat delay applied".into(), |s| s.keyboard.repeat_delay = ms);
         }
         "repeat-rate" => {
             let rate = value.round().clamp(5.0, 80.0) as i64;
-            change(weak, state, "Repeat rate".into(), |s| s.keyboard.repeat_rate = rate);
+            change(weak, state, "Repeat rate applied".into(), |s| s.keyboard.repeat_rate = rate);
         }
         // Mouse & touchpad.
         "select" => state.selected = Selected::from_id(arg),
@@ -602,7 +605,7 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
             let Some(p) = state.pointers.iter().find(|p| p.name == name).cloned() else { return };
             if state.own(&name).is_none() {
                 let settings = defaults(&state.settings, p.kind().touchpad());
-                change(weak, state, format!("Own settings for {}", p.label), |s| {
+                change(weak, state, format!("{} has its own settings", p.label), |s| {
                     s.devices.push(Device { name: name.clone(), settings })
                 });
                 state.reset.retain(|r| *r != name);
@@ -613,7 +616,7 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
         "defaults" => {
             if let Selected::Device(name) = state.selected.clone() {
                 let label = label_of(state, &name);
-                change(weak, state, format!("Defaults for {label}"), |s| s.devices.retain(|d| d.name != name));
+                change(weak, state, format!("{label} uses the defaults"), |s| s.devices.retain(|d| d.name != name));
                 state.reset.push(name);
             }
         }
@@ -648,10 +651,10 @@ fn pointer_setting(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str
     // Speed, acceleration and left-handed are one setting for mice and touchpads.
     let shared = matches!(verb, "speed" | "accel" | "left-handed");
     let what = match &target {
-        Some(name) => format!("{label} for {}", label_of(state, name)),
-        None if shared => format!("{label} for every mouse and touchpad"),
-        None if selected == Selected::Touchpads => format!("{label} for every touchpad"),
-        None => format!("{label} for every mouse"),
+        Some(name) => format!("{label} for {} applied", label_of(state, name)),
+        None if shared => format!("{label} for every mouse and touchpad applied"),
+        None if selected == Selected::Touchpads => format!("{label} for every touchpad applied"),
+        None => format!("{label} for every mouse applied"),
     };
     let speed = (value * 100.0).round().clamp(-100.0, 100.0) / 100.0;
     let factor = (value * 10.0).round().clamp(1.0, 30.0) / 10.0;
@@ -697,7 +700,7 @@ fn move_layout(weak: &slint::Weak<MainWindow>, state: &mut State, from: usize, t
     }
     let layout = state.settings.keyboard.layouts[from].clone();
     let name = describe(state, &layout);
-    change(weak, state, format!("Moving {name}"), |s| {
+    change(weak, state, format!("{name} moved"), |s| {
         let l = s.keyboard.layouts.remove(from);
         s.keyboard.layouts.insert(to, l);
     });
@@ -806,13 +809,13 @@ fn bar(state: &State) -> InputBar {
     let text_now = state.text();
     let (text, path, tone) = if let Some(e) = &state.error {
         (e.clone(), String::new(), "danger")
-    } else if let Some(what) = &state.reverted {
-        (format!("{what} reverted, and saved to"), path, "accent")
+    } else if state.reverted {
+        ("Reverted, and saved to".to_owned(), path, "accent")
     } else if let Some((what, _)) = &state.last {
         if state.applied {
-            (format!("{what} applied and saved to"), path, "accent")
+            (format!("{what} and saved to"), path, "accent")
         } else {
-            (format!("{what}: applying…"), String::new(), "accent")
+            ("Applying…".to_owned(), String::new(), "accent")
         }
     } else {
         match &state.saved {
@@ -1578,7 +1581,7 @@ B: PROP=5
         assert_eq!(st.settings.keyboard.options, "grp:win_space_toggle,lv3:ralt_switch");
         assert_eq!(st.settings.keyboard.repeat_delay, 300);
         let v = keyboard_view(&mut st);
-        assert_eq!(v.bar.text, "Caps Lock reverted, and saved to");
+        assert_eq!(v.bar.text, "Reverted, and saved to");
         assert!(!v.bar.can_revert);
         assert!(!std::fs::read_to_string(dir.join("lituus.lua")).unwrap().contains("ctrl:nocaps"));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -1755,6 +1758,69 @@ B: PROP=5
         assert_eq!(status(&st), ("not running".into(), "not running".into()));
         assert_eq!(State::default().settings, InputSettings::default());
         assert_eq!(status(&State::default()), (String::new(), String::new()));
+    }
+
+    /// Where an element with this label is (the first, if several), and its size.
+    fn place(window: &MainWindow, label: &str) -> (f32, f32, f32) {
+        use i_slint_backend_testing::ElementHandle;
+        let e = ElementHandle::find_by_accessible_label(window, label).next().unwrap_or_else(|| panic!("{label}"));
+        (e.absolute_position().x, e.absolute_position().y, e.size().width)
+    }
+
+    /// One column in the smallest window, two as in the mockup, three in the owner's; the
+    /// controls stay inside the window.
+    #[test]
+    fn the_keyboard_page_takes_columns_as_the_window_grows() {
+        use slint::{ComponentHandle, LogicalSize};
+        i_slint_backend_testing::init_no_event_loop();
+        let (mut st, dir) = state_in("columns");
+        let window = MainWindow::new().unwrap();
+        window.set_page("keyboard".into());
+        window.set_keyboard(keyboard_view(&mut st));
+        window.show().unwrap();
+        // The smallest width, tall enough that every card is in view.
+        for (w, h, columns) in [(1040.0, 1400.0, 1), (1200.0, 760.0, 2), (2000.0, 1070.0, 3)] {
+            window.window().set_size(LogicalSize::new(w, h));
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
+            let (lx, ly, _) = place(&window, "Layouts");
+            let (tx, ty, _) = place(&window, "Typing");
+            let (_, _, add) = place(&window, "Add a layout…");
+            match columns {
+                1 => assert!(tx == lx && ty > ly, "{w}: {lx},{ly} {tx},{ty}"),
+                2 => assert!(tx > lx + 300.0 && (ty - ly).abs() < 1.0, "{w}: {lx} {tx}"),
+                _ => {
+                    // Keys is below the fold in narrower windows; here it's the third column.
+                    let (kx, ky, _) = place(&window, "Keys");
+                    assert!(kx > tx + 300.0 && (ky - ty).abs() < 1.0, "{w}: {tx} {kx}");
+                }
+            }
+            // The cards share the width: no layout row runs past the window.
+            assert!(lx + add < w, "{w}: {lx} + {add}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// In the smallest window, a setting's name keeps its room beside the slider.
+    #[test]
+    fn the_mouse_settings_fit_the_smallest_window() {
+        use slint::{ComponentHandle, LogicalSize};
+        i_slint_backend_testing::init_no_event_loop();
+        let (st, dir) = state_in("small");
+        let window = MainWindow::new().unwrap();
+        window.set_page("mouse".into());
+        window.set_mouse(mouse_view(&st, &[]));
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
+        let (x, _, width) = place(&window, "Scroll speed");
+        assert!(width >= 112.0, "the name is {width} px");
+        let sliders: Vec<(f32, f32, f32)> =
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&window, "Scroll speed")
+                .map(|e| (e.absolute_position().x, e.absolute_position().y, e.size().width))
+                .collect();
+        assert!(sliders.iter().all(|(sx, _, sw)| sx + sw <= 1040.0), "{sliders:?}");
+        assert!(sliders.iter().any(|(sx, _, _)| *sx > x + 100.0), "{sliders:?}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
