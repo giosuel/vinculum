@@ -67,14 +67,28 @@ impl Monitor {
         modes
     }
 
-    /// The mode in use.
+    /// The mode in use, its refresh rate to 0.01 Hz as in `available_modes` and in rules:
+    /// Hyprland reports 239.757 Hz for the mode it lists, and sets, as 239.76.
     pub fn mode(&self) -> Mode {
-        Mode { width: self.width, height: self.height, refresh: (self.refresh_rate * 1000.0).round() as u32 }
+        Mode { width: self.width, height: self.height, refresh: (self.refresh_rate * 100.0).round() as u32 * 10 }
+    }
+
+    /// The scale, exactly: Hyprland reports it to two decimals (4/3 as 1.33), so it's the
+    /// scale Hyprland takes nearest to that.
+    pub fn exact_scale(&self) -> f64 {
+        if self.scale <= 0.0 {
+            return 1.0;
+        }
+        valid_scales(self.width, self.height)
+            .into_iter()
+            .filter(|s| (s - self.scale).abs() < 0.006)
+            .min_by(|a, b| (a - self.scale).abs().total_cmp(&(b - self.scale).abs()))
+            .unwrap_or(self.scale)
     }
 
     /// The size on the layout, after scale and rotation.
     pub fn logical_size(&self) -> (i32, i32) {
-        let scale = if self.scale > 0.0 { self.scale } else { 1.0 };
+        let scale = self.exact_scale();
         let (w, h) = ((f64::from(self.width) / scale).round() as i32, (f64::from(self.height) / scale).round() as i32);
         if self.transform % 2 == 1 { (h, w) } else { (w, h) }
     }
@@ -208,6 +222,20 @@ mod tests {
         assert_eq!(g8.inches(), Some(27));
         assert_eq!(monitors[3].logical_size(), (2560, 1440));
         assert_eq!(monitors[0].mode().rule(), "2560x1440@239.76");
+    }
+
+    #[test]
+    fn the_mode_and_scale_as_rules_have_them() {
+        let mut g6 = fixture()[0].clone();
+        g6.refresh_rate = 239.757;
+        assert_eq!(g6.mode(), Mode::parse("2560x1440@239.76Hz").unwrap());
+        assert!(g6.modes().contains(&g6.mode()));
+        let mut g8 = fixture()[1].clone();
+        g8.scale = 1.33;
+        assert!((g8.exact_scale() - 4.0 / 3.0).abs() < 1e-9);
+        assert_eq!(g8.logical_size(), (2880, 1620));
+        g8.scale = 1.5;
+        assert_eq!(g8.exact_scale(), 1.5);
     }
 
     #[test]
