@@ -4,13 +4,14 @@
 //! which pointer is a mouse and which a touchpad, so that comes from the kernel (udev's tags).
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::mpsc;
 
 use lituus_hypr::{
     ConfigFile, Device, DeviceSettings, Devices, Hyprland, InputSettings, Layout, MouseSettings, OPTIONS,
     TouchpadSettings, Value, config_dir, option_name,
 };
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{Model, ModelRc, SharedString, VecModel};
 
 use crate::xkb::{self, Registry};
 use crate::{
@@ -383,9 +384,9 @@ fn commit(weak: &slint::Weak<MainWindow>, state: &mut State) {
         .reset
         .iter()
         .filter(|name| state.own(name).is_none())
-        .filter_map(|name| {
+        .map(|name| {
             let touchpad = state.pointers.iter().find(|p| p.name == *name).is_some_and(|p| p.kind().touchpad());
-            Some(Device { name: name.clone(), settings: defaults(&state.settings, touchpad) })
+            Device { name: name.clone(), settings: defaults(&state.settings, touchpad) }
         })
         .collect();
     let job = Job { hypr, lua: state.lua, file, settings: state.settings.clone(), reset };
@@ -775,11 +776,9 @@ fn active(state: &State) -> Option<usize> {
 }
 
 /// The sidebar's statuses: Keyboard's (the layout in use, "CH"), and Mouse & touchpad's ("1 on").
+/// None without Hyprland: the pages say why, and "not running" would cut "Mouse & touchpad" short.
 pub fn status(state: &State) -> (String, String) {
-    if state.not_running {
-        return ("not running".into(), "not running".into());
-    }
-    if !state.read {
+    if state.not_running || !state.read {
         return (String::new(), String::new());
     }
     let layouts = &state.settings.keyboard.layouts;
@@ -918,10 +917,10 @@ pub fn keyboard_view(state: &mut State) -> KeyboardView {
     v.numlock = k.numlock;
     v.repeat_delay = k.repeat_delay as f32;
     v.repeat_delay_text = s(format!("{} ms", k.repeat_delay));
-    v.delay_differs = s(if k.repeat_delay == 600 { "" } else { "Changed from 600 ms, the default" });
+    v.delay_differs = s(if k.repeat_delay == 600 { "" } else { "Changed from 600 ms" });
     v.repeat_rate = k.repeat_rate as f32;
     v.repeat_rate_text = s(format!("{} /s", k.repeat_rate));
-    v.rate_differs = s(if k.repeat_rate == 25 { "" } else { "Changed from 25 /s, the default" });
+    v.rate_differs = s(if k.repeat_rate == 25 { "" } else { "Changed from 25 /s" });
     v.add_open = state.add_open;
     if state.add_open {
         let found = results(state);
@@ -1394,20 +1393,45 @@ fn shorten_home(path: &str) -> String {
     }
 }
 
+thread_local! {
+    /// The layouts and the selected entry's settings, each kept as one model: replacing it would
+    /// rebuild the row being dragged (a layout's handle, a slider), and the drag would stop.
+    static LAYOUTS: Rc<VecModel<LayoutRow>> = Rc::new(VecModel::default());
+    static SETTINGS: Rc<VecModel<PointerSetting>> = Rc::new(VecModel::default());
+}
+
+/// `rows` in `model`: the rows that changed are replaced, the others left as they are.
+fn kept<T: Clone + PartialEq + 'static>(model: &Rc<VecModel<T>>, rows: &ModelRc<T>) -> ModelRc<T> {
+    let rows: Vec<T> = rows.iter().collect();
+    if model.row_count() == rows.len() {
+        for (i, row) in rows.into_iter().enumerate() {
+            if model.row_data(i).as_ref() != Some(&row) {
+                model.set_row_data(i, row);
+            }
+        }
+    } else {
+        model.set_vec(rows);
+    }
+    ModelRc::from(model.clone())
+}
+
 pub fn render(window: &MainWindow, state: &mut State, bt: Option<&lituus_bt::Snapshot>) {
     let page = window.get_page();
     if page == "keyboard" {
-        window.set_keyboard(keyboard_view(state));
+        let mut v = keyboard_view(state);
+        v.layouts = LAYOUTS.with(|m| kept(m, &v.layouts));
+        window.set_keyboard(v);
     }
     if page == "mouse" {
-        window.set_mouse(mouse_view(state, bt.map(|b| b.devices.as_slice()).unwrap_or_default()));
+        let mut v = mouse_view(state, bt.map(|b| b.devices.as_slice()).unwrap_or_default());
+        v.settings = SETTINGS.with(|m| kept(m, &v.settings));
+        window.set_mouse(v);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use slint::Model;
 
     fn devices() -> Devices {
         Devices::parse(include_str!("../../hypr/tests/fixtures/devices.json")).unwrap()
@@ -1568,7 +1592,7 @@ B: PROP=5
         let file = std::fs::read_to_string(dir.join("lituus.lua")).unwrap();
         assert!(file.contains("repeat_delay = 300,"), "{file}");
         let v = keyboard_view(&mut st);
-        assert_eq!(v.delay_differs, "Changed from 600 ms, the default");
+        assert_eq!(v.delay_differs, "Changed from 600 ms");
         // Hyprland isn't there to take it, but the file has it.
         assert!(v.bar.text.contains("Hyprland didn't take the change"), "{}", v.bar.text);
         st.error = None;
@@ -1755,7 +1779,7 @@ B: PROP=5
         let v = mouse_view(&st, &[]);
         assert_eq!(v.state, "not-running");
         assert_eq!(v.empty_title, "Hyprland isn't running");
-        assert_eq!(status(&st), ("not running".into(), "not running".into()));
+        assert_eq!(status(&st), (String::new(), String::new()));
         assert_eq!(State::default().settings, InputSettings::default());
         assert_eq!(status(&State::default()), (String::new(), String::new()));
     }

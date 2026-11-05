@@ -81,9 +81,9 @@ component CardTitle inherits Text {
 component Differs inherits HorizontalLayout {
     in property <string> text;
     spacing: 6px;
-    alignment: start;
-    Rectangle { width: 6px; height: 6px; y: (parent.height - 6px) / 2; border-radius: 3px; background: Theme.accent; }
-    Text { text: root.text; color: Theme.muted; font-size: 12px; overflow: elide; }
+    VerticalLayout { alignment: center; Rectangle { width: 6px; height: 6px; border-radius: 3px; background: Theme.accent; } }
+    // No width of its own: showing it mustn't move the control beside it (a slider being dragged).
+    Text { text: root.text; color: Theme.muted; font-size: 12px; overflow: elide; preferred-width: 0; horizontal-stretch: 1; }
 }
 
 /// A setting's row: its name and a line under it on the left, the control on the right, and a
@@ -109,7 +109,11 @@ component Line inherits Rectangle {
             if root.differs != "": Differs { text: root.differs; }
             if root.differs == "" && root.sub != "": Text { text: root.sub; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
         }
-        @children
+        // Centred by a layout: a `y` on the control put it at the top of the row.
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
     }
 }
 
@@ -126,8 +130,7 @@ component ValueSlider inherits HorizontalLayout {
     spacing: 12px;
     Slider {
         min-width: 90px;
-        preferred-width: 170px;
-        y: (parent.height - self.height) / 2;
+        preferred-width: 150px;
         label: root.label;
         focus-key: root.focus-key;
         value: root.value;
@@ -137,7 +140,7 @@ component ValueSlider inherits HorizontalLayout {
         value-text: root.text;
         moved(v) => { root.moved(v); }
     }
-    Text { text: root.text; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; horizontal-alignment: right; vertical-alignment: center; width: 56px; }
+    Text { text: root.text; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; horizontal-alignment: right; vertical-alignment: center; width: 50px; }
 }
 
 component SettingLine inherits Line {
@@ -160,7 +163,6 @@ component SettingLine inherits Line {
         label: root.setting.label;
         focus-key: "pointer:" + root.setting.id;
         on: root.setting.on;
-        y: (parent.height - self.height) / 2;
         toggled => { root.act(root.setting.id, 0); }
     }
     if root.setting.kind == "choice": Segmented {
@@ -168,7 +170,6 @@ component SettingLine inherits Line {
         focus-key: "pointer:" + root.setting.id;
         height: 34px;
         horizontal-stretch: 0;
-        y: (parent.height - self.height) / 2;
         options: root.setting.options;
         selected: root.setting.selected;
         changed(i) => { root.act(root.setting.id, i); }
@@ -237,7 +238,8 @@ component LayoutItem inherits Focusable {
     accessible-label: entry.name + ", " + entry.meta;
     accessible-item-selected: entry.selected;
     accessible-action-default => { chosen(); }
-    activated => { root.chosen(); }
+    // A click takes the focus too, so Alt+↑↓ and Del move the layout and not a slider.
+    activated => { root.chosen(); root.focus(); }
     key(event) => {
         // The window moves the selection or the layout; the focus goes with it.
         if event.text == Key.UpArrow || event.text == Key.DownArrow { Focus.key = "layouts:selected"; }
@@ -255,7 +257,7 @@ component LayoutItem inherits Focusable {
                 mouse-cursor: root.count > 1 ? grab : default;
                 enabled: root.count > 1;
                 pointer-event(event) => {
-                    if event.kind == PointerEventKind.down { Focus.keyboard = false; root.chosen(); }
+                    if event.kind == PointerEventKind.down { Focus.keyboard = false; root.chosen(); root.focus(); }
                     if event.kind == PointerEventKind.up { root.dropped(self.mouse-y - self.pressed-y); }
                 }
                 moved => { if self.pressed { root.dragged(self.mouse-y - self.pressed-y); } }
@@ -307,7 +309,8 @@ component LayoutsCard inherits Card {
             height: root.view.layouts.length * root.row-height;
             for l[i] in root.view.layouts: LayoutItem {
                 x: 0;
-                y: i * root.row-height + (i == root.dragging ? root.drag-offset : 0);
+                // It stays in place while it's dragged; the line shows where it goes.
+                y: i * root.row-height;
                 width: parent.width;
                 entry: l;
                 index: i;
@@ -352,7 +355,6 @@ component LayoutsCard inherits Card {
             Select {
                 width: 190px;
                 select-height: 34px;
-                y: (parent.height - self.height) / 2;
                 label: "Switch layouts with";
                 focus-key: "switch-keys";
                 options: root.view.switch-options;
@@ -423,7 +425,6 @@ component KeysCard inherits Card {
             Select {
                 width: 190px;
                 select-height: 34px;
-                y: (parent.height - self.height) / 2;
                 label: "Caps Lock acts as";
                 focus-key: "caps";
                 options: root.view.caps-options;
@@ -437,7 +438,6 @@ component KeysCard inherits Card {
             Select {
                 width: 190px;
                 select-height: 34px;
-                y: (parent.height - self.height) / 2;
                 label: "Compose key";
                 focus-key: "compose";
                 options: root.view.compose-options;
@@ -447,7 +447,7 @@ component KeysCard inherits Card {
         }
         Line {
             label: "Num Lock on at login";
-            Switch { label: "Num Lock on at login"; focus-key: "numlock"; on: root.view.numlock; y: (parent.height - self.height) / 2; toggled => { root.act("numlock", "", 0); } }
+            Switch { label: "Num Lock on at login"; focus-key: "numlock"; on: root.view.numlock; toggled => { root.act("numlock", "", 0); } }
         }
     }
 }

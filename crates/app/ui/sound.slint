@@ -76,6 +76,8 @@ export component Slider inherits Focusable {
     accessible-action-increment => { root.moved(min(root.maximum, root.value + root.step)); }
     accessible-action-decrement => { root.moved(max(root.minimum, root.value - root.step)); }
     key(event) => {
+        // Alt+↑↓ and the like are the page's (moving a keyboard layout).
+        if event.modifiers.alt || event.modifiers.control { return reject; }
         if event.text == Key.RightArrow || event.text == Key.UpArrow { root.moved(min(root.maximum, root.value + root.step)); return accept; }
         if event.text == Key.LeftArrow || event.text == Key.DownArrow { root.moved(max(root.minimum, root.value - root.step)); return accept; }
         reject

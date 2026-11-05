@@ -88,7 +88,7 @@ impl Registry {
             })
             .collect();
         // A code typed exactly ("us") comes first.
-        found.sort_by_key(|l| (!words.iter().any(|w| *w == l.layout), !l.variant.is_empty()));
+        found.sort_by_key(|l| (!words.contains(&l.layout), !l.variant.is_empty()));
         found
     }
 
