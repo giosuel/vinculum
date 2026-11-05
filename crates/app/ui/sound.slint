@@ -52,6 +52,10 @@ export component Slider inherits Focusable {
     in property <string> label;
     /// A mark across the track, such as 100 % when it goes higher, or the centre of a balance.
     in property <float> mark: -1;
+    /// What the arrow keys move it by.
+    in property <float> step: 0.05;
+    /// Its value for a screen reader, if not a percentage ("300 ms").
+    in property <string> value-text;
     callback moved(float);
     property <float> local: value;
     property <bool> dragging: touch.pressed;
@@ -66,14 +70,14 @@ export component Slider inherits Focusable {
     clickable: false;
     accessible-role: slider;
     accessible-label: label;
-    accessible-value: round(shown * 100) + " %";
+    accessible-value: root.value-text != "" ? root.value-text : round(shown * 100) + " %";
     accessible-value-minimum: minimum * 100;
     accessible-value-maximum: maximum * 100;
-    accessible-action-increment => { root.moved(min(root.maximum, root.value + 0.05)); }
-    accessible-action-decrement => { root.moved(max(root.minimum, root.value - 0.05)); }
+    accessible-action-increment => { root.moved(min(root.maximum, root.value + root.step)); }
+    accessible-action-decrement => { root.moved(max(root.minimum, root.value - root.step)); }
     key(event) => {
-        if event.text == Key.RightArrow || event.text == Key.UpArrow { root.moved(min(root.maximum, root.value + 0.05)); return accept; }
-        if event.text == Key.LeftArrow || event.text == Key.DownArrow { root.moved(max(root.minimum, root.value - 0.05)); return accept; }
+        if event.text == Key.RightArrow || event.text == Key.UpArrow { root.moved(min(root.maximum, root.value + root.step)); return accept; }
+        if event.text == Key.LeftArrow || event.text == Key.DownArrow { root.moved(max(root.minimum, root.value - root.step)); return accept; }
         reject
     }
     track := Rectangle {

@@ -5,7 +5,7 @@ import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel, Scroll, Focusable } from "controls.slint";
 import { Segmented, Select, TextField, CheckBox, Modal } from "dialogs.slint";
-import { Hero, Card } from "shell.slint";
+import { Hero, Card, LoadBanner } from "shell.slint";
 import { Slider } from "sound.slint";
 
 /// A monitor on the layout, in layout pixels.
@@ -196,39 +196,7 @@ export component DisplaysPage inherits VerticalLayout {
     callback drag(int, float, float, bool);
     spacing: 14px;
 
-    if root.view.not-loaded && root.view.state == "list": Rectangle {
-        height: banner.preferred-height;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.warn-border;
-        background: Theme.warn-bg;
-        copy-field := TextInput { visible: false; text: root.view.load-line; read-only: true; }
-        banner := HorizontalLayout {
-            padding: 6px;
-            padding-left: 14px;
-            spacing: 10px;
-            // Centred by a layout: a `y` here put the icon at the top when the text is one line.
-            VerticalLayout { alignment: center; Icon { name: "warning"; tint: Theme.warn-text; } }
-            Text {
-                text: "Your Hyprland config doesn't load Lituus's file yet, so changes are lost when Hyprland restarts.";
-                color: Theme.warn-text;
-                font-size: 13px;
-                wrap: word-wrap;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-            }
-            VerticalLayout {
-                alignment: center;
-                Button {
-                    label: "Copy " + root.view.load-line;
-                    button-height: 30px;
-                    min-width: self.preferred-width;
-                    horizontal-stretch: 0;
-                    clicked => { copy-field.select-all(); copy-field.copy(); }
-                }
-            }
-        }
-    }
+    if root.view.not-loaded && root.view.state == "list": LoadBanner { line: root.view.load-line; }
 
     // On the Monitor tab the hero (with the monitors) grows into the room the settings leave, up
     // to 720 px. Workspaces and Profiles keep it at its smallest: their lists need the room.

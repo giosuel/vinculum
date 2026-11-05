@@ -1,6 +1,6 @@
 //! The sidebar: its pages in groups, each with a short status, filtered by the search field.
-//! Network's pages (Wi-Fi, Wired, VPN, Hotspot) are its sub-items, shown under it unless it's
-//! folded, and when the search finds them. Settings has its own button at the bottom, so it's
+//! Network's pages (Wi-Fi, Wired, VPN, Hotspot) and Input's (Keyboard, Mouse & touchpad) are their
+//! sub-items, shown under them unless they're folded, and when the search finds them. Settings has its own button at the bottom, so it's
 //! listed only as a search result.
 
 use slint::{ModelRc, SharedString, VecModel};
@@ -29,7 +29,8 @@ fn matches(entry: &Entry, query: &str) -> bool {
     if query.is_empty() {
         return entry.group != LITUUS;
     }
-    entry.label.to_lowercase().contains(&query) || entry.keywords.split(' ').any(|k| k.starts_with(&query))
+    // A keyword, or words in a row ("tap to click", "caps lo").
+    entry.label.to_lowercase().contains(&query) || format!(" {}", entry.keywords).contains(&format!(" {query}"))
 }
 
 /// The items shown, in order: each top-level item (if it or a sub-item matches the search), then
@@ -151,6 +152,15 @@ mod tests {
                 parent: None,
             },
             Entry {
+                id: "mouse",
+                label: "Mouse & touchpad",
+                icon: "mouse",
+                group: "DEVICES",
+                keywords: "natural scrolling tap to click",
+                status: "1 on".into(),
+                parent: None,
+            },
+            Entry {
                 id: "settings",
                 label: "Settings",
                 icon: "settings",
@@ -167,7 +177,7 @@ mod tests {
         let g = groups(&entries(), "", "bluetooth", &[]);
         let titles: Vec<String> = g.iter().map(|g| g.title.to_string()).collect();
         // Settings is the button below the list, not one of its pages.
-        assert_eq!(titles, ["CONNECTIONS"]);
+        assert_eq!(titles, ["CONNECTIONS", "DEVICES"]);
         assert!(g[0].items.row_data(4).unwrap().current);
         assert_eq!(g[0].items.row_data(4).unwrap().sub, "2 on");
     }
@@ -183,7 +193,7 @@ mod tests {
         assert_eq!(ids("blue"), ["bluetooth"]);
         // A sub-item is found under its item, even when that's folded.
         assert_eq!(ids("WIFI"), ["network", "wifi"]);
-        assert_eq!(ids(""), ["network", "bluetooth"]);
+        assert_eq!(ids(""), ["network", "bluetooth", "mouse"]);
         // The app's own look is in Settings.
         assert_eq!(ids("dark"), ["settings"]);
         assert_eq!(ids("Appearance"), ["settings"]);
@@ -194,6 +204,12 @@ mod tests {
         assert_eq!(first_match(&entries(), "net"), Some("network"));
         assert_eq!(first_match(&entries(), "theme"), Some("settings"));
         assert_eq!(first_match(&entries(), "zzz"), None);
+        // Words in a row, the last one begun.
+        assert_eq!(first_match(&entries(), "tap to cl"), Some("mouse"));
+        assert_eq!(first_match(&entries(), "Natural Scrolling"), Some("mouse"));
+        assert_eq!(first_match(&entries(), "to click"), Some("mouse"));
+        assert_eq!(first_match(&entries(), "scrolling tap"), Some("mouse"));
+        assert_eq!(first_match(&entries(), "o click"), None);
     }
 
     #[test]
