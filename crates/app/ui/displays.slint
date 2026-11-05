@@ -517,7 +517,7 @@ export component DisplaysPage inherits VerticalLayout {
         VerticalLayout {
             alignment: center;
             spacing: 12px;
-            Icon { name: "monitor"; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+            HorizontalLayout { alignment: center; Icon { name: "monitor"; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
             Text { text: root.view.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
             Text { text: root.view.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
         }
