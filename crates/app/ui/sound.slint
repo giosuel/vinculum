@@ -3,7 +3,7 @@
 // (src/sound.rs); everything the user does goes back through `act(verb, id, value)`.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Focusable, Focus } from "controls.slint";
+import { Button, IconButton, Switch, SectionLabel, Scroll, Focusable, Focus } from "controls.slint";
 import { Segmented, Select } from "dialogs.slint";
 import { Hero, HeroInfo, Card } from "shell.slint";
 
@@ -188,30 +188,33 @@ component SettingRow inherits HorizontalLayout {
 export component SoundPage inherits VerticalLayout {
     in property <SoundView> page;
     in-out property <int> tab;
+    /// A short window: a smaller hero.
+    in property <bool> compact;
     callback act(string, string, float);
     spacing: 14px;
 
     Hero {
         title: "Sound";
         sub: root.page.sub;
-        hero-height: 206px;
+        hero-height: root.compact ? 136px : 206px;
+        compact: root.compact;
         if root.page.state == "list": HorizontalLayout {
             x: 24px;
-            y: parent.height - self.height - 22px;
+            y: parent.height - self.height - (root.compact ? 16px : 22px);
             width: parent.width - 48px;
-            height: 96px;
+            height: root.compact ? 63px : 96px;
             spacing: 20px;
             Rectangle {
-                width: 88px;
-                height: 88px;
+                width: root.compact ? 56px : 88px;
+                height: self.width;
                 y: parent.height - self.height;
-                border-radius: 44px;
+                border-radius: self.width / 2;
                 background: Theme.accent-soft-bg;
-                Icon { name: root.page.hero.icon; tint: Theme.accent; size: 42px; stroke-width: 1.3px; }
+                Icon { name: root.page.hero.icon; tint: Theme.accent; size: parent.width * 0.48; stroke-width: 1.3px; }
             }
             VerticalLayout {
                 alignment: end;
-                spacing: 10px;
+                spacing: root.compact ? 4px : 10px;
                 padding-bottom: 2px;
                 HorizontalLayout {
                     spacing: 12px;
@@ -241,24 +244,28 @@ export component SoundPage inherits VerticalLayout {
         }
     }
 
-    if root.page.state == "list": HorizontalLayout {
-        height: 40px;
-        Segmented {
-            label: "Sound";
-            horizontal-stretch: 0;
-            options: ["Devices", "Apps", "Cards"];
-            selected <=> root.tab;
-        }
-        Text { text: root.page.error; color: Theme.danger; font-size: 13px; horizontal-alignment: right; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-    }
-
-    if root.page.state == "list" && root.tab == 0: HorizontalLayout {
-        spacing: 14px;
+    // Below the hero, the page scrolls when the window is too short for it.
+    Scroll {
         vertical-stretch: 1;
-        Card {
-            horizontal-stretch: 1;
-            Flickable {
-                content-height: outputs.preferred-height;
+        fill: true;
+        spacing: 14px;
+        bar-inset: -16px;
+        if root.page.state == "list": HorizontalLayout {
+            height: 40px;
+            Segmented {
+                label: "Sound";
+                horizontal-stretch: 0;
+                options: ["Devices", "Apps", "Cards"];
+                selected <=> root.tab;
+            }
+            Text { text: root.page.error; color: Theme.danger; font-size: 13px; horizontal-alignment: right; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        }
+
+        if root.page.state == "list" && root.tab == 0: HorizontalLayout {
+            spacing: 14px;
+            vertical-stretch: 1;
+            Card {
+                horizontal-stretch: 1;
                 outputs := VerticalLayout {
                     padding: 18px;
                     padding-top: 14px;
@@ -300,11 +307,8 @@ export component SoundPage inherits VerticalLayout {
                     }
                 }
             }
-        }
-        Card {
-            horizontal-stretch: 1;
-            Flickable {
-                content-height: inputs.preferred-height;
+            Card {
+                horizontal-stretch: 1;
                 inputs := VerticalLayout {
                     padding: 18px;
                     padding-top: 14px;
@@ -338,12 +342,9 @@ export component SoundPage inherits VerticalLayout {
                 }
             }
         }
-    }
 
-    if root.page.state == "list" && root.tab == 1: Card {
-        vertical-stretch: 1;
-        Flickable {
-            content-height: apps.preferred-height;
+        if root.page.state == "list" && root.tab == 1: Card {
+            vertical-stretch: 1;
             apps := VerticalLayout {
                 padding: 18px;
                 padding-top: 14px;
@@ -397,12 +398,9 @@ export component SoundPage inherits VerticalLayout {
                 }
             }
         }
-    }
 
-    if root.page.state == "list" && root.tab == 2: Card {
-        vertical-stretch: 1;
-        Flickable {
-            content-height: cards.preferred-height;
+        if root.page.state == "list" && root.tab == 2: Card {
+            vertical-stretch: 1;
             cards := VerticalLayout {
                 padding: 18px;
                 padding-top: 14px;
@@ -431,16 +429,16 @@ export component SoundPage inherits VerticalLayout {
                 }
             }
         }
-    }
 
-    if root.page.state != "list": Card {
-        vertical-stretch: 1;
-        VerticalLayout {
-            alignment: center;
-            spacing: 12px;
-            Icon { name: "volume-off"; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
-            Text { text: root.page.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
-            Text { text: root.page.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
+        if root.page.state != "list": Card {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+                HorizontalLayout { alignment: center; Icon { name: "volume-off"; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
+                Text { text: root.page.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+                Text { text: root.page.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
+            }
         }
     }
 }

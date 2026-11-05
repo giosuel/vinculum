@@ -6,6 +6,7 @@ use clap::Parser;
 use futures_util::StreamExt;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+mod airplane;
 mod audio;
 mod bluetooth;
 mod config;
@@ -75,6 +76,24 @@ fn key_mgmt_at(index: i32) -> Option<lituus_nm::KeyMgmt> {
     }
 }
 
+/// The confirmation dialog: its title, text and button, and what accepting it does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Confirm {
+    pub title: String,
+    pub text: String,
+    pub button: String,
+    pub then: Confirmed,
+}
+
+/// What a confirmation dialog runs once it's accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Confirmed {
+    Network(view::Command),
+    Bluetooth(bluetooth::Command),
+    /// A Displays profile change ("profile-update", "profile-delete") and the profile's name.
+    Displays(&'static str, String),
+}
+
 /// The password dialog's three forms.
 enum Dialog {
     /// Joining a secured network from the list.
@@ -105,9 +124,8 @@ struct App {
     commands: Option<tokio::sync::mpsc::UnboundedSender<view::Command>>,
     /// The message above the list, and its tone ("danger", "warn", "info").
     message: Option<(String, &'static str)>,
-    /// The command waiting for the confirmation dialog, and the dialog's title, text and button.
-    confirm: Option<view::Command>,
-    confirm_text: Option<(String, String, String)>,
+    /// The confirmation dialog, while it's open.
+    confirm: Option<Confirm>,
     /// The password dialog, and NetworkManager's requests waiting behind it.
     dialog: Option<Dialog>,
     prompts: VecDeque<secrets::Prompt>,
@@ -150,8 +168,13 @@ struct App {
     displays: displays::State,
     /// The Sound page.
     sound: sound::State,
+    /// Airplane mode, from when it's turned on until it ends.
+    airplane: Option<airplane::Airplane>,
     /// The sidebar's search.
     nav_query: String,
+    /// The sidebar items whose sub-items are folded away, for this session only (config.toml
+    /// holds settings, not the window's state).
+    nav_folded: Vec<String>,
     /// The Network sub-page last open, for coming back to it from the sidebar.
     net_page: view::Page,
 }
@@ -262,7 +285,7 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
     std::mem::forget(countdown);
-    // The Bluetooth page's "Visible · 2:41" counts down.
+    // The Bluetooth Visible switch counts down ("2:41").
     let countdown = slint::Timer::default();
     let weak = window.as_weak();
     countdown.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
@@ -334,7 +357,7 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
         tray::Event::Connect(id) | tray::Event::Toggle(id) => {
             update(&weak, |app| {
                 let Some(snap) = &app.snapshot else { return };
-                let q = quick::build(Some(snap));
+                let q = quick::build(Some(snap), app.quick.airplane);
                 let page = if id.starts_with("wifi:") { "wifi" } else { "vpn" };
                 let action = if id.starts_with("wifi:") {
                     if q.networks.iter().any(|n| n.id == id && n.active) {
@@ -360,7 +383,7 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
             }
         }
         tray::Event::SetWifi(on) => update(&weak, |app| send(app, view::Command::SetWifi(on))),
-        tray::Event::SetAirplane(on) => update(&weak, |app| send(app, view::Command::SetAirplane(on))),
+        tray::Event::SetAirplane(on) => update(&weak, |app| set_airplane(app, on)),
         tray::Event::Open => {
             hide_quick();
             let _ = window.show();
@@ -474,8 +497,8 @@ fn toggle_quick(window: &MainWindow) {
 }
 
 /// The tray and the popup show what changed.
-fn render_quick(app: &mut App) {
-    let q = quick::build(app.snapshot.as_ref());
+fn render_quick(app: &mut App, airplane: bool) {
+    let q = quick::build(app.snapshot.as_ref(), airplane);
     let bt = bluetooth::quick(&app.bt);
     if q == app.quick && bt == app.quick_bt && !std::mem::take(&mut app.quick_new) {
         return;
@@ -522,7 +545,7 @@ fn render_quick(app: &mut App) {
         toggles.push(QuickToggle {
             id: "airplane".into(),
             name: "Airplane mode".into(),
-            meta: "Turns off Wi-Fi and mobile broadband".into(),
+            meta: "Turns off Wi-Fi, Bluetooth and mobile broadband".into(),
             on: q.airplane,
         });
         popup.set_toggles(model(toggles));
@@ -561,6 +584,13 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_navigate(move |id| update(&weak, |app| go(app, &id)));
     let weak = window.as_weak();
     window.on_nav_search(move |text| update(&weak, |app| app.nav_query = text.to_string()));
+    let weak = window.as_weak();
+    window.on_nav_fold(move |id| {
+        update(&weak, |app| match app.nav_folded.iter().position(|f| *f == id.as_str()) {
+            Some(i) => _ = app.nav_folded.remove(i),
+            None => app.nav_folded.push(id.into()),
+        })
+    });
     let weak = window.as_weak();
     window.on_nav_search_accepted(move || {
         let Some(window) = weak.upgrade() else { return };
@@ -670,7 +700,11 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_displays_act(move |verb, arg, value| {
         let w = weak.clone();
-        update(&weak, |app| displays::act(&w, &mut app.displays, &verb, &arg, value))
+        update(&weak, |app| {
+            if let Some(confirm) = displays::act(&w, &mut app.displays, &verb, &arg, value) {
+                app.confirm = Some(confirm);
+            }
+        })
     });
     let weak = window.as_weak();
     window.on_displays_drag(move |i, x, y, done| {
@@ -840,10 +874,11 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_dismiss_message(move || update(&weak, |app| app.message = None));
     let weak = window.as_weak();
     window.on_confirm_accepted(move || {
-        update(&weak, |app| {
-            if let Some(command) = app.confirm.take() {
-                send(app, command);
-            }
+        update(&weak, |app| match app.confirm.take().map(|c| c.then) {
+            Some(Confirmed::Network(command)) => send(app, command),
+            Some(Confirmed::Bluetooth(command)) => app.bt.send(command),
+            Some(Confirmed::Displays(verb, name)) => displays::confirmed(&mut app.displays, verb, &name),
+            None => {}
         })
     });
     let weak = window.as_weak();
@@ -872,13 +907,7 @@ fn connect_callbacks(window: &MainWindow) {
         })
     });
     let weak = window.as_weak();
-    window.on_airplane_toggled(move || {
-        update(&weak, |app| {
-            if let Some(command) = app.snapshot.as_ref().map(view::airplane_switch) {
-                send(app, command);
-            }
-        })
-    });
+    window.on_airplane_toggled(move || update(&weak, |app| set_airplane(app, !app.quick.airplane)));
     window.on_join_check(|mode, name, security, password| {
         let password_ok = |index| key_mgmt_at(index).is_some_and(|k| k.accepts(&password));
         if mode == "hidden" {
@@ -1052,8 +1081,7 @@ fn act(app: &mut App, action: &str) {
         }
         Some(view::Intent::Join(target)) => open_dialog(app, Dialog::Join(target)),
         Some(view::Intent::Confirm { title, text, button, command }) => {
-            app.confirm = Some(command);
-            app.confirm_text = Some((title, text, button));
+            app.confirm = Some(Confirm { title, text, button, then: Confirmed::Network(command) });
         }
         None => {}
     }
@@ -1065,6 +1093,16 @@ fn send(app: &mut App, command: view::Command) {
     app.retry = None;
     if let Some(commands) = &app.commands {
         let _ = commands.send(command);
+    }
+}
+
+/// Airplane mode on or off: NetworkManager switches Wi-Fi and mobile broadband, the Bluetooth
+/// thread the adapters.
+fn set_airplane(app: &mut App, on: bool) {
+    let change = airplane::switch(&mut app.airplane, on, app.snapshot.as_ref(), app.bt.snapshot.as_ref());
+    send(app, view::Command::SetAirplane { on, wifi: change.wifi, wwan: change.wwan });
+    for (adapter, on) in change.bluetooth {
+        app.bt.send(bluetooth::Command::Power { adapter, on });
     }
 }
 
@@ -1245,7 +1283,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             label: "Bluetooth",
             icon: "bluetooth",
             group: "CONNECTIONS",
-            keywords: "pair pairing headphones headset keyboard mouse speaker devices",
+            keywords: "pair pairing headphones headset keyboard mouse speaker devices visible discoverable pairable adapter",
             status: bluetooth::nav(&app.bt, false).sub.to_string(),
             parent: None,
         },
@@ -1282,13 +1320,15 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
 fn render(window: &MainWindow) {
     APP.with(|app| {
         let mut app = app.borrow_mut();
+        let state = &mut *app;
+        let airplane = airplane::follow(&mut state.airplane, state.snapshot.as_ref(), state.bt.snapshot.as_ref());
         let v = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui);
         let mut entries = nav_entries(&app);
         let statuses = [&v.net_status, &v.net_items.wifi, &v.net_items.wired, &v.net_items.vpn, &v.net_items.hotspot];
         for (entry, status) in entries.iter_mut().zip(statuses) {
             entry.status = status.clone();
         }
-        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, app.ui.page.id())));
+        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, app.ui.page.id(), &app.nav_folded)));
         window.set_net_sub(v.net_hero.sub.as_str().into());
         window.set_count(v.count.as_str().into());
         window.set_net_hero(HeroInfo {
@@ -1354,14 +1394,14 @@ fn render(window: &MainWindow) {
         window.set_message(message.into());
         window.set_message_tone(if tone.is_empty() { "info".into() } else { tone.into() });
         window.set_confirm_open(app.confirm.is_some());
-        if let Some((title, text, button)) = &app.confirm_text {
-            window.set_confirm_title(title.into());
-            window.set_confirm_text(text.into());
-            window.set_confirm_button(button.into());
+        if let Some(confirm) = &app.confirm {
+            window.set_confirm_title(confirm.title.as_str().into());
+            window.set_confirm_text(confirm.text.as_str().into());
+            window.set_confirm_button(confirm.button.as_str().into());
         }
         window.set_message_title(if app.message.is_some() { app.message_title.as_str().into() } else { "".into() });
         window.set_message_action(if app.retry.is_some() { "Try again".into() } else { "".into() });
-        window.set_airplane(app.snapshot.as_ref().is_some_and(|s| s.airplane()));
+        window.set_airplane(airplane);
         let keyring = app.keyring;
         window.set_keyring_label(
             match keyring {
@@ -1402,7 +1442,7 @@ fn render(window: &MainWindow) {
         sound::render(window, &app.sound);
         displays::render(window, &app.displays);
         files::render(window, &app.files);
-        render_quick(&mut app);
+        render_quick(&mut app, airplane);
     });
 }
 
@@ -1768,7 +1808,7 @@ async fn run(
             (active, Some(device.clone()), retry)
         }
         SetWifi(on) => return client.set_wireless_enabled(*on).await.map(|()| None),
-        SetAirplane(on) => return client.set_airplane(*on).await.map(|()| None),
+        SetAirplane { wifi, wwan, .. } => return client.set_radios(*wifi, *wwan).await.map(|()| None),
         Rescan { device } => return client.request_scan(device).await.map(|()| None),
         Deactivate { active } => return client.deactivate(active).await.map(|()| None),
         Forget { connection } => return client.forget(connection).await.map(|()| None),
@@ -2034,8 +2074,8 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituu
     let what = match command {
         SetWifi(true) => "Couldn't turn Wi-Fi on",
         SetWifi(false) => "Couldn't turn Wi-Fi off",
-        SetAirplane(true) => "Couldn't turn airplane mode on",
-        SetAirplane(false) => "Couldn't turn airplane mode off",
+        SetAirplane { on: true, .. } => "Couldn't turn airplane mode on",
+        SetAirplane { on: false, .. } => "Couldn't turn airplane mode off",
         Rescan { .. } => "Couldn't scan",
         Activate { .. } | ConnectOpen { .. } | Join { .. } => "Couldn't connect",
         OpenEditor { .. } | NewEnterprise { .. } => "Couldn't read the connection",
@@ -2062,9 +2102,13 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituu
         ),
         other => (format!("{what}: {other}."), "danger"),
     };
+    let airplane_failed = matches!(command, SetAirplane { on: true, .. });
     let _ = weak.upgrade_in_event_loop(move |window| {
         APP.with(|app| {
             let mut app = app.borrow_mut();
+            if airplane_failed {
+                app.airplane = None;
+            }
             app.message_title.clear();
             app.retry = None;
             app.message = Some((text, tone));
@@ -2266,17 +2310,235 @@ fn set_theme(t: Theme<'_>, p: &theme::Palette) {
 }
 
 #[cfg(test)]
+mod dialog_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use i_slint_backend_testing::mock_elapsed_time;
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
+
+    use super::{DisplaysView, FilesView, MainWindow};
+
+    /// A window on the test backend whose dialog callbacks write down what they were called
+    /// with, and close the dialog as the app does.
+    fn dialogs() -> (MainWindow, Rc<RefCell<Vec<String>>>) {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.show().unwrap();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let (l, w) = (log.clone(), window.as_weak());
+        let note = move |what: &str| {
+            let (log, w) = (l.clone(), w.clone());
+            let what = what.to_owned();
+            move || {
+                log.borrow_mut().push(what.clone());
+                let w = w.unwrap();
+                match what.as_str() {
+                    "hostname-cancelled" | "hostname-save" => w.set_hostname_open(false),
+                    "add-cancelled" => w.set_add_open(false),
+                    "share-closed" => w.set_share_open(false),
+                    "join-cancelled" | "join-accepted" => w.set_join_open(false),
+                    _ => {}
+                }
+            }
+        };
+        window.on_hostname_cancelled(note("hostname-cancelled"));
+        window.on_hostname_save(note("hostname-save"));
+        window.on_add_cancelled(note("add-cancelled"));
+        window.on_share_closed(note("share-closed"));
+        window.on_join_cancelled(note("join-cancelled"));
+        window.on_join_accepted(note("join-accepted"));
+        window.on_join_check(|_, _, _, password| !password.is_empty());
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_bt_act(move |verb, _| {
+            l.borrow_mut().push(format!("bt {verb}"));
+            if verb == "rename-cancel" || verb == "rename-save" {
+                w.unwrap().set_bt_rename_open(false);
+            }
+        });
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_displays_act(move |verb, _, _| {
+            l.borrow_mut().push(format!("displays {verb}"));
+            let w = w.unwrap();
+            w.set_displays(DisplaysView { keep_open: false, config_open: false, ..w.get_displays() });
+        });
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_files_act(move |verb| {
+            l.borrow_mut().push(format!("files {verb}"));
+            w.unwrap().set_files(FilesView::default());
+        });
+        let l = log.clone();
+        window.on_move_selection(move |by| l.borrow_mut().push(format!("move {by}")));
+        (window, log)
+    }
+
+    /// What the password dialog shows under its fields, for one kind of security.
+    fn join_hints(window: &MainWindow) {
+        window.set_join_password_hints([SharedString::new()].as_slice().into());
+        window
+            .set_join_storage_hints([SharedString::new(), SharedString::new(), SharedString::new()].as_slice().into());
+    }
+
+    fn press(window: &MainWindow, key: impl Into<SharedString>) {
+        let key = key.into();
+        window.window().dispatch_event(WindowEvent::KeyPressed { text: key.clone() });
+        window.window().dispatch_event(WindowEvent::KeyReleased { text: key });
+    }
+
+    /// A click in the window's top left corner, beside any dialog.
+    fn click_beside(window: &MainWindow) {
+        let position = LogicalPosition::new(8.0, 8.0);
+        window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+    }
+
+    /// Opens each dialog, types into its field if it has one, and presses Esc.
+    #[test]
+    fn escape_closes_every_dialog_even_from_a_text_field() {
+        let (window, log) = dialogs();
+        let esc = |open: &dyn Fn(), expected: &str| {
+            open();
+            press(&window, Key::Escape);
+            assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), [expected]);
+        };
+
+        esc(
+            &|| {
+                window.set_hostname_input("thinkpad".into());
+                window.set_hostname_open(true);
+                // The field has the keyboard, with its text selected.
+                press(&window, "x");
+                assert_eq!(window.get_hostname_input(), "x");
+            },
+            "hostname-cancelled",
+        );
+        esc(
+            &|| {
+                window.set_join_mode("new".into());
+                join_hints(&window);
+                window.set_join_open(true);
+                press(&window, "x");
+                assert_eq!(window.get_join_password(), "x");
+            },
+            "join-cancelled",
+        );
+        esc(
+            &|| {
+                window.set_bt_rename_open(true);
+                press(&window, "x");
+                assert_eq!(window.get_bt_rename_name(), "x");
+            },
+            "bt rename-cancel",
+        );
+        esc(&|| window.set_add_open(true), "add-cancelled");
+        esc(&|| window.set_share_open(true), "share-closed");
+        esc(
+            &|| {
+                window.set_page("displays".into());
+                window.set_displays(DisplaysView { config_open: true, ..Default::default() });
+            },
+            "displays close-config",
+        );
+        // After Apply, Esc goes back to the old settings.
+        esc(&|| window.set_displays(DisplaysView { keep_open: true, ..Default::default() }), "displays revert-now");
+        esc(&|| window.set_files(FilesView { incoming: true, ..Default::default() }), "files decline");
+        esc(&|| window.set_files(FilesView { sending: true, ..Default::default() }), "files hide");
+    }
+
+    /// A click beside a dialog closes it only when nothing typed in it would be lost.
+    #[test]
+    fn a_click_beside_a_dialog_never_loses_what_was_typed() {
+        let (window, log) = dialogs();
+        let taken = || log.borrow_mut().drain(..).collect::<Vec<_>>();
+
+        window.set_add_open(true);
+        click_beside(&window);
+        assert_eq!(taken(), ["add-cancelled"]);
+        window.set_share_open(true);
+        click_beside(&window);
+        assert_eq!(taken(), ["share-closed"]);
+        window.set_page("displays".into());
+        window.set_displays(DisplaysView { config_open: true, ..Default::default() });
+        click_beside(&window);
+        assert_eq!(taken(), ["displays close-config"]);
+
+        join_hints(&window);
+        window.set_join_open(true);
+        press(&window, "x");
+        click_beside(&window);
+        assert!(window.get_join_open());
+        assert_eq!(window.get_join_password(), "x");
+        window.set_join_open(false);
+
+        window.set_hostname_open(true);
+        click_beside(&window);
+        assert!(window.get_hostname_open());
+        window.set_hostname_open(false);
+
+        window.set_bt_rename_open(true);
+        click_beside(&window);
+        assert!(window.get_bt_rename_open());
+        window.set_bt_rename_open(false);
+        assert_eq!(taken(), Vec::<String>::new());
+    }
+
+    /// Enter in the field of a one-field dialog accepts it.
+    #[test]
+    fn enter_accepts_a_dialog_with_one_field() {
+        let (window, log) = dialogs();
+        window.set_hostname_open(true);
+        press(&window, "a");
+        press(&window, Key::Return);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["hostname-save"]);
+
+        join_hints(&window);
+        window.set_join_open(true);
+        // Not with an empty password.
+        press(&window, Key::Return);
+        assert!(window.get_join_open());
+        press(&window, "x");
+        press(&window, Key::Return);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["join-accepted"]);
+    }
+
+    /// A dialog takes the keyboard from the page while it's open, and gives it back when it
+    /// closes, even when it was closed from Rust rather than by its own buttons.
+    #[test]
+    fn the_page_gets_the_keyboard_back_after_a_dialog() {
+        let (window, log) = dialogs();
+        press(&window, Key::DownArrow);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["move 1"]);
+
+        window.set_page("displays".into());
+        window.set_displays(DisplaysView { keep_open: true, ..Default::default() });
+        press(&window, Key::DownArrow);
+        assert!(log.borrow().is_empty());
+        // The time runs out.
+        window.set_displays(DisplaysView::default());
+        mock_elapsed_time(Duration::from_millis(20));
+        press(&window, Key::DownArrow);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["move 1"]);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use i_slint_backend_testing::{ElementHandle, mock_elapsed_time};
-    use slint::platform::{Key, WindowEvent};
-    use slint::{ComponentHandle, LogicalSize, Model, SharedString};
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle, mock_elapsed_time};
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, SharedString};
 
-    use super::MainWindow;
+    use super::{BtPage, MainWindow};
 
     fn press(window: &MainWindow, text: impl Into<SharedString>) {
         let text = text.into();
@@ -2292,7 +2554,7 @@ mod tests {
         let window = MainWindow::new().unwrap();
         super::connect_focus(&window);
         let entries = super::nav_entries(&super::App::default());
-        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
         window.set_hostname("thinkpad-x1".into());
         window.window().set_size(LogicalSize::new(1200.0, 760.0));
         window.show().unwrap();
@@ -2377,13 +2639,34 @@ mod tests {
         let label = nav_label(&window, "bluetooth");
         tab_to(&window, &label);
         let entries = super::nav_entries(&super::App::default());
-        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
         assert!(ring_on(&window, &label));
         // And keeps it: the window doesn't take it for a control that's gone.
         for _ in 0..5 {
             mock_elapsed_time(std::time::Duration::from_millis(100));
         }
         assert!(ring_on(&window, &label));
+    }
+
+    /// Network's chevron is a Tab stop after its label: Enter and Space fold, and the folded
+    /// sidebar, rebuilt, keeps the focus on it.
+    #[test]
+    fn the_keyboard_folds_network() {
+        let window = window();
+        let folds = Rc::new(RefCell::new(0));
+        let f = folds.clone();
+        window.on_nav_fold(move |id| {
+            assert_eq!(id, "network");
+            *f.borrow_mut() += 1;
+        });
+        let label = tab_to(&window, &nav_label(&window, "network"));
+        assert_eq!(tab_to(&window, "Network pages, expanded"), 1, "after {label} presses");
+        press(&window, Key::Return);
+        press(&window, " ");
+        assert_eq!(*folds.borrow(), 2);
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &["network".to_owned()])));
+        assert!(ring_on(&window, "Network pages, collapsed"));
     }
 
     #[test]
@@ -2477,6 +2760,35 @@ mod tests {
         assert_eq!(*keys.borrow(), ["key s"]);
     }
 
+    /// The same in a `Modal` (#41's dialogs), which takes the focus when it opens: round its
+    /// field and buttons, and back to the control that opened it after Esc.
+    #[test]
+    fn tab_stays_in_a_modal_and_the_focus_comes_back() {
+        let window = window();
+        let weak = window.as_weak();
+        window.on_hostname_cancelled(move || weak.unwrap().set_hostname_open(false));
+        tab_to(&window, "Change the hostname");
+        window.set_hostname_input("thinkpad-x1".into());
+        window.set_hostname_open(true);
+        mock_elapsed_time(Duration::ZERO);
+        // The field has the focus; Tab goes to the buttons and round.
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Cancel"));
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Save"));
+        press(&window, Key::Tab);
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Cancel"));
+        // Back past the field, round to the last button.
+        press(&window, Key::Backtab);
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Save"));
+        press(&window, Key::Escape);
+        assert!(!window.get_hostname_open());
+        mock_elapsed_time(Duration::ZERO);
+        assert!(ring_on(&window, "Change the hostname"));
+    }
+
     /// Tab and Shift+Tab go round a dialog's controls instead of on to the page behind it, and
     /// when the dialog closes, the control that had the focus before gets it back.
     #[test]
@@ -2540,6 +2852,25 @@ mod tests {
         assert_eq!(editor(), Some(0.0));
     }
 
+    /// A wide window's width goes to the list, also when it shows an empty state (Wi-Fi off) and
+    /// there are no details beside it.
+    #[test]
+    fn the_network_list_fills_a_wide_window_when_empty() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_empty_icon("wifi-off".into());
+        window.set_empty_title("Wi-Fi is off".into());
+        window.set_empty_text("Wired and VPN connections keep working.".into());
+        window.set_empty_action("Turn on Wi-Fi".into());
+        window.set_has_details(false);
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        window.show().unwrap();
+        let list =
+            ElementHandle::find_by_element_id(&window, "MainWindow::list-card").next().expect("the list is shown");
+        // The window less the sidebar (250) and the page's padding (44).
+        assert!(list.size().width > 1600.0, "{}", list.size().width);
+    }
+
     /// With Network's sub-items open, the sidebar's pages scroll in the smallest window instead
     /// of pushing Settings and Airplane mode out of it.
     #[test]
@@ -2547,7 +2878,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let window = MainWindow::new().unwrap();
         let entries = super::nav_entries(&super::App::default());
-        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi")));
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
         window.set_hostname("thinkpad-x1".into());
         window.window().set_size(LogicalSize::new(1040.0, 600.0));
         window.show().unwrap();
@@ -2560,5 +2891,339 @@ mod tests {
         assert!(bottom("Settings") < bottom("Airplane mode"));
         // The last page is still there, below the fold.
         assert!(bottom("Appearance") > 0.0);
+    }
+
+    /// The Bluetooth hero has a Visible switch beside the Bluetooth one, with the time it has
+    /// left, while Bluetooth is on; a click anywhere on its pill switches it. The adapter dialog
+    /// sets how long it lasts.
+    #[test]
+    fn the_visible_switch_is_in_the_bluetooth_hero() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.set_page("bluetooth".into());
+        let list = BtPage { state: "list".into(), powered: true, visible: true, ..BtPage::default() };
+        window.set_bt(BtPage { visible_left: "2:41".into(), ..list.clone() });
+        let acts = Rc::new(RefCell::new(Vec::new()));
+        let seen = acts.clone();
+        window.on_bt_act(move |verb, argument| seen.borrow_mut().push(format!("{verb} {argument}")));
+        window.show().unwrap();
+        let switch = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Switch))
+        };
+
+        let visible = switch("Visible").expect("the Visible switch");
+        let bluetooth = switch("Bluetooth").expect("the Bluetooth switch");
+        assert_eq!(visible.accessible_checked(), Some(true));
+        assert!(visible.absolute_position().x < bluetooth.absolute_position().x);
+        let left = ElementHandle::find_by_accessible_label(&window, "2:41").next().expect("the time left");
+        assert!(left.absolute_position().x < visible.absolute_position().x);
+        // The old card's chips are gone.
+        assert_eq!(ElementHandle::find_by_accessible_label(&window, "Pairable").count(), 0);
+
+        // On the label, beside the switch itself.
+        let (at, size) = (visible.absolute_position(), visible.size());
+        let position = LogicalPosition::new(at.x - 60.0, at.y + size.height / 2.0);
+        window.window().dispatch_event(WindowEvent::PointerMoved { position });
+        window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+        assert_eq!(*acts.borrow(), ["visible "]);
+
+        // Hidden: no time.
+        window.set_bt(BtPage { visible: false, ..list.clone() });
+        assert_eq!(switch("Visible").and_then(|s| s.accessible_checked()), Some(false));
+        assert_eq!(ElementHandle::find_by_accessible_label(&window, "2:41").count(), 0);
+
+        // The adapter dialog: how long, not whether.
+        acts.borrow_mut().clear();
+        window.set_bt_adapter_open(true);
+        let choices: Vec<String> = ElementHandle::find_by_accessible_label(&window, "Visible switch")
+            .find(|e| e.accessible_role() == Some(AccessibleRole::TabList))
+            .expect("the Visible switch's time")
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::Tab)
+            .find_all()
+            .iter()
+            .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
+            .collect();
+        assert_eq!(choices, ["3 minutes", "Always"]);
+        ElementHandle::find_by_accessible_label(&window, "Always").next().unwrap().invoke_accessible_default_action();
+        assert_eq!(*acts.borrow(), ["adapter-visible 1"]);
+        window.set_bt_adapter_open(false);
+
+        // Bluetooth off: only the Bluetooth switch.
+        window.set_bt(BtPage { state: "off".into(), ..BtPage::default() });
+        assert!(switch("Visible").is_none());
+        assert_eq!(switch("Bluetooth").and_then(|s| s.accessible_checked()), Some(false));
+    }
+
+    /// In the smallest window with Network's sub-items shown, and more pages than fit, the wheel
+    /// brings every page of the sidebar into view, between the search field and Settings, which
+    /// stays where it is.
+    #[test]
+    fn the_sidebar_scrolls_to_every_page() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        let mut groups = super::nav::groups(&entries, "", "wifi", &[]);
+        // Pages still to come, so that they don't fit whatever pages there are now.
+        let item = |label: &str| super::NavItem {
+            id: label.into(),
+            label: label.into(),
+            icon: "settings".into(),
+            ..Default::default()
+        };
+        groups.push(super::NavGroup {
+            title: "MORE".into(),
+            items: super::model(["Input", "Keyboard", "Mouse", "Power", "Night light"].map(item).to_vec()),
+        });
+        window.set_nav_groups(super::model(groups));
+        window.set_hostname("thinkpad-x1".into());
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        let list = ElementHandle::find_by_element_id(&window, "Sidebar::page-list").next().expect("the pages");
+        let (top, end) = (list.absolute_position().y, list.absolute_position().y + list.size().height);
+        let labels: Vec<String> = window
+            .get_nav_groups()
+            .iter()
+            .flat_map(|g| g.items.iter().collect::<Vec<_>>())
+            .map(|i| if i.sub.is_empty() { i.label.to_string() } else { format!("{}, {}", i.label, i.sub) })
+            .collect();
+        let in_view = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label).any(|e| {
+                let y = e.absolute_position().y;
+                y >= top - 0.5 && y + e.size().height <= end + 0.5
+            })
+        };
+        let wheel = |dy: f32| {
+            window.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(120.0, top + 40.0),
+                delta_x: 0.0,
+                delta_y: dy,
+            });
+            mock_elapsed_time(Duration::from_millis(300));
+        };
+        // It doesn't all fit, or there'd be nothing to scroll.
+        assert!(!labels.iter().all(|l| in_view(l)));
+        let (settings, airplane) = (bottom(&window, "Settings"), bottom(&window, "Airplane mode"));
+        assert!(airplane < 590.0, "{airplane}");
+        for label in &labels {
+            wheel(1000.0);
+            for _ in 0..20 {
+                if in_view(label) {
+                    break;
+                }
+                wheel(-30.0);
+            }
+            assert!(in_view(label), "{label} never came into view");
+            assert_eq!((bottom(&window, "Settings"), bottom(&window, "Airplane mode")), (settings, airplane));
+        }
+    }
+
+    /// Tab down the sidebar scrolls its pages, so the control with the ring is in view.
+    #[test]
+    fn tab_scrolls_the_sidebar_to_the_ring() {
+        let window = window();
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        let entries = super::nav_entries(&super::App::default());
+        let mut groups = super::nav::groups(&entries, "", "wifi", &[]);
+        let item = |label: &str| super::NavItem {
+            id: label.into(),
+            label: label.into(),
+            icon: "settings".into(),
+            ..Default::default()
+        };
+        groups.push(super::NavGroup {
+            title: "MORE".into(),
+            items: super::model(["Input", "Keyboard", "Mouse", "Power", "Night light"].map(item).to_vec()),
+        });
+        window.set_nav_groups(super::model(groups));
+        mock_elapsed_time(Duration::from_millis(50));
+        let list = ElementHandle::find_by_element_id(&window, "Sidebar::page-list").next().expect("the pages");
+        let (top, end) = (list.absolute_position().y, list.absolute_position().y + list.size().height);
+        let in_view = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label).any(|e| {
+                let y = e.absolute_position().y;
+                y >= top - 0.5 && y + e.size().height <= end + 0.5
+            })
+        };
+        assert!(!in_view("Night light"));
+        tab_to(&window, "Night light");
+        mock_elapsed_time(Duration::from_millis(300));
+        assert!(in_view("Night light"));
+        // And round to the top again.
+        tab_to(&window, &nav_label(&window, "wifi"));
+        mock_elapsed_time(Duration::from_millis(300));
+        assert!(in_view(&nav_label(&window, "wifi")));
+    }
+
+    /// The bottom edge of the first element with this accessible label.
+    fn bottom(window: &MainWindow, label: &str) -> f32 {
+        let e = ElementHandle::find_by_accessible_label(window, label).next().expect(label);
+        e.absolute_position().y + e.size().height
+    }
+
+    fn wifi_rows(n: usize, selected: usize) -> Vec<super::Row> {
+        (0..n)
+            .map(|i| super::Row {
+                id: format!("n{i}").into(),
+                name: format!("Network {i}").into(),
+                meta: "WPA2 · 5 GHz".into(),
+                icon: "bars".into(),
+                bars: 3,
+                selected: i == selected,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// In the smallest window, Wi-Fi keeps its hint bar, the button under the list and a
+    /// details pane that ends inside the window, however long the list and the details are.
+    #[test]
+    fn the_network_page_fits_the_smallest_window() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("wifi".into());
+        window.set_count("12 networks in range".into());
+        window.set_bottom_label("Connect to hidden network…".into());
+        let section = super::Section { title: "AVAILABLE".into(), rows: super::model(wifi_rows(12, 0)) };
+        window.set_sections(super::model(vec![section]));
+        window.set_has_details(true);
+        let toggle = |id: &str| super::Toggle {
+            id: id.into(),
+            label: "Trusted".into(),
+            sub: "Connects and uses its services without asking you first, every time".into(),
+            on: false,
+        };
+        let item =
+            |i: usize| super::DetailItem { label: format!("Item {i}").into(), value: "value".into(), mono: false };
+        window.set_details(super::Details {
+            title: "Network 0".into(),
+            toggles: super::model(vec![toggle("a"), toggle("b")]),
+            items: super::model((0..12).map(item).collect()),
+            ..Default::default()
+        });
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        mock_elapsed_time(Duration::from_millis(50));
+
+        // The hint bar is the bottom 30 px.
+        assert!(
+            bottom(&window, "Connect to hidden network…") <= 570.0,
+            "{}",
+            bottom(&window, "Connect to hidden network…")
+        );
+        let pane = ElementHandle::find_by_element_type_name(&window, "DetailsPane").next().expect("the details");
+        let (pane_at, pane_size) = (pane.absolute_position(), pane.size());
+        assert!(pane_at.y + pane_size.height <= 570.0);
+        assert!(pane_at.x + pane_size.width <= 1040.0);
+        // The details scroll on their own: the last item is out of view, and the wheel brings
+        // it in.
+        assert!(ElementHandle::find_by_accessible_label(&window, "Item 11").next().is_none());
+        window.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(pane_at.x + 100.0, pane_at.y + 100.0),
+            delta_x: 0.0,
+            delta_y: -2000.0,
+        });
+        mock_elapsed_time(Duration::from_millis(500));
+        assert!(bottom(&window, "Item 11") <= pane_at.y + pane_size.height);
+    }
+
+    /// The bar with Apply stays in the smallest window, below the monitor's settings, with the
+    /// banner about the Hyprland config shown too.
+    #[test]
+    fn the_displays_apply_bar_stays_in_the_smallest_window() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("displays".into());
+        window.set_displays(super::DisplaysView {
+            state: "list".into(),
+            not_loaded: true,
+            can_apply: true,
+            ..Default::default()
+        });
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        mock_elapsed_time(Duration::from_millis(50));
+        let apply = ElementHandle::find_by_accessible_label(&window, "Apply").next().expect("Apply");
+        assert!(apply.absolute_position().y > 400.0, "{}", apply.absolute_position().y);
+        assert!(bottom(&window, "Apply") <= 570.0, "{}", bottom(&window, "Apply"));
+    }
+
+    /// Moving the selection with the arrow keys scrolls the list to the selected row.
+    #[test]
+    fn the_selected_row_scrolls_into_view() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("wifi".into());
+        let set = |w: &MainWindow, selected: usize| {
+            let section = super::Section { title: "AVAILABLE".into(), rows: super::model(wifi_rows(20, selected)) };
+            w.set_sections(super::model(vec![section]));
+        };
+        set(&window, 0);
+        let selected = std::rc::Rc::new(std::cell::Cell::new(0));
+        let weak = window.as_weak();
+        let s = selected.clone();
+        window.on_move_selection(move |delta| {
+            s.set((s.get() as i32 + delta).clamp(0, 19) as usize);
+            set(&weak.unwrap(), s.get());
+        });
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        mock_elapsed_time(Duration::from_millis(50));
+        // Where a row is, if it's in view (a scrolled-away element isn't found).
+        let row = |i: usize| {
+            ElementHandle::find_by_accessible_label(&window, &format!("Network {i}, WPA2 · 5 GHz"))
+                .next()
+                .map(|e| (e.absolute_position().y, e.absolute_position().y + e.size().height))
+        };
+        let (list_top, _) = row(0).expect("the first row");
+        assert_eq!(row(15), None);
+
+        for _ in 0..15 {
+            window.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::DownArrow.into(),
+            });
+            mock_elapsed_time(Duration::from_millis(20));
+        }
+        assert_eq!(selected.get(), 15);
+        // Scrolled: the first row went out of the list, and the selected one is in it.
+        assert_eq!(row(0), None);
+        let (top, bottom) = row(15).expect("the selected row");
+        assert!(top >= list_top && bottom <= 570.0, "{top} {bottom}");
+    }
+
+    /// Network's chevron says whether its pages are shown, and folds them without going to a
+    /// page.
+    #[test]
+    fn the_network_chevron_folds_its_pages() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        let show = |folded: &[String]| {
+            window.set_nav_groups(super::model(super::nav::groups(&entries, "", "bluetooth", folded)))
+        };
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let c = calls.clone();
+        window.on_nav_fold(move |id| c.borrow_mut().push(format!("fold {id}")));
+        let c = calls.clone();
+        window.on_navigate(move |id| c.borrow_mut().push(format!("go {id}")));
+        show(&[]);
+        window.show().unwrap();
+        let hotspots = || ElementHandle::find_by_accessible_label(&window, "Hotspot").count();
+        let shown = hotspots();
+
+        let chevron = ElementHandle::find_by_accessible_label(&window, "Network pages, expanded").next().unwrap();
+        assert_eq!(chevron.accessible_expanded(), Some(true));
+        chevron.invoke_accessible_default_action();
+        assert_eq!(*calls.borrow(), ["fold network"]);
+
+        show(&["network".to_owned()]);
+        let chevron = ElementHandle::find_by_accessible_label(&window, "Network pages, collapsed").next().unwrap();
+        assert_eq!(chevron.accessible_expanded(), Some(false));
+        // The Hotspot item is gone.
+        assert!(hotspots() < shown, "{} {shown}", hotspots());
     }
 }

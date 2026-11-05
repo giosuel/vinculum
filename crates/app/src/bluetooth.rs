@@ -11,13 +11,14 @@ use slint::{ComponentHandle, SharedString};
 
 use crate::audio;
 use crate::{
-    APP, Action, App, BtAudio, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, DetailItem, Details, HeroInfo,
-    MainWindow, NavItem, Toggle, model, update,
+    APP, Action, App, BtAudio, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, Confirm, Confirmed, DetailItem,
+    Details, HeroInfo, MainWindow, NavItem, Toggle, model, update,
 };
 
 /// How long "Look for devices" looks before it stops by itself (discovery costs battery).
 const DISCOVERY: Duration = Duration::from_secs(120);
-/// "Visible" for this long; "Always" in the adapter dialog is 0, no limit.
+/// The Visible switch keeps the computer visible this long ("3 minutes" in the adapter dialog;
+/// "Always" is 0, no limit).
 const VISIBLE_FOR: u32 = 180;
 const NOT_RUNNING_COMMAND: &str = "sudo systemctl enable --now bluetooth";
 
@@ -32,6 +33,11 @@ pub enum Command {
     Discoverable {
         adapter: String,
         on: bool,
+        timeout: u32,
+    },
+    /// How long the next "visible" lasts; restarts the time if it's visible now.
+    DiscoverableTimeout {
+        adapter: String,
         timeout: u32,
     },
     Pairable {
@@ -149,7 +155,7 @@ pub struct State {
     /// Devices with a pairing or connection under way.
     pub busy: HashSet<String>,
     pub message: Option<Message>,
-    /// When "Visible" ends, if Lituus switched it on with a limit.
+    /// When "Visible" ends, if Lituus switched it on (or changed its time) with a limit.
     pub visible_until: Option<Instant>,
     pub prompt: Option<Prompt>,
     pub prompts: VecDeque<Prompt>,
@@ -189,7 +195,7 @@ impl State {
         self.snapshot.as_ref().and_then(|s| s.device(path))
     }
 
-    fn send(&mut self, command: Command) {
+    pub fn send(&mut self, command: Command) {
         if let Some(device) = command.device() {
             self.busy.insert(device.to_owned());
         }
@@ -398,15 +404,14 @@ fn empty(state: &State) -> Option<(&'static str, &'static str, String, String, &
     }
 }
 
-/// "Visible · 2:41", "Visible" or "Hidden".
-fn visible_label(adapter: &Adapter, until: Option<Instant>, now: Instant) -> String {
-    if !adapter.discoverable {
-        return "Hidden".into();
+/// The time the computer stays visible ("2:41"), when Lituus knows it: BlueZ doesn't say, so
+/// only when Lituus switched it on with a limit.
+fn visible_left(adapter: &Adapter, until: Option<Instant>, now: Instant) -> Option<String> {
+    if !adapter.discoverable || adapter.discoverable_timeout == 0 {
+        return None;
     }
-    match until.filter(|_| adapter.discoverable_timeout > 0).map(|u| u.saturating_duration_since(now).as_secs()) {
-        Some(left) if left > 0 => format!("Visible · {}:{:02}", left / 60, left % 60),
-        _ => "Visible".into(),
-    }
+    let left = until?.saturating_duration_since(now).as_secs();
+    (left > 0).then(|| format!("{}:{:02}", left / 60, left % 60))
 }
 
 struct RowData {
@@ -637,13 +642,15 @@ pub fn page(state: &State, now: Instant) -> (BtPage, Vec<String>, Option<String>
     };
     page.state = s("list");
     page.powered = true;
-    page.alias = s(&adapter.alias);
-    page.adapter = s(&adapter.name);
     page.visible = adapter.discoverable;
-    page.visible_label = s(visible_label(adapter, state.visible_until, now));
-    page.pairable = adapter.pairable;
+    let left = visible_left(adapter, state.visible_until, now);
+    page.visible_left = s(left.clone().unwrap_or_default());
     let connected: Vec<&Device> = snap.devices_of(&adapter.path).filter(|d| d.connected).collect();
-    let visibility = if adapter.discoverable { format!("visible as {}", adapter.alias) } else { "hidden".to_owned() };
+    let visibility = match (adapter.discoverable, left) {
+        (true, Some(left)) => format!("visible as {} for {left}", adapter.alias),
+        (true, None) => format!("visible as {}", adapter.alias),
+        (false, _) => "hidden from other devices".to_owned(),
+    };
     page.hero_sub = s(match connected.len() {
         0 => format!("On · {visibility}"),
         n => format!("On · {n} connected · {visibility}"),
@@ -820,11 +827,7 @@ pub fn render(window: &MainWindow, app: &mut App) {
     if let Some(a) = state.adapter() {
         window.set_bt_adapter_label(format!("{} · {}", a.name, a.address).into());
         window.set_bt_pairable(a.pairable);
-        window.set_bt_visible_choice(match (a.discoverable, a.discoverable_timeout) {
-            (false, _) => 0,
-            (true, 0) => 2,
-            (true, _) => 1,
-        });
+        window.set_bt_visible_choice(visible_choice(a));
     }
     window.set_bt_rename_open(state.rename.is_some());
     if let Some(device) = state.rename.as_deref().and_then(|d| state.device(d)) {
@@ -931,13 +934,16 @@ pub fn handle(app: &mut App, event: Event) {
         Event::Snapshot(Ok(snapshot)) => {
             // Opened before BlueZ was read: look for devices now.
             let start = state.open && state.adapter().is_none_or(|a| !a.powered);
+            let was_visible = state.adapter().is_some_and(|a| a.discoverable);
             state.snapshot = Some(snapshot);
             state.error = None;
             state.not_running = false;
             if start && let Some(adapter) = state.adapter().filter(|a| a.powered).map(|a| a.path.clone()) {
                 state.send(Command::Discover { adapter, on: true });
             }
-            if state.adapter().is_none_or(|a| !a.discoverable) {
+            // Hidden again (the time ran out, or it was switched off elsewhere). Not a snapshot
+            // from just before the switch took effect, though.
+            if was_visible && state.adapter().is_none_or(|a| !a.discoverable) {
                 state.visible_until = None;
             }
         }
@@ -968,6 +974,9 @@ pub fn handle(app: &mut App, event: Event) {
             let name = command.device().and_then(|d| state.device(d)).map(|d| d.alias.clone());
             let name = name.unwrap_or_else(|| "the device".into());
             let reason = error.describe();
+            if matches!(command, Command::Discoverable { on: true, .. } | Command::DiscoverableTimeout { .. }) {
+                state.visible_until = None;
+            }
             match &command {
                 Command::Pair { device } => {
                     if state.prompt.as_ref().is_some_and(|p| p.device() == device) {
@@ -1070,8 +1079,10 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
     update(&weak, |app| {
         // A NetworkManager command (a phone's internet), sent once the Bluetooth state is done with.
         let mut pending_nm: Option<crate::view::Command> = None;
+        // A question for the confirmation dialog, asked the same way.
+        let mut confirm: Option<Confirm> = None;
         let state = &mut app.bt;
-        let adapter = state.adapter().map(|a| (a.path.clone(), a.powered, a.discoverable, a.pairable, a.alias.clone()));
+        let adapter = state.adapter().map(|a| (a.path.clone(), a.powered, a.pairable, a.alias.clone()));
         let selected = state.selected.as_deref().and_then(|id| state.device(id)).cloned();
         match verb {
             "select" => state.selected = Some(argument.to_owned()),
@@ -1095,18 +1106,10 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
                     state.send(Command::Pair { device: device.path });
                 }
             }
-            "visible" => {
-                if let Some((adapter, _, discoverable, ..)) = adapter {
-                    set_visible(state, adapter, if discoverable { 0 } else { 1 });
-                }
-            }
-            "adapter-visible" => {
-                if let Some((adapter, ..)) = adapter {
-                    set_visible(state, adapter, argument.parse().unwrap_or(0));
-                }
-            }
+            "visible" => switch_visible(state, Instant::now()),
+            "adapter-visible" => choose_visible_time(state, argument.parse().unwrap_or(0), Instant::now()),
             "pairable" => {
-                if let Some((adapter, _, _, pairable, _)) = adapter {
+                if let Some((adapter, _, pairable, _)) = adapter {
                     state.send(Command::Pairable { adapter, on: !pairable });
                 }
             }
@@ -1128,11 +1131,7 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
                         let (address, name) = (device.address.clone(), device.alias.clone());
                         crate::files::choose_and_send(window.as_weak(), address, name);
                     }
-                    "forget" => {
-                        if let Some((adapter, ..)) = adapter {
-                            state.send(Command::Forget { adapter, device: device.path });
-                        }
-                    }
+                    "forget" => confirm = adapter.map(|(adapter, ..)| forget(adapter, &device)),
                     _ => {}
                 }
             }
@@ -1210,7 +1209,20 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
         if let Some(command) = pending_nm {
             crate::send(app, command);
         }
+        if confirm.is_some() {
+            app.confirm = confirm;
+        }
     });
+}
+
+/// Forget asks first: getting the device back means pairing it again.
+fn forget(adapter: String, device: &Device) -> Confirm {
+    Confirm {
+        title: format!("Forget {}?", device.alias),
+        text: "You'll need to pair it again to use it with this computer.".into(),
+        button: "Forget".into(),
+        then: Confirmed::Bluetooth(Command::Forget { adapter, device: device.path.clone() }),
+    }
 }
 
 /// The page's state name ("list", "off", …), for the empty state's button.
@@ -1218,11 +1230,30 @@ fn window_state(state: &State) -> &'static str {
     empty(state).map(|(kind, ..)| kind).unwrap_or("list")
 }
 
-/// Visible: 0 hidden, 1 for three minutes, 2 always.
-fn set_visible(state: &mut State, adapter: String, choice: i32) {
-    let timeout = if choice == 2 { 0 } else { VISIBLE_FOR };
-    state.visible_until = (choice == 1).then(|| Instant::now() + Duration::from_secs(u64::from(VISIBLE_FOR)));
-    state.send(Command::Discoverable { adapter, on: choice != 0, timeout });
+/// The adapter dialog's choice for the Visible switch: 0 "3 minutes", 1 "Always". BlueZ keeps
+/// the time (DiscoverableTimeout) while hidden too, so it's read from there.
+fn visible_choice(adapter: &Adapter) -> i32 {
+    i32::from(adapter.discoverable_timeout == 0)
+}
+
+/// The Visible switch: hidden, or visible for the time chosen in the adapter dialog.
+fn switch_visible(state: &mut State, now: Instant) {
+    let Some(a) = state.adapter() else { return };
+    let (adapter, on) = (a.path.clone(), !a.discoverable);
+    let timeout = if visible_choice(a) == 1 { 0 } else { VISIBLE_FOR };
+    state.visible_until = (on && timeout > 0).then(|| now + Duration::from_secs(u64::from(timeout)));
+    state.send(Command::Discoverable { adapter, on, timeout });
+}
+
+/// The adapter dialog's "3 minutes" (0) or "Always" (1). When visible now, the new time starts now.
+fn choose_visible_time(state: &mut State, choice: i32, now: Instant) {
+    let Some(a) = state.adapter() else { return };
+    let (adapter, visible) = (a.path.clone(), a.discoverable);
+    let timeout = if choice == 1 { 0 } else { VISIBLE_FOR };
+    if visible {
+        state.visible_until = (timeout > 0).then(|| now + Duration::from_secs(u64::from(timeout)));
+    }
+    state.send(Command::DiscoverableTimeout { adapter, timeout });
 }
 
 /// Whether the page shows a countdown, so it's drawn again every second.
@@ -1354,6 +1385,7 @@ async fn run(client: &lituus_bt::Client, command: &Command) -> Result<(), Failur
     match command {
         Command::Power { adapter, on } => client.set_powered(adapter, *on).await?,
         Command::Discoverable { adapter, on, timeout } => client.set_discoverable(adapter, *on, *timeout).await?,
+        Command::DiscoverableTimeout { adapter, timeout } => client.set_discoverable_timeout(adapter, *timeout).await?,
         Command::Pairable { adapter, on } => client.set_pairable(adapter, *on).await?,
         Command::AdapterAlias { adapter, alias } => client.set_adapter_alias(adapter, alias).await?,
         Command::Discover { adapter, on: true } => client.start_discovery(adapter).await?,
@@ -1624,15 +1656,84 @@ mod tests {
 
     #[test]
     fn visible_counts_down_from_when_lituus_switched_it_on() {
-        let mut a = adapter();
+        let mut state = state();
         let now = Instant::now();
-        assert_eq!(visible_label(&a, None, now), "Hidden");
+        let hero_sub = |state: &State, now| page(state, now).0.hero_sub.to_string();
+        assert_eq!(hero_sub(&state, now), "On · 1 connected · hidden from other devices");
+        let a = &mut state.snapshot.as_mut().unwrap().adapters[0];
         a.discoverable = true;
-        assert_eq!(visible_label(&a, Some(now + Duration::from_secs(161)), now), "Visible · 2:41");
-        // Switched on elsewhere, or with no limit.
-        assert_eq!(visible_label(&a, None, now), "Visible");
-        a.discoverable_timeout = 0;
-        assert_eq!(visible_label(&a, Some(now + Duration::from_secs(161)), now), "Visible");
+        state.visible_until = Some(now + Duration::from_secs(161));
+        let (p, ..) = page(&state, now);
+        assert!(p.visible);
+        assert_eq!(p.visible_left, "2:41");
+        assert_eq!(p.hero_sub, "On · 1 connected · visible as thinkpad-x1 for 2:41");
+        assert_eq!(
+            hero_sub(&state, now + Duration::from_secs(1)),
+            "On · 1 connected · visible as thinkpad-x1 for 2:40"
+        );
+        // Switched on elsewhere, or with no limit: BlueZ doesn't say how long is left.
+        state.visible_until = None;
+        assert_eq!(hero_sub(&state, now), "On · 1 connected · visible as thinkpad-x1");
+        state.visible_until = Some(now + Duration::from_secs(161));
+        state.snapshot.as_mut().unwrap().adapters[0].discoverable_timeout = 0;
+        assert_eq!(page(&state, now).0.visible_left, "");
+    }
+
+    #[test]
+    fn the_visible_switch_uses_the_time_from_the_adapter_dialog() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut state = State { commands: Some(tx), ..state() };
+        let adapter = "/org/bluez/hci0".to_owned();
+        let now = Instant::now();
+        assert_eq!(visible_choice(state.adapter().unwrap()), 0);
+        switch_visible(&mut state, now);
+        assert_eq!(rx.try_recv(), Ok(Command::Discoverable { adapter: adapter.clone(), on: true, timeout: 180 }));
+        assert_eq!(state.visible_until, Some(now + Duration::from_secs(180)));
+
+        // BlueZ's answer: a snapshot from just before it took effect keeps the countdown.
+        let mut app = App { bt: state, ..App::default() };
+        let snapshot = |discoverable, timeout| {
+            let mut s = super::tests::state().snapshot.unwrap();
+            s.adapters[0].discoverable = discoverable;
+            s.adapters[0].discoverable_timeout = timeout;
+            Event::Snapshot(Ok(s))
+        };
+        handle(&mut app, snapshot(false, 180));
+        assert!(app.bt.visible_until.is_some());
+        handle(&mut app, snapshot(true, 180));
+        assert_eq!(page(&app.bt, now + Duration::from_secs(19)).0.visible_left, "2:41");
+        // "Always" while visible: no more countdown.
+        choose_visible_time(&mut app.bt, 1, now);
+        assert_eq!(rx.try_recv(), Ok(Command::DiscoverableTimeout { adapter: adapter.clone(), timeout: 0 }));
+        assert_eq!(app.bt.visible_until, None);
+        handle(&mut app, snapshot(true, 0));
+        assert_eq!(visible_choice(app.bt.adapter().unwrap()), 1);
+        assert_eq!(page(&app.bt, now).0.hero_sub, "On · 1 connected · visible as thinkpad-x1");
+
+        // Off, and on again for always.
+        switch_visible(&mut app.bt, now);
+        assert_eq!(rx.try_recv(), Ok(Command::Discoverable { adapter: adapter.clone(), on: false, timeout: 0 }));
+        handle(&mut app, snapshot(false, 0));
+        switch_visible(&mut app.bt, now);
+        assert_eq!(rx.try_recv(), Ok(Command::Discoverable { adapter: adapter.clone(), on: true, timeout: 0 }));
+        assert_eq!(app.bt.visible_until, None);
+
+        // "3 minutes" while hidden only sets the time for the next switch on.
+        handle(&mut app, snapshot(false, 0));
+        choose_visible_time(&mut app.bt, 0, now);
+        assert_eq!(rx.try_recv(), Ok(Command::DiscoverableTimeout { adapter: adapter.clone(), timeout: 180 }));
+        assert_eq!(app.bt.visible_until, None);
+
+        // The time ran out: BlueZ says hidden, and the switch goes off.
+        handle(&mut app, snapshot(false, 180));
+        switch_visible(&mut app.bt, now);
+        rx.try_recv().unwrap();
+        handle(&mut app, snapshot(true, 180));
+        handle(&mut app, snapshot(false, 180));
+        assert_eq!(app.bt.visible_until, None);
+        let (p, ..) = page(&app.bt, now);
+        assert!(!p.visible);
+        assert_eq!(p.hero_sub, "On · 1 connected · hidden from other devices");
     }
 
     #[test]
@@ -1697,5 +1798,55 @@ mod tests {
         ]);
         let counts: Vec<usize> = lines.iter().map(|l| l.chips.row_count()).collect();
         assert_eq!(counts, [2, 2, 1]);
+    }
+
+    /// Forget asks in the same dialog as forgetting a network; Esc leaves the device paired, and
+    /// only the dialog's Forget unpairs it.
+    #[test]
+    fn forgetting_a_device_asks_first() {
+        use slint::platform::{Key, WindowEvent};
+
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        crate::connect_callbacks(&window);
+        window.show().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        APP.with(|app| {
+            let mut app = app.borrow_mut();
+            app.ui.page = crate::view::Page::Bluetooth;
+            app.bt = state();
+            app.bt.selected = Some("/org/bluez/hci0/dev_2".into());
+            app.bt.commands = Some(tx);
+        });
+        // Opening the page looks for devices.
+        update(&window.as_weak(), |_| {});
+        assert!(matches!(rx.try_recv(), Ok(Command::Discover { on: true, .. })));
+
+        act(&window, "detail", "forget");
+        assert!(window.get_confirm_open());
+        assert_eq!(window.get_confirm_title(), "Forget Pixel 8?");
+        assert_eq!(window.get_confirm_button(), "Forget");
+        assert!(rx.try_recv().is_err());
+
+        let press = |key: SharedString| {
+            window.window().dispatch_event(WindowEvent::KeyPressed { text: key.clone() });
+            window.window().dispatch_event(WindowEvent::KeyReleased { text: key });
+        };
+        // The page's keys wait while the dialog is open ("s" would look for devices).
+        press("s".into());
+        assert!(rx.try_recv().is_err());
+        press(Key::Escape.into());
+        assert!(!window.get_confirm_open());
+        assert!(rx.try_recv().is_err());
+        press("s".into());
+        assert!(matches!(rx.try_recv(), Ok(Command::Discover { on: true, .. })));
+
+        act(&window, "detail", "forget");
+        window.invoke_confirm_accepted();
+        assert!(!window.get_confirm_open());
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Command::Forget { adapter: "/org/bluez/hci0".into(), device: "/org/bluez/hci0/dev_2".into() }
+        );
     }
 }
