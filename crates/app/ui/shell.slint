@@ -3,43 +3,86 @@
 // the cards below it.
 import { Theme } from "theme.slint";
 import { Icon, Logo } from "icons.slint";
-import { Switch, SectionLabel } from "controls.slint";
+import { Switch, SectionLabel, Scroll } from "controls.slint";
 
-/// sub: a short status on the right ("Home", "2 on", "45%").
-export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool }
+/// sub: a short status on the right ("Home", "2 on", "45%"). open: an item showing its
+/// sub-items, on one of their pages. indent: a sub-item. foldable: an item with sub-items, which
+/// its chevron folds away (folded).
+export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool, open: bool, indent: bool, foldable: bool, folded: bool }
 export struct NavGroup { title: string, items: [NavItem] }
 /// What a page's hero shows: a big icon, a name, a line under it and a monospaced line.
 /// tone: the colour of `meta` ("accent", "muted", "danger", "faint").
 export struct HeroInfo { icon: string, name: string, meta: string, tone: string, detail: string }
 
+// A sub-item is smaller and indented, under its item. An item with sub-items has a chevron that
+// folds them away; the rest of the row goes to the page.
 component NavButton inherits Rectangle {
     in property <NavItem> item;
     callback clicked();
-    height: 36px;
-    border-radius: 10px;
-    background: item.current ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    callback fold-clicked();
+    height: item.indent ? 32px : 36px;
     accessible-role: button;
     accessible-label: item.sub == "" ? item.label : item.label + ", " + item.sub;
     accessible-action-default => { clicked(); }
-    // The accent bar on the current page's left edge.
-    if root.item.current: Rectangle { x: 0; width: 3px; height: parent.height - 12px; y: 6px; border-radius: 1.5px; background: Theme.accent; }
-    HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        spacing: 11px;
-        Icon { name: root.item.icon; tint: root.item.current ? Theme.accent : Theme.muted; size: 17px; y: (parent.height - 17px) / 2; }
-        Text { text: root.item.label; color: Theme.text; font-weight: root.item.current ? 600 : 400; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-        Text {
-            text: root.item.sub;
-            color: root.item.current ? Theme.accent : Theme.faint;
-            font-size: 12px;
-            font-family: "JetBrains Mono";
-            vertical-alignment: center;
-            overflow: elide;
-            max-width: 90px;
+    Rectangle {
+        x: root.item.indent ? 20px : 0;
+        width: parent.width - self.x;
+        border-radius: root.item.indent ? 9px : 10px;
+        background: root.item.current ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+        // Under the chevron, which takes its own clicks.
+        touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+        // The accent bar on the current page's left edge.
+        if root.item.current: Rectangle { x: 0; width: 3px; height: parent.height - 12px; y: 6px; border-radius: 1.5px; background: Theme.accent; }
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            spacing: root.item.indent ? 10px : 11px;
+            Icon {
+                name: root.item.icon;
+                tint: root.item.current || root.item.open ? Theme.accent : root.item.indent ? Theme.faint : Theme.muted;
+                size: root.item.indent ? 15px : 17px;
+                y: (parent.height - self.size) / 2;
+            }
+            Text {
+                text: root.item.label;
+                color: root.item.indent && !root.item.current ? Theme.muted : Theme.text;
+                font-size: root.item.indent ? 13px : 14px;
+                font-weight: root.item.current || root.item.open ? 600 : 400;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Text {
+                text: root.item.sub;
+                color: root.item.current ? Theme.accent : Theme.faint;
+                font-size: root.item.indent ? 11px : 12px;
+                font-family: "JetBrains Mono";
+                vertical-alignment: center;
+                overflow: elide;
+                max-width: 90px;
+            }
+            if root.item.foldable: Rectangle {
+                width: 24px;
+                height: 24px;
+                y: (parent.height - self.height) / 2;
+                accessible-role: button;
+                accessible-label: root.item.label + " pages, " + (root.item.folded ? "collapsed" : "expanded");
+                accessible-expandable: true;
+                accessible-expanded: !root.item.folded;
+                accessible-action-default => { root.fold-clicked(); }
+                accessible-action-expand => { root.fold-clicked(); }
+                Icon {
+                    name: "chevron";
+                    size: 16px;
+                    tint: fold-touch.has-hover ? Theme.text : Theme.muted;
+                    // Down when unfolded, right when folded.
+                    transform-rotation: root.item.folded ? -90deg : 0deg;
+                    animate transform-rotation { duration: 120ms; easing: ease-out; }
+                }
+                fold-touch := TouchArea { mouse-cursor: pointer; clicked => { root.fold-clicked(); } }
+            }
         }
     }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 export component Sidebar inherits Rectangle {
@@ -50,6 +93,8 @@ export component Sidebar inherits Rectangle {
     /// Incremented to move the keyboard focus into the search field (Ctrl+K).
     in property <int> focus-requests;
     callback navigate(string);
+    /// The chevron of an item with sub-items.
+    callback fold(string);
     callback search(string);
     /// Enter in the search field: go to the first page found.
     callback search-accepted();
@@ -112,17 +157,30 @@ export component Sidebar inherits Rectangle {
                 }
             }
         }
-        for group in root.groups: VerticalLayout {
+        // The pages scroll when they don't fit between the search and Settings (Network's
+        // sub-items in a short window), with the scrollbar in the padding on the right.
+        page-list := Scroll {
+            vertical-stretch: 1;
             spacing: 1px;
-            SectionLabel { text: group.title; height: 30px; vertical-alignment: bottom; x: 12px; }
-            Rectangle { height: 4px; }
-            for item in group.items: NavButton {
-                item: item;
-                clicked => { root.navigate(item.id); }
+            bar-inset: -8px;
+            for group in root.groups: VerticalLayout {
+                spacing: 1px;
+                SectionLabel { text: group.title; height: 30px; vertical-alignment: bottom; x: 12px; }
+                Rectangle { height: 4px; }
+                for item in group.items: NavButton {
+                    item: item;
+                    clicked => { root.navigate(item.id); }
+                    fold-clicked => { root.fold(item.id); }
+                }
+            }
+            if root.groups.length == 0: HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                Text { text: "No setting matches the search."; color: Theme.faint; font-size: 12px; wrap: word-wrap; height: 40px; vertical-alignment: center; }
             }
         }
-        if root.groups.length == 0: Text { text: "No setting matches the search."; color: Theme.faint; font-size: 12px; wrap: word-wrap; x: 12px; width: parent.width - 24px; height: 40px; vertical-alignment: center; }
-        Rectangle { vertical-stretch: 1; }
+        // A line where the pages are cut off; always there, so the layout doesn't change.
+        Rectangle { height: 1px; background: page-list.overflows ? Theme.border : transparent; }
         NavButton {
             item: { id: "settings", label: "Settings", sub: "", icon: "settings", current: root.settings-current };
             clicked => { root.navigate("settings"); }
@@ -163,6 +221,10 @@ export component Hero inherits Rectangle {
     in property <string> title;
     in property <string> sub;
     in property <length> hero-height: 230px;
+    /// In a short window: the line goes beside the title, so the picture can move up.
+    in property <bool> compact;
+    /// The width of what the page puts in the top right corner, which the line stops before.
+    in property <length> aside;
     height: hero-height;
     border-radius: 20px;
     border-width: 1px;
@@ -178,7 +240,7 @@ export component Hero inherits Rectangle {
         y: -self.height / 2;
         background: @radial-gradient(circle, Theme.glow 0%, Theme.surface 70%);
     }
-    VerticalLayout {
+    if !root.compact: VerticalLayout {
         x: 24px;
         y: 18px;
         width: parent.width - 48px;
@@ -187,13 +249,30 @@ export component Hero inherits Rectangle {
         Text { text: root.title; color: Theme.text; font-size: 30px; font-weight: 600; }
         if root.sub != "": Text { text: root.sub; color: Theme.muted; font-size: 13px; overflow: elide; }
     }
+    if root.compact: HorizontalLayout {
+        x: 24px;
+        y: 16px;
+        width: parent.width - 48px - (root.aside > 0 ? root.aside + 12px : 0);
+        height: self.preferred-height;
+        spacing: 14px;
+        Text { text: root.title; color: Theme.text; font-size: 30px; font-weight: 600; }
+        // On the title's baseline.
+        if root.sub != "": VerticalLayout {
+            alignment: end;
+            padding-bottom: 5px;
+            horizontal-stretch: 1;
+            Text { text: root.sub; color: Theme.muted; font-size: 13px; overflow: elide; }
+        }
+    }
     @children
 }
 
 /// The subject of a hero, in its bottom left: a round icon, a name, and two lines.
 export component HeroSubject inherits HorizontalLayout {
     in property <HeroInfo> info;
-    in property <length> circle: 88px;
+    /// A smaller circle, and no monospaced line.
+    in property <bool> compact;
+    in property <length> circle: compact ? 56px : 88px;
     spacing: 20px;
     alignment: start;
     Rectangle {
@@ -210,7 +289,7 @@ export component HeroSubject inherits HorizontalLayout {
         padding-bottom: 4px;
         Text { text: root.info.name; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; }
         if root.info.meta != "": Text { text: root.info.meta; color: Theme.tone(root.info.tone); font-size: 13px; overflow: elide; }
-        if root.info.detail != "": Text { text: root.info.detail; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+        if root.info.detail != "" && !root.compact: Text { text: root.info.detail; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
     }
 }
 

@@ -11,8 +11,8 @@ use slint::{ComponentHandle, SharedString};
 
 use crate::audio;
 use crate::{
-    APP, Action, App, BtAudio, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, DetailItem, Details, HeroInfo,
-    MainWindow, NavItem, Toggle, model, update,
+    APP, Action, App, BtAudio, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, Confirm, Confirmed, DetailItem,
+    Details, HeroInfo, MainWindow, NavItem, Toggle, model, update,
 };
 
 /// How long "Look for devices" looks before it stops by itself (discovery costs battery).
@@ -195,7 +195,7 @@ impl State {
         self.snapshot.as_ref().and_then(|s| s.device(path))
     }
 
-    fn send(&mut self, command: Command) {
+    pub fn send(&mut self, command: Command) {
         if let Some(device) = command.device() {
             self.busy.insert(device.to_owned());
         }
@@ -317,7 +317,14 @@ pub fn nav(state: &State, current: bool) -> NavItem {
             },
         }
     };
-    NavItem { id: s("bluetooth"), label: s("Bluetooth"), sub: s(sub), icon: s("bluetooth"), current }
+    NavItem {
+        id: s("bluetooth"),
+        label: s("Bluetooth"),
+        sub: s(sub),
+        icon: s("bluetooth"),
+        current,
+        ..NavItem::default()
+    }
 }
 
 /// The paired devices for the tray's popup (three at most), connected first: (id "bt:path", name, meta, connected).
@@ -1072,6 +1079,8 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
     update(&weak, |app| {
         // A NetworkManager command (a phone's internet), sent once the Bluetooth state is done with.
         let mut pending_nm: Option<crate::view::Command> = None;
+        // A question for the confirmation dialog, asked the same way.
+        let mut confirm: Option<Confirm> = None;
         let state = &mut app.bt;
         let adapter = state.adapter().map(|a| (a.path.clone(), a.powered, a.pairable, a.alias.clone()));
         let selected = state.selected.as_deref().and_then(|id| state.device(id)).cloned();
@@ -1122,11 +1131,7 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
                         let (address, name) = (device.address.clone(), device.alias.clone());
                         crate::files::choose_and_send(window.as_weak(), address, name);
                     }
-                    "forget" => {
-                        if let Some((adapter, ..)) = adapter {
-                            state.send(Command::Forget { adapter, device: device.path });
-                        }
-                    }
+                    "forget" => confirm = adapter.map(|(adapter, ..)| forget(adapter, &device)),
                     _ => {}
                 }
             }
@@ -1204,7 +1209,20 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
         if let Some(command) = pending_nm {
             crate::send(app, command);
         }
+        if confirm.is_some() {
+            app.confirm = confirm;
+        }
     });
+}
+
+/// Forget asks first: getting the device back means pairing it again.
+fn forget(adapter: String, device: &Device) -> Confirm {
+    Confirm {
+        title: format!("Forget {}?", device.alias),
+        text: "You'll need to pair it again to use it with this computer.".into(),
+        button: "Forget".into(),
+        then: Confirmed::Bluetooth(Command::Forget { adapter, device: device.path.clone() }),
+    }
 }
 
 /// The page's state name ("list", "off", …), for the empty state's button.
@@ -1780,5 +1798,55 @@ mod tests {
         ]);
         let counts: Vec<usize> = lines.iter().map(|l| l.chips.row_count()).collect();
         assert_eq!(counts, [2, 2, 1]);
+    }
+
+    /// Forget asks in the same dialog as forgetting a network; Esc leaves the device paired, and
+    /// only the dialog's Forget unpairs it.
+    #[test]
+    fn forgetting_a_device_asks_first() {
+        use slint::platform::{Key, WindowEvent};
+
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        crate::connect_callbacks(&window);
+        window.show().unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        APP.with(|app| {
+            let mut app = app.borrow_mut();
+            app.ui.page = crate::view::Page::Bluetooth;
+            app.bt = state();
+            app.bt.selected = Some("/org/bluez/hci0/dev_2".into());
+            app.bt.commands = Some(tx);
+        });
+        // Opening the page looks for devices.
+        update(&window.as_weak(), |_| {});
+        assert!(matches!(rx.try_recv(), Ok(Command::Discover { on: true, .. })));
+
+        act(&window, "detail", "forget");
+        assert!(window.get_confirm_open());
+        assert_eq!(window.get_confirm_title(), "Forget Pixel 8?");
+        assert_eq!(window.get_confirm_button(), "Forget");
+        assert!(rx.try_recv().is_err());
+
+        let press = |key: SharedString| {
+            window.window().dispatch_event(WindowEvent::KeyPressed { text: key.clone() });
+            window.window().dispatch_event(WindowEvent::KeyReleased { text: key });
+        };
+        // The page's keys wait while the dialog is open ("s" would look for devices).
+        press("s".into());
+        assert!(rx.try_recv().is_err());
+        press(Key::Escape.into());
+        assert!(!window.get_confirm_open());
+        assert!(rx.try_recv().is_err());
+        press("s".into());
+        assert!(matches!(rx.try_recv(), Ok(Command::Discover { on: true, .. })));
+
+        act(&window, "detail", "forget");
+        window.invoke_confirm_accepted();
+        assert!(!window.get_confirm_open());
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Command::Forget { adapter: "/org/bluez/hci0".into(), device: "/org/bluez/hci0/dev_2".into() }
+        );
     }
 }
