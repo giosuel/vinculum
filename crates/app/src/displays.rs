@@ -9,7 +9,7 @@ use lituus_hypr::{ConfigFile, Hyprland, Mode, Monitor, MonitorRule, config_dir, 
 use slint::{Model, ModelRc, SharedString, VecModel};
 
 use crate::profiles::{self, Profile, Store, StoredMonitor, StoredWorkspace};
-use crate::{DisplaysView, LayoutMonitor, MainWindow, ProfileRow, WorkspaceRow, update};
+use crate::{Confirm, Confirmed, DisplaysView, LayoutMonitor, MainWindow, ProfileRow, WorkspaceRow, update};
 
 /// The workspaces the Workspaces tab lists.
 const WORKSPACES: usize = 10;
@@ -219,8 +219,9 @@ fn changes(from: &[MonitorRule], to: &[MonitorRule]) -> Vec<MonitorRule> {
     changed
 }
 
-/// Everything the page does: (verb, argument, value).
-pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &str, value: f32) {
+/// Everything the page does: (verb, argument, value). Updating or deleting a profile only asks:
+/// the question comes back for the confirmation dialog, which runs `confirmed`.
+pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &str, value: f32) -> Option<Confirm> {
     let i = state.selected;
     let index = arg.parse::<usize>().unwrap_or(0);
     match verb {
@@ -268,15 +269,7 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
                 apply(weak, state);
             }
         }
-        "profile-update" => {
-            let live: Vec<StoredMonitor> = state.live.iter().map(StoredMonitor::from).collect();
-            let ws = state.store.workspaces.clone();
-            if let Some(p) = state.store.profiles.get_mut(index) {
-                p.monitors = live;
-                p.workspaces = ws;
-                save_store(state);
-            }
-        }
+        "profile-update" | "profile-delete" => return ask(state, verb, index),
         "profile-auto" => {
             if let Some(p) = state.store.profiles.get_mut(index) {
                 p.auto = !p.auto;
@@ -290,21 +283,61 @@ pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &
                 save_store(state);
             }
         }
-        "profile-delete" => {
-            if index < state.store.profiles.len() {
-                state.store.profiles.remove(index);
-                save_store(state);
-            }
-        }
         "save" => save(state),
         "view-config" => state.config_open = true,
         "close-config" => state.config_open = false,
         _ => {
-            let Some(rule) = state.edit.get_mut(i) else { return };
-            let Some(monitor) = state.monitors.get(i) else { return };
+            let rule = state.edit.get_mut(i)?;
+            let monitor = state.monitors.get(i)?;
             edit(rule, monitor, &state.monitors, verb, arg, index, value);
         }
     }
+    None
+}
+
+/// The question before profile `index` is overwritten or deleted.
+fn ask(state: &State, verb: &str, index: usize) -> Option<Confirm> {
+    let name = state.store.profiles.get(index)?.name.clone();
+    Some(if verb == "profile-delete" {
+        Confirm {
+            title: format!("Delete {name}?"),
+            text: "This deletes its saved monitor layout and workspaces.".into(),
+            button: "Delete".into(),
+            then: Confirmed::Displays("profile-delete", name),
+        }
+    } else {
+        Confirm {
+            title: format!("Update {name}?"),
+            text: "Its saved monitor layout and workspaces are replaced by the ones in use now.".into(),
+            button: "Update".into(),
+            then: Confirmed::Displays("profile-update", name),
+        }
+    })
+}
+
+/// Runs a profile change the confirmation dialog asked about.
+pub fn confirmed(state: &mut State, verb: &str, name: &str) {
+    if change_profile(state, verb, name) {
+        save_store(state);
+    }
+}
+
+/// Updates the profile called `name` to the monitors and workspaces in use now, or deletes it.
+/// By name: the list may have changed while the dialog was open.
+fn change_profile(state: &mut State, verb: &str, name: &str) -> bool {
+    let Some(index) = state.store.profiles.iter().position(|p| p.name == name) else { return false };
+    match verb {
+        "profile-update" => {
+            let profile = &mut state.store.profiles[index];
+            profile.monitors = state.live.iter().map(StoredMonitor::from).collect();
+            profile.workspaces = state.store.workspaces.clone();
+        }
+        "profile-delete" => {
+            state.store.profiles.remove(index);
+        }
+        _ => return false,
+    }
+    true
 }
 
 fn apply(weak: &slint::Weak<MainWindow>, state: &mut State) {
@@ -1006,6 +1039,38 @@ mod tests {
         assert_eq!(profile_rules(&st, &profile.unwrap()), desk);
         assert_eq!(st.store.active(&desk), Some(0));
         assert_eq!(st.store.active(&st.live), None);
+    }
+
+    #[test]
+    fn updating_or_deleting_a_profile_asks_first() {
+        let mut st = state();
+        let w = weak();
+        let mut desk = st.live.clone();
+        desk[1].disabled = true;
+        let desk: Vec<StoredMonitor> = desk.iter().map(StoredMonitor::from).collect();
+        st.store.profiles.push(Profile { name: "Desk".into(), monitors: desk, ..Profile::default() });
+        st.store.profiles.push(Profile { name: "TV".into(), ..Profile::default() });
+        let before = st.store.profiles.clone();
+
+        // Asking changes nothing, so Cancel and Esc only have to close the dialog.
+        let delete = act(&w, &mut st, "profile-delete", "0", 0.0).unwrap();
+        assert_eq!(delete.title, "Delete Desk?");
+        assert_eq!(delete.then, Confirmed::Displays("profile-delete", "Desk".into()));
+        let update = act(&w, &mut st, "profile-update", "0", 0.0).unwrap();
+        assert_eq!(update.title, "Update Desk?");
+        assert_eq!(update.button, "Update");
+        assert_eq!(st.store.profiles, before);
+        assert_eq!(act(&w, &mut st, "profile-delete", "5", 0.0), None);
+
+        // Accepted, by name: the list may have changed while the dialog was open.
+        assert!(change_profile(&mut st, "profile-update", "Desk"));
+        let live: Vec<StoredMonitor> = st.live.iter().map(StoredMonitor::from).collect();
+        assert_eq!(st.store.profiles[0].monitors, live);
+        st.store.profiles.swap(0, 1);
+        assert!(change_profile(&mut st, "profile-delete", "Desk"));
+        let names: Vec<&str> = st.store.profiles.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["TV"]);
+        assert!(!change_profile(&mut st, "profile-delete", "Desk"));
     }
 
     #[test]

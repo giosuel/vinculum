@@ -133,7 +133,7 @@ impl Client {
         }))
     }
 
-    /// Switches Wi-Fi on or off (what airplane mode does to Wi-Fi, but only Wi-Fi).
+    /// Switches Wi-Fi on or off.
     pub async fn set_wireless_enabled(&self, on: bool) -> Result<(), Error> {
         self.conn
             .call_method(
@@ -163,16 +163,16 @@ impl Client {
         Ok(())
     }
 
-    /// Airplane mode: Wi-Fi and mobile broadband off (or back on).
-    pub async fn set_airplane(&self, on: bool) -> Result<(), Error> {
-        for property in ["WirelessEnabled", "WwanEnabled"] {
+    /// Switches Wi-Fi and mobile broadband on or off, as airplane mode does.
+    pub async fn set_radios(&self, wifi: bool, wwan: bool) -> Result<(), Error> {
+        for (property, on) in [("WirelessEnabled", wifi), ("WwanEnabled", wwan)] {
             self.conn
                 .call_method(
                     Some(BUS_NAME),
                     MANAGER,
                     Some("org.freedesktop.DBus.Properties"),
                     "Set",
-                    &(IFACE, property, Value::from(!on)),
+                    &(IFACE, property, Value::from(on)),
                 )
                 .await
                 .map_err(Error::from_dbus)?;

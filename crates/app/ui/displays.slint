@@ -4,7 +4,7 @@
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel } from "controls.slint";
-import { Segmented, Select, TextField, CheckBox } from "dialogs.slint";
+import { Segmented, Select, TextField, CheckBox, Modal } from "dialogs.slint";
 import { Hero, Card } from "shell.slint";
 import { Slider } from "sound.slint";
 
@@ -517,100 +517,68 @@ export component DisplaysPage inherits VerticalLayout {
         VerticalLayout {
             alignment: center;
             spacing: 12px;
-            Icon { name: "monitor"; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+            HorizontalLayout { alignment: center; Icon { name: "monitor"; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
             Text { text: root.view.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
             Text { text: root.view.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
         }
     }
 }
 
-/// After Apply: keep the new settings, or they go back by themselves.
-export component KeepDialog inherits Rectangle {
+/// After Apply: keep the new settings, or they go back by themselves. Esc goes back now.
+export component KeepDialog inherits Modal {
     in property <DisplaysView> view;
     callback keep();
     callback revert();
-    background: #05060799;
-    TouchArea { }
+    label: "Keep these display settings?";
+    dismissed => { root.revert(); }
+    Text { text: "Keep these display settings?"; color: Theme.text; font-size: 17px; font-weight: 600; }
+    Text { text: "If a screen stays black, do nothing: the old settings come back by themselves."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
     Rectangle {
-        width: 440px;
-        height: body.preferred-height;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: 14px;
-        border-width: 1px;
-        border-color: Theme.ctrl-border;
-        background: Theme.surface;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: #00000080;
-        accessible-role: groupbox;
-        accessible-label: "Keep these display settings?";
-        body := VerticalLayout {
-            padding: 24px;
-            spacing: 14px;
-            Text { text: "Keep these display settings?"; color: Theme.text; font-size: 17px; font-weight: 600; }
-            Text { text: "If a screen stays black, do nothing: the old settings come back by themselves."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-            Rectangle {
-                height: 6px;
-                border-radius: 3px;
-                background: Theme.off-track;
-                Rectangle { x: 0; width: parent.width * root.view.keep-fraction; border-radius: 3px; background: Theme.accent; }
-            }
-            Text { text: "Going back in " + root.view.keep-seconds + " s"; color: Theme.muted; font-size: 12px; }
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: end;
-                Button { label: "Go back now"; button-height: 36px; clicked => { root.revert(); } }
-                Button { label: "Keep"; kind: "primary"; button-height: 36px; clicked => { root.keep(); } }
-            }
-        }
+        height: 6px;
+        border-radius: 3px;
+        background: Theme.off-track;
+        Rectangle { x: 0; width: parent.width * root.view.keep-fraction; border-radius: 3px; background: Theme.accent; }
+    }
+    Text { text: "Going back in " + root.view.keep-seconds + " s"; color: Theme.muted; font-size: 12px; }
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: end;
+        Button { label: "Go back now"; button-height: 36px; clicked => { root.revert(); } }
+        Button { label: "Keep"; kind: "primary"; button-height: 36px; clicked => { root.keep(); } }
     }
 }
 
 /// The file Lituus writes, to look at and copy.
-export component ConfigDialog inherits Rectangle {
+export component ConfigDialog inherits Modal {
     in property <DisplaysView> view;
     callback closed();
-    background: #05060799;
-    TouchArea { clicked => { root.closed(); } }
+    card-width: min(self.width - 80px, 820px);
+    card-spacing: 12px;
+    label: "Config file";
+    backdrop-dismisses: true;
+    dismissed => { root.closed(); }
+    Text { text: "Config file"; color: Theme.text; font-size: 17px; font-weight: 600; }
+    Text { text: root.view.config-path + ", with the changes not applied yet"; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; }
     Rectangle {
-        width: min(parent.width - 80px, 820px);
-        height: body.preferred-height;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: 14px;
+        border-radius: 10px;
         border-width: 1px;
-        border-color: Theme.ctrl-border;
-        background: Theme.surface;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: #00000080;
-        TouchArea { }
-        body := VerticalLayout {
-            padding: 24px;
-            spacing: 12px;
-            Text { text: "Config file"; color: Theme.text; font-size: 17px; font-weight: 600; }
-            Text { text: root.view.config-path + ", with the changes not applied yet"; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; }
-            Rectangle {
-                border-radius: 10px;
-                border-width: 1px;
-                border-color: Theme.border;
-                background: Theme.input-bg;
-                height: min(code.preferred-height + 24px, 360px);
-                Flickable {
-                    x: 12px;
-                    y: 12px;
-                    width: parent.width - 24px;
-                    height: parent.height - 24px;
-                    viewport-width: max(self.width, code.preferred-width);
-                    viewport-height: code.preferred-height;
-                    code := TextInput { text: root.view.config-text; read-only: true; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; wrap: no-wrap; }
-                }
-            }
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: end;
-                Button { label: "Copy"; button-height: 36px; clicked => { code.select-all(); code.copy(); } }
-                Button { label: "Close"; kind: "primary"; button-height: 36px; clicked => { root.closed(); } }
-            }
+        border-color: Theme.border;
+        background: Theme.input-bg;
+        height: min(code.preferred-height + 24px, 360px);
+        Flickable {
+            x: 12px;
+            y: 12px;
+            width: parent.width - 24px;
+            height: parent.height - 24px;
+            viewport-width: max(self.width, code.preferred-width);
+            viewport-height: code.preferred-height;
+            code := TextInput { text: root.view.config-text; read-only: true; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; wrap: no-wrap; }
         }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: end;
+        Button { label: "Copy"; button-height: 36px; clicked => { code.select-all(); code.copy(); } }
+        Button { label: "Close"; kind: "primary"; button-height: 36px; clicked => { root.closed(); } }
     }
 }
