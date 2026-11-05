@@ -10,7 +10,7 @@
       The settings app for Linux desktops that don't come with one, such as Hyprland.
     </p>
     <ul>
-      <li>Network, through NetworkManager: Wi-Fi, wired, WireGuard and OpenVPN, a hotspot, and every connection setting</li>
+      <li>Network, through NetworkManager: Wi-Fi, wired, WireGuard, OpenVPN and Cisco AnyConnect (with NetworkManager's OpenConnect plugin), a hotspot, and every connection setting</li>
       <li>Bluetooth, through BlueZ: pairing, devices, headset audio, files and a phone's internet</li>
       <li>Sound, through PipeWire: outputs, inputs, a volume per app, and sound cards' profiles</li>
       <li>Displays, through Hyprland: the layout, modes, scale, HDR, workspaces and profiles that switch on hotplug</li>

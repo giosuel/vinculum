@@ -24,8 +24,8 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// Airplane mode is Wi-Fi and mobile broadband both switched off.
-    pub fn airplane(&self) -> bool {
+    /// Wi-Fi and mobile broadband both switched off.
+    pub fn wireless_off(&self) -> bool {
         !self.wireless_enabled && !self.wwan_enabled
     }
 
@@ -197,6 +197,8 @@ pub struct SavedConnection {
     pub hotspot: bool,
     /// A port of a bridge or bond: it's part of that connection rather than one of its own.
     pub port: Option<Port>,
+    /// When it was last connected, in seconds since 1970; 0 if never.
+    pub timestamp: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -231,6 +233,10 @@ pub enum ConnectionKind {
     /// A NetworkManager VPN plugin, e.g. `org.freedesktop.NetworkManager.openvpn`.
     Vpn {
         service: String,
+        /// The server from `vpn.data`: `gateway` for most plugins, `remote` for OpenVPN.
+        gateway: String,
+        /// OpenConnect's `protocol` ("anyconnect", "gp", …); empty for other plugins.
+        protocol: String,
     },
     Bridge {
         stp: bool,

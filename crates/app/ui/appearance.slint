@@ -2,7 +2,7 @@
 // colours (matugen) first, a built-in theme when they're off or missing, dark or light, and the
 // hero glow. The hero shows the window in miniature in the colours in use.
 import { Theme } from "theme.slint";
-import { Switch } from "controls.slint";
+import { Switch, Focusable } from "controls.slint";
 import { Segmented } from "dialogs.slint";
 import { Hero, SettingRow } from "shell.slint";
 
@@ -60,17 +60,20 @@ component MiniWindow inherits Rectangle {
     Rectangle { x: 88px + (parent.width - 106px) / 2 + 8px; y: 98px; width: (parent.width - 106px) / 2; height: 60px; border-radius: 8px; background: Theme.surface; }
 }
 
-component Swatch inherits Rectangle {
+component Swatch inherits Focusable {
     in property <ThemeSwatch> swatch;
-    in property <bool> enabled: true;
     callback clicked();
     height: 100px;
-    opacity: enabled ? 1 : 0.42;
+    // For the focus ring, around the preview and its name.
+    border-radius: 10px;
+    focus-key: "swatch:" + swatch.name;
+    opacity: root.enabled ? 1 : 0.42;
     accessible-role: button;
     accessible-label: swatch.name;
     accessible-checked: swatch.selected;
-    accessible-enabled: enabled;
-    accessible-action-default => { if enabled { clicked(); } }
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { clicked(); } }
+    activated => { root.clicked(); }
     preview := Rectangle {
         y: 0;
         height: 70px;
@@ -107,7 +110,6 @@ component Swatch inherits Rectangle {
         font-size: 13px;
         font-weight: root.swatch.selected ? 600 : 400;
     }
-    TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.clicked(); } }
 }
 
 /// The Settings hero: the look in use and the window in miniature in its colours.
@@ -119,10 +121,10 @@ export component SettingsHero inherits Hero {
     in property <[ColourChip]> chips;
     title: "Settings";
     hero-height: 206px;
-    aside: preview.width + 24px;
+    picture-width: preview.width + 24px;
     VerticalLayout {
         x: 24px;
-        width: parent.width - 48px - root.aside;
+        width: parent.width - 48px - root.picture-width;
         height: self.preferred-height;
         y: parent.height - self.height - 22px;
         spacing: 5px;

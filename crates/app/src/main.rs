@@ -1,11 +1,13 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use futures_util::StreamExt;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+mod airplane;
 mod audio;
 mod bluetooth;
 mod config;
@@ -17,6 +19,7 @@ mod hotspot;
 mod instance;
 mod nav;
 mod notify;
+mod openconnect;
 mod openvpn;
 mod portal;
 mod profiles;
@@ -75,6 +78,24 @@ fn key_mgmt_at(index: i32) -> Option<lituus_nm::KeyMgmt> {
     }
 }
 
+/// The confirmation dialog: its title, text and button, and what accepting it does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Confirm {
+    pub title: String,
+    pub text: String,
+    pub button: String,
+    pub then: Confirmed,
+}
+
+/// What a confirmation dialog runs once it's accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Confirmed {
+    Network(view::Command),
+    Bluetooth(bluetooth::Command),
+    /// A Displays profile change ("profile-update", "profile-delete") and the profile's name.
+    Displays(&'static str, String),
+}
+
 /// The password dialog's three forms.
 enum Dialog {
     /// Joining a secured network from the list.
@@ -105,9 +126,8 @@ struct App {
     commands: Option<tokio::sync::mpsc::UnboundedSender<view::Command>>,
     /// The message above the list, and its tone ("danger", "warn", "info").
     message: Option<(String, &'static str)>,
-    /// The command waiting for the confirmation dialog, and the dialog's title, text and button.
-    confirm: Option<view::Command>,
-    confirm_text: Option<(String, String, String)>,
+    /// The confirmation dialog, while it's open.
+    confirm: Option<Confirm>,
     /// The password dialog, and NetworkManager's requests waiting behind it.
     dialog: Option<Dialog>,
     prompts: VecDeque<secrets::Prompt>,
@@ -117,6 +137,9 @@ struct App {
     keyring: Option<&'static str>,
     /// The row and name of the last connection attempt, for its failure.
     attempt: Option<(String, String)>,
+    /// The connections (by UUID) whose sign-in window is open; kept here, since `ui` starts over
+    /// on every page.
+    signing_in: Vec<String>,
     /// What the message's "Try again" runs.
     retry: Option<view::Command>,
     /// The message's bold first line.
@@ -150,9 +173,14 @@ struct App {
     displays: displays::State,
     /// The Sound page.
     sound: sound::State,
+    /// Airplane mode, from when it's turned on until it ends.
+    airplane: Option<airplane::Airplane>,
     /// The sidebar's search.
     nav_query: String,
-    /// The Network tab last open, for coming back to it from the sidebar.
+    /// The sidebar items whose sub-items are folded away, for this session only (config.toml
+    /// holds settings, not the window's state).
+    nav_folded: Vec<String>,
+    /// The Network sub-page last open, for coming back to it from the sidebar.
     net_page: view::Page,
 }
 
@@ -238,6 +266,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     window.set_version(env!("APP_VERSION").into());
     connect_callbacks(&window);
+    connect_focus(&window);
     apply_theme(&window);
     render(&window);
     let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -261,7 +290,7 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
     std::mem::forget(countdown);
-    // The Bluetooth page's "Visible · 2:41" counts down.
+    // The Bluetooth Visible switch counts down ("2:41").
     let countdown = slint::Timer::default();
     let weak = window.as_weak();
     countdown.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
@@ -333,19 +362,22 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
         tray::Event::Connect(id) | tray::Event::Toggle(id) => {
             update(&weak, |app| {
                 let Some(snap) = &app.snapshot else { return };
-                let q = quick::build(Some(snap));
-                let page = if id.starts_with("wifi:") { view::Page::Wifi } else { view::Page::Vpn };
+                let q = quick::build(Some(snap), app.quick.airplane, &app.signing_in);
+                let page = if id.starts_with("wifi:") { "wifi" } else { "vpn" };
                 let action = if id.starts_with("wifi:") {
                     if q.networks.iter().any(|n| n.id == id && n.active) {
                         return;
                     }
                     "connect"
+                } else if id.strip_prefix("conn:").is_some_and(|uuid| app.signing_in.iter().any(|u| u == uuid)) {
+                    "cancel-sign-in"
                 } else if q.vpns.iter().any(|v| v.id == id && v.on) {
                     "disconnect"
                 } else {
                     "connect"
                 };
-                app.ui = view::UiState { page, selected: Some(id), ..view::UiState::default() };
+                go(app, page);
+                app.ui.selected = Some(id);
                 act(app, action);
             });
             // A password to type, or something to confirm: that's the window's job.
@@ -358,14 +390,14 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
             }
         }
         tray::Event::SetWifi(on) => update(&weak, |app| send(app, view::Command::SetWifi(on))),
-        tray::Event::SetAirplane(on) => update(&weak, |app| send(app, view::Command::SetAirplane(on))),
+        tray::Event::SetAirplane(on) => update(&weak, |app| set_airplane(app, on)),
         tray::Event::Open => {
             hide_quick();
             let _ = window.show();
         }
         tray::Event::Settings => {
             hide_quick();
-            update(&weak, |app| app.ui = view::UiState { page: view::Page::Settings, ..view::UiState::default() });
+            update(&weak, |app| go(app, "settings"));
             let _ = window.show();
         }
         tray::Event::Quit => {
@@ -472,8 +504,8 @@ fn toggle_quick(window: &MainWindow) {
 }
 
 /// The tray and the popup show what changed.
-fn render_quick(app: &mut App) {
-    let q = quick::build(app.snapshot.as_ref());
+fn render_quick(app: &mut App, airplane: bool) {
+    let q = quick::build(app.snapshot.as_ref(), airplane, &app.signing_in);
     let bt = bluetooth::quick(&app.bt);
     if q == app.quick && bt == app.quick_bt && !std::mem::take(&mut app.quick_new) {
         return;
@@ -520,7 +552,7 @@ fn render_quick(app: &mut App) {
         toggles.push(QuickToggle {
             id: "airplane".into(),
             name: "Airplane mode".into(),
-            meta: "Turns off Wi-Fi and mobile broadband".into(),
+            meta: "Turns off Wi-Fi, Bluetooth and mobile broadband".into(),
             on: q.airplane,
         });
         popup.set_toggles(model(toggles));
@@ -529,24 +561,43 @@ fn render_quick(app: &mut App) {
     app.quick_bt = bt;
 }
 
+/// A dialog's FocusTrap asks for Tab (or Shift+Tab) to be pressed again once it has moved the
+/// focus to its other end, which sends it round to the first (or last) control. Slint can't press
+/// keys itself, and it's done after the key that got there, not inside its handling.
+fn connect_focus(window: &MainWindow) {
+    use slint::platform::{Key, WindowEvent};
+    use std::{cell::Cell, rc::Rc};
+    let weak = window.as_weak();
+    let stepping = Rc::new(Cell::new(false));
+    window.global::<Focus>().on_step(move |forward| {
+        // A card with nothing to focus would send it round for ever.
+        if stepping.get() {
+            return;
+        }
+        let (weak, stepping) = (weak.clone(), stepping.clone());
+        slint::Timer::single_shot(Duration::ZERO, move || {
+            let Some(window) = weak.upgrade() else { return };
+            let key = slint::SharedString::from(if forward { Key::Tab } else { Key::Backtab });
+            stepping.set(true);
+            window.window().dispatch_event(WindowEvent::KeyPressed { text: key.clone() });
+            window.window().dispatch_event(WindowEvent::KeyReleased { text: key });
+            stepping.set(false);
+        });
+    });
+}
+
 fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
-    window.on_navigate(move |id| {
-        let id = if id == "network" { APP.with(|app| app.borrow().net_page.id().into()) } else { id };
-        if let Some(page) = view::Page::from_id(&id) {
-            update(&weak, |app| {
-                if page.is_network() {
-                    app.net_page = page;
-                }
-                app.ui = view::UiState { page, ..view::UiState::default() };
-                if page == view::Page::Hotspot {
-                    open_hotspot(app);
-                }
-            });
-        }
-    });
+    window.on_navigate(move |id| update(&weak, |app| go(app, &id)));
     let weak = window.as_weak();
     window.on_nav_search(move |text| update(&weak, |app| app.nav_query = text.to_string()));
+    let weak = window.as_weak();
+    window.on_nav_fold(move |id| {
+        update(&weak, |app| match app.nav_folded.iter().position(|f| *f == id.as_str()) {
+            Some(i) => _ = app.nav_folded.remove(i),
+            None => app.nav_folded.push(id.into()),
+        })
+    });
     let weak = window.as_weak();
     window.on_nav_search_accepted(move || {
         let Some(window) = weak.upgrade() else { return };
@@ -563,10 +614,6 @@ fn connect_callbacks(window: &MainWindow) {
         update(&weak, |app| {
             let hero = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui).net_hero;
             let Some(row) = hero.row else { return };
-            if app.ui.page != hero.page {
-                app.ui = view::UiState { page: hero.page, ..view::UiState::default() };
-                app.net_page = hero.page;
-            }
             app.ui.selected = Some(row);
             act(app, &verb);
         })
@@ -660,7 +707,11 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_displays_act(move |verb, arg, value| {
         let w = weak.clone();
-        update(&weak, |app| displays::act(&w, &mut app.displays, &verb, &arg, value))
+        update(&weak, |app| {
+            if let Some(confirm) = displays::act(&w, &mut app.displays, &verb, &arg, value) {
+                app.confirm = Some(confirm);
+            }
+        })
     });
     let weak = window.as_weak();
     window.on_displays_drag(move |i, x, y, done| {
@@ -776,14 +827,12 @@ fn connect_callbacks(window: &MainWindow) {
                 "wifi" => editor::Kind::Wifi,
                 "wireguard" => editor::Kind::WireGuard,
                 "openvpn" => editor::Kind::OpenVpn,
+                "openconnect" => editor::Kind::OpenConnect,
                 "vlan" => editor::Kind::Vlan,
                 "bridge" => editor::Kind::Bridge,
                 "bond" => editor::Kind::Bond,
                 "import" => return send(app, view::Command::ImportFile),
-                "hotspot" => {
-                    app.ui = view::UiState { page: view::Page::Hotspot, ..view::UiState::default() };
-                    return open_hotspot(app);
-                }
+                "hotspot" => return go(app, "hotspot"),
                 _ => editor::Kind::Ethernet,
             };
             send(app, view::Command::OpenEditor { connection: None, new: Some(kind) });
@@ -833,10 +882,11 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_dismiss_message(move || update(&weak, |app| app.message = None));
     let weak = window.as_weak();
     window.on_confirm_accepted(move || {
-        update(&weak, |app| {
-            if let Some(command) = app.confirm.take() {
-                send(app, command);
-            }
+        update(&weak, |app| match app.confirm.take().map(|c| c.then) {
+            Some(Confirmed::Network(command)) => send(app, command),
+            Some(Confirmed::Bluetooth(command)) => app.bt.send(command),
+            Some(Confirmed::Displays(verb, name)) => displays::confirmed(&mut app.displays, verb, &name),
+            None => {}
         })
     });
     let weak = window.as_weak();
@@ -852,24 +902,20 @@ fn connect_callbacks(window: &MainWindow) {
     });
     let weak = window.as_weak();
     window.on_bottom_clicked(move || {
-        update(&weak, |app| {
-            if app.ui.page == view::Page::Wifi
-                && let Some(device) = app.snapshot.as_ref().and_then(view::hidden_network_device)
-            {
-                open_dialog(app, Dialog::Hidden { device });
-            } else if app.ui.page != view::Page::Wifi {
-                send(app, view::Command::ImportFile);
+        update(&weak, |app| match app.ui.page {
+            view::Page::Wifi => {
+                if let Some(device) = app.snapshot.as_ref().and_then(view::hidden_network_device) {
+                    open_dialog(app, Dialog::Hidden { device });
+                }
             }
+            view::Page::Wired => {
+                send(app, view::Command::OpenEditor { connection: None, new: Some(editor::Kind::Ethernet) })
+            }
+            _ => send(app, view::Command::ImportFile),
         })
     });
     let weak = window.as_weak();
-    window.on_airplane_toggled(move || {
-        update(&weak, |app| {
-            if let Some(command) = app.snapshot.as_ref().map(view::airplane_switch) {
-                send(app, command);
-            }
-        })
-    });
+    window.on_airplane_toggled(move || update(&weak, |app| set_airplane(app, !app.quick.airplane)));
     window.on_join_check(|mode, name, security, password| {
         let password_ok = |index| key_mgmt_at(index).is_some_and(|k| k.accepts(&password));
         if mode == "hidden" {
@@ -915,6 +961,13 @@ fn hostname_problem(name: &str) -> Option<&'static str> {
     if name.split('.').all(label_ok) { None } else { Some("Letters, digits and hyphens only, such as thinkpad-x1.") }
 }
 
+/// Goes to a page (a sidebar item's id); Network opens its sub-page used last.
+fn go(app: &mut App, id: &str) {
+    if view::navigate(&mut app.ui, &mut app.net_page, id) == Some(view::Page::Hotspot) {
+        open_hotspot(app);
+    }
+}
+
 /// The hotspot page opens with its saved settings, or with the hostname and a new password.
 fn open_hotspot(app: &mut App) {
     let Some(snap) = &app.snapshot else { return };
@@ -928,7 +981,6 @@ fn render_hotspot(window: &MainWindow, app: &mut App, view: Option<&view::Hotspo
     let Some(h) = view else { return };
     window.set_hotspot_available(h.device.is_some());
     window.set_hotspot_on(h.active.is_some());
-    window.set_hotspot_status(h.status.as_str().into());
     window.set_hotspot_warning(h.warning.as_str().into());
     if let Some((ssid, password, band)) = app.hotspot_fields.take() {
         window.set_hotspot_ssid(ssid.into());
@@ -1026,6 +1078,12 @@ fn accept_dialog(app: &mut App, (name, security, password, storage, autoconnect)
 /// A details button (or Enter, for "connect") on the selected row.
 fn act(app: &mut App, action: &str) {
     let (Some(snapshot), Some(selected)) = (app.snapshot.as_ref(), app.ui.selected.as_deref()) else { return };
+    // Its sign-in window is open: Enter, the popup and the tray don't open a second one.
+    if action == "connect"
+        && selected.strip_prefix("conn:").is_some_and(|uuid| app.signing_in.iter().any(|u| u == uuid))
+    {
+        return;
+    }
     let name = view::row_name(snapshot, selected);
     match view::intent(snapshot, selected, action) {
         Some(view::Intent::Run(command)) => {
@@ -1037,8 +1095,7 @@ fn act(app: &mut App, action: &str) {
         }
         Some(view::Intent::Join(target)) => open_dialog(app, Dialog::Join(target)),
         Some(view::Intent::Confirm { title, text, button, command }) => {
-            app.confirm = Some(command);
-            app.confirm_text = Some((title, text, button));
+            app.confirm = Some(Confirm { title, text, button, then: Confirmed::Network(command) });
         }
         None => {}
     }
@@ -1050,6 +1107,16 @@ fn send(app: &mut App, command: view::Command) {
     app.retry = None;
     if let Some(commands) = &app.commands {
         let _ = commands.send(command);
+    }
+}
+
+/// Airplane mode on or off: NetworkManager switches Wi-Fi and mobile broadband, the Bluetooth
+/// thread the adapters.
+fn set_airplane(app: &mut App, on: bool) {
+    let change = airplane::switch(&mut app.airplane, on, app.snapshot.as_ref(), app.bt.snapshot.as_ref());
+    send(app, view::Command::SetAirplane { on, wifi: change.wifi, wwan: change.wwan });
+    for (adapter, on) in change.bluetooth {
+        app.bt.send(bluetooth::Command::Power { adapter, on });
     }
 }
 
@@ -1170,7 +1237,7 @@ fn tether_offers(snapshot: Option<&lituus_nm::Snapshot>) -> std::collections::Ha
         .collect()
 }
 
-/// The sidebar's pages; the Network item's status is filled in from the view.
+/// The sidebar's pages; Network's statuses are filled in from the view.
 fn nav_entries(app: &App) -> Vec<nav::Entry> {
     vec![
         nav::Entry {
@@ -1178,16 +1245,54 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             label: "Network",
             icon: "wifi",
             group: "CONNECTIONS",
-            keywords: "wi-fi wifi wired ethernet vpn wireguard openvpn hotspot internet saved connections hostname",
+            keywords: "internet networkmanager saved connections hostname",
             status: String::new(),
+            parent: None,
+        },
+        nav::Entry {
+            id: "wifi",
+            label: "Wi-Fi",
+            icon: "wifi",
+            group: "CONNECTIONS",
+            keywords: "wi-fi wifi wireless wlan networks hidden enterprise eduroam saved",
+            status: String::new(),
+            parent: Some("network"),
+        },
+        nav::Entry {
+            id: "wired",
+            label: "Wired",
+            icon: "wired",
+            group: "CONNECTIONS",
+            keywords: "ethernet cable lan bridge bond vlan virtual interfaces profiles",
+            status: String::new(),
+            parent: Some("network"),
+        },
+        nav::Entry {
+            id: "vpn",
+            label: "VPN",
+            icon: "vpn",
+            group: "CONNECTIONS",
+            keywords: "wireguard openvpn openconnect tunnel import",
+            status: String::new(),
+            parent: Some("network"),
+        },
+        nav::Entry {
+            id: "hotspot",
+            label: "Hotspot",
+            icon: "hotspot",
+            group: "CONNECTIONS",
+            keywords: "tethering share access point",
+            status: String::new(),
+            parent: Some("network"),
         },
         nav::Entry {
             id: "bluetooth",
             label: "Bluetooth",
             icon: "bluetooth",
             group: "CONNECTIONS",
-            keywords: "pair pairing headphones headset keyboard mouse speaker devices",
+            keywords: "pair pairing headphones headset keyboard mouse speaker devices visible discoverable pairable adapter",
             status: bluetooth::nav(&app.bt, false).sub.to_string(),
+            parent: None,
         },
         nav::Entry {
             id: "displays",
@@ -1196,6 +1301,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             group: "DEVICES",
             keywords: "monitors screens resolution refresh rate scale hdr vrr rotation mirror hyprland layout",
             status: displays::status(&app.displays),
+            parent: None,
         },
         nav::Entry {
             id: "sound",
@@ -1204,6 +1310,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             group: "DEVICES",
             keywords: "audio volume speakers headphones microphone input output pipewire mute apps",
             status: sound::status(&app.sound),
+            parent: None,
         },
         // Lituus's own look is in Settings; "Appearance" is kept for the desktop's (GTK) later.
         nav::Entry {
@@ -1214,6 +1321,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "appearance theme colours colors dark light mode matugen wallpaper accent gradient tray \
                        notifications passwords keyring config",
             status: String::new(),
+            parent: None,
         },
     ]
 }
@@ -1221,12 +1329,18 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
 fn render(window: &MainWindow) {
     APP.with(|app| {
         let mut app = app.borrow_mut();
+        app.ui.signing_in = app.signing_in.clone();
+        let state = &mut *app;
+        let airplane = airplane::follow(&mut state.airplane, state.snapshot.as_ref(), state.bt.snapshot.as_ref());
         let v = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui);
-        let current = if app.ui.page.is_network() { "network" } else { app.ui.page.id() };
         let mut entries = nav_entries(&app);
-        entries[0].status = v.net_status.clone();
-        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, current)));
-        window.set_net_sub(v.net_sub.as_str().into());
+        let statuses = [&v.net_status, &v.net_items.wifi, &v.net_items.wired, &v.net_items.vpn, &v.net_items.hotspot];
+        for (entry, status) in entries.iter_mut().zip(statuses) {
+            entry.status = status.clone();
+        }
+        window.set_nav_groups(model(nav::groups(&entries, &app.nav_query, app.ui.page.id(), &app.nav_folded)));
+        window.set_net_sub(v.net_hero.sub.as_str().into());
+        window.set_count(v.count.as_str().into());
         window.set_net_hero(HeroInfo {
             icon: v.net_hero.icon.into(),
             name: v.net_hero.name.as_str().into(),
@@ -1238,10 +1352,10 @@ fn render(window: &MainWindow) {
             v.net_hero
                 .actions
                 .iter()
-                .map(|&(id, label, kind)| Action {
-                    id: id.into(),
-                    label: label.into(),
-                    kind: kind.into(),
+                .map(|(id, label, kind)| Action {
+                    id: (*id).into(),
+                    label: label.as_str().into(),
+                    kind: (*kind).into(),
                     enabled: true,
                 })
                 .collect(),
@@ -1290,14 +1404,14 @@ fn render(window: &MainWindow) {
         window.set_message(message.into());
         window.set_message_tone(if tone.is_empty() { "info".into() } else { tone.into() });
         window.set_confirm_open(app.confirm.is_some());
-        if let Some((title, text, button)) = &app.confirm_text {
-            window.set_confirm_title(title.into());
-            window.set_confirm_text(text.into());
-            window.set_confirm_button(button.into());
+        if let Some(confirm) = &app.confirm {
+            window.set_confirm_title(confirm.title.as_str().into());
+            window.set_confirm_text(confirm.text.as_str().into());
+            window.set_confirm_button(confirm.button.as_str().into());
         }
         window.set_message_title(if app.message.is_some() { app.message_title.as_str().into() } else { "".into() });
         window.set_message_action(if app.retry.is_some() { "Try again".into() } else { "".into() });
-        window.set_airplane(app.snapshot.as_ref().is_some_and(|s| s.airplane()));
+        window.set_airplane(airplane);
         let keyring = app.keyring;
         window.set_keyring_label(
             match keyring {
@@ -1338,7 +1452,7 @@ fn render(window: &MainWindow) {
         sound::render(window, &app.sound);
         displays::render(window, &app.displays);
         files::render(window, &app.files);
-        render_quick(&mut app);
+        render_quick(&mut app, airplane);
     });
 }
 
@@ -1397,6 +1511,9 @@ fn spawn_network_manager(
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime");
         runtime.block_on(async move {
             let keyrings = secrets::Keyrings::default();
+            let sign_ins = openconnect::SignIns::default();
+            // The OpenConnect VPNs' settings paths, from the last snapshot.
+            let mut oc_paths = Arc::new(std::collections::HashSet::new());
             let ui = AgentUi(weak.clone());
             loop {
                 tell_keyring(&weak, &keyrings).await;
@@ -1420,6 +1537,7 @@ fn spawn_network_manager(
                                 Some(snapshot) => {
                                     // Count traffic on the devices in use, for "Received / sent".
                                     if let Ok(snap) = &snapshot {
+                                        oc_paths = Arc::new(openconnect::paths(snap));
                                         for d in snap.devices.iter().filter(|d| d.active_connection.is_some() && d.traffic.is_none()) {
                                             if counting.insert(d.path.clone()) {
                                                 let _ = client.count_traffic(&d.path, 5000).await;
@@ -1431,18 +1549,19 @@ fn spawn_network_manager(
                                 None => break,
                             },
                             Some(command) = commands.recv() => {
-                                let (client, weak, keyrings) = (client.clone(), weak.clone(), keyrings.clone());
+                                let (client, weak, keyrings, sign_ins) = (client.clone(), weak.clone(), keyrings.clone(), sign_ins.clone());
+                                let vpns = Vpns { sign_ins, openconnect: oc_paths.clone() };
                                 tokio::spawn(async move {
-                                    match run(&client, &keyrings, &weak, &command).await {
-                                        Ok(Some((reason, retry))) => failed(&weak, reason, retry),
+                                    match run(&client, &keyrings, &vpns, &weak, &command).await {
+                                        Ok(Some((reason, retry, target))) => failed(&weak, reason, retry, target),
                                         Ok(None) => {}
                                         Err(error) => report(&weak, &command, &error),
                                     }
                                 });
                             }
                             Some(event) = async { agent.as_mut()?.recv().await } => {
-                                let (keyrings, ui) = (keyrings.clone(), ui.clone());
-                                tokio::spawn(async move { secrets::handle(event, &keyrings, &ui).await });
+                                let (keyrings, sign_ins, ui) = (keyrings.clone(), sign_ins.clone(), ui.clone());
+                                tokio::spawn(async move { secrets::handle(event, &keyrings, &sign_ins, &ui).await });
                             }
                         }
                     }
@@ -1487,6 +1606,14 @@ impl secrets::Ui for AgentUi {
         });
     }
 
+    fn signing_in(&self, uuid: String, on: bool) {
+        signing_in(&self.0, uuid, on);
+    }
+
+    fn notice(&self, text: String) {
+        notice(&self.0, &text);
+    }
+
     fn cancel(&self, connection_path: String) {
         let _ = self.0.upgrade_in_event_loop(move |window| {
             APP.with(|app| {
@@ -1500,21 +1627,42 @@ impl secrets::Ui for AgentUi {
             render(&window);
         });
     }
+
+    fn reconnect(&self, connection_path: String) {
+        let _ = self.0.upgrade_in_event_loop(move |window| {
+            APP.with(|app| {
+                let command = view::Command::Activate { connection: connection_path, device: None, access_point: None };
+                send(&mut app.borrow_mut(), command);
+            });
+            render(&window);
+        });
+    }
 }
+
+/// Why a connection attempt failed, what "Try again" runs, and the row and name it was for when
+/// that's known (otherwise it's the last attempt's).
+type Failure = (String, Option<view::Command>, Option<(String, String)>);
 
 /// Runs a command. For a connection attempt it waits for the outcome, and gives the reason it
 /// failed and what "Try again" should run.
 async fn run(
     client: &lituus_nm::Client,
     keyrings: &secrets::Keyrings,
+    vpns: &Vpns,
     weak: &slint::Weak<MainWindow>,
     command: &view::Command,
-) -> Result<Option<(String, Option<view::Command>)>, lituus_nm::Error> {
+) -> Result<Option<Failure>, lituus_nm::Error> {
     use view::Command::*;
+    // For an OpenConnect VPN: its row and name, and whether another agent signs in.
+    let (mut target, mut delegated) = (None, false);
     let (active, device, retry) = match command {
         OpenEditor { connection, new } => {
             if *new == Some(editor::Kind::OpenVpn) && !openvpn::plugin_installed() {
                 notice(weak, OPENVPN_MISSING);
+                return Ok(None);
+            }
+            if *new == Some(editor::Kind::OpenConnect) && openconnect::missing() {
+                notice(weak, secrets::openconnect_missing());
                 return Ok(None);
             }
             let settings = match connection {
@@ -1551,7 +1699,9 @@ async fn run(
             return Ok(None);
         }
         ChooseFile { field } => {
-            let (title, filters): (&str, &[portal::Filter]) = if field.ends_with("key") {
+            let (title, filters): (&str, &[portal::Filter]) = if field == "oc.csd" {
+                ("Choose the host scan script", &[("Scripts", &["*.sh"]), ("All files", &["*"])])
+            } else if field.ends_with("key") {
                 ("Choose the key", &[("Keys", &["*.pem", "*.key", "*.p12", "*.pfx"]), ("All files", &["*"])])
             } else {
                 (
@@ -1559,7 +1709,7 @@ async fn run(
                     &[("Certificates", &["*.pem", "*.crt", "*.cer", "*.der", "*.p12"]), ("All files", &["*"])],
                 )
             };
-            let path = portal::open_file(title, filters)
+            let path = portal::open_file(title, filters, None)
                 .await
                 .map(|p| p.map(|p| p.to_string_lossy().into_owned()))
                 .map_err(|e| e.to_string());
@@ -1704,14 +1854,38 @@ async fn run(
             (active, Some(device.clone()), retry)
         }
         SetWifi(on) => return client.set_wireless_enabled(*on).await.map(|()| None),
-        SetAirplane(on) => return client.set_airplane(*on).await.map(|()| None),
+        SetAirplane { wifi, wwan, .. } => return client.set_radios(*wifi, *wwan).await.map(|()| None),
         Rescan { device } => return client.request_scan(device).await.map(|()| None),
         Deactivate { active } => return client.deactivate(active).await.map(|()| None),
         Forget { connection } => return client.forget(connection).await.map(|()| None),
         Tether { device, address, name } => return client.tether(device, address, name).await.map(|_| None),
+        CancelSignIn { uuid } => {
+            vpns.sign_ins.cancel(uuid);
+            return Ok(None);
+        }
         Activate { connection, device, access_point } => {
-            let active = client.activate(connection, device.as_deref(), access_point.as_deref()).await?;
-            (active, device.clone(), command.clone())
+            let mut uuid = None;
+            if vpns.openconnect.contains(connection) {
+                let (id, name) = match sign_in_first(client, &vpns.sign_ins, weak, connection).await? {
+                    First::Go { uuid, name } => (uuid, name),
+                    First::Delegate { uuid, name } => {
+                        delegated = true;
+                        (uuid, name)
+                    }
+                    First::Stop => return Ok(None),
+                    First::Failed { reason, uuid, name } => {
+                        return Ok(Some((reason, Some(command.clone()), Some((format!("conn:{uuid}"), name)))));
+                    }
+                };
+                target = Some((format!("conn:{id}"), name));
+                uuid = Some(id);
+            }
+            let activated = client.activate(connection, device.as_deref(), access_point.as_deref()).await;
+            // NetworkManager won't ask for the session of an attempt that didn't start.
+            if let (Err(_), Some(uuid)) = (&activated, &uuid) {
+                vpns.sign_ins.take_ready(uuid);
+            }
+            (activated?, device.clone(), command.clone())
         }
         ConnectOpen { device, access_point, ssid } => {
             let (connection, active) = client.connect_open(device, access_point, ssid).await?;
@@ -1748,9 +1922,104 @@ async fn run(
         }
     };
     Ok(match client.outcome(&active, device.as_deref()).await? {
-        lituus_nm::Outcome::Failed(reason) => Some((reason, Some(retry))),
-        lituus_nm::Outcome::Connected | lituus_nm::Outcome::Stopped => None,
+        lituus_nm::Outcome::Failed(reason) => Some((reason, Some(retry), target)),
+        lituus_nm::Outcome::NoSecrets if delegated => {
+            notice(weak, secrets::openconnect_missing());
+            None
+        }
+        lituus_nm::Outcome::Connected | lituus_nm::Outcome::Stopped | lituus_nm::Outcome::NoSecrets => None,
     })
+}
+
+/// What connecting a VPN needs besides NetworkManager.
+struct Vpns {
+    sign_ins: openconnect::SignIns,
+    /// The OpenConnect VPNs' settings paths.
+    openconnect: Arc<std::collections::HashSet<String>>,
+}
+
+/// What happens before NetworkManager is asked to connect an OpenConnect VPN.
+enum First {
+    Go {
+        uuid: String,
+        name: String,
+    },
+    /// Connect, and let another agent sign in (in a Flatpak, which can't open the window).
+    Delegate {
+        uuid: String,
+        name: String,
+    },
+    /// Nothing more to do: the sign-in was cancelled, or is running already, or the notice says
+    /// why.
+    Stop,
+    Failed {
+        reason: String,
+        uuid: String,
+        name: String,
+    },
+}
+
+/// An OpenConnect VPN signs in first, in the plugin's window, and the session waits for
+/// NetworkManager's request: that way a slow MFA approval isn't cut off by NetworkManager, which
+/// gives up on an agent after 120 seconds.
+async fn sign_in_first(
+    client: &lituus_nm::Client,
+    sign_ins: &openconnect::SignIns,
+    weak: &slint::Weak<MainWindow>,
+    connection: &str,
+) -> Result<First, lituus_nm::Error> {
+    let settings = client.settings(connection).await?;
+    let string = |key: &str| {
+        settings.get("connection").and_then(|c| c.get(key)).and_then(|v| <&str>::try_from(&**v).ok()).unwrap_or("")
+    };
+    let (uuid, name) = (string("uuid").to_owned(), string("id").to_owned());
+    // Signed in already: NetworkManager gave up on the agent while the window was open.
+    if sign_ins.has_ready(&uuid) {
+        return Ok(First::Go { uuid, name });
+    }
+    let Some(dialog) = openconnect::auth_dialog() else {
+        if openconnect::in_flatpak() {
+            return Ok(First::Delegate { uuid, name });
+        }
+        notice(weak, secrets::openconnect_missing());
+        return Ok(First::Stop);
+    };
+    let Some(started) = sign_ins.start(&uuid, connection) else { return Ok(First::Stop) };
+    // What NetworkManager kept from earlier sign-ins; asking may need polkit, and then there's none.
+    let kept = client.secrets_raw(connection, "vpn").await.map(|s| openconnect::secrets(&s)).unwrap_or_default();
+    signing_in(weak, uuid.clone(), true);
+    let data = openconnect::data(&settings);
+    let result = openconnect::sign_in(
+        &dialog,
+        openconnect::SignIn { uuid: &uuid, name: &name, data: &data, secrets: &kept, again: false },
+        started.cancel,
+    )
+    .await;
+    sign_ins.finish(started.id);
+    signing_in(weak, uuid.clone(), false);
+    Ok(match result {
+        Ok(session) => {
+            sign_ins.set_ready(&uuid, session);
+            First::Go { uuid, name }
+        }
+        Err(openconnect::SignInError::Cancelled) => First::Stop,
+        Err(openconnect::SignInError::Closed) => First::Failed { reason: openconnect::CLOSED.into(), uuid, name },
+        Err(openconnect::SignInError::Failed(reason)) => First::Failed { reason, uuid, name },
+    })
+}
+
+/// A connection's sign-in window opened or closed.
+fn signing_in(weak: &slint::Weak<MainWindow>, uuid: String, on: bool) {
+    let _ = weak.upgrade_in_event_loop(move |window| {
+        APP.with(|app| {
+            let signing = &mut app.borrow_mut().signing_in;
+            signing.retain(|u| *u != uuid);
+            if on {
+                signing.push(uuid);
+            }
+        });
+        render(&window);
+    });
 }
 
 const OPENVPN_MISSING: &str = "OpenVPN needs NetworkManager's OpenVPN plugin: networkmanager-openvpn on Arch, network-manager-openvpn on Debian and Ubuntu, NetworkManager-openvpn on Fedora. Install it, then try again.";
@@ -1780,10 +2049,30 @@ fn write_private(path: &std::path::Path, contents: &str) -> std::io::Result<()> 
     file.write_all(contents.as_bytes())
 }
 
-/// Asks for a WireGuard or OpenVPN file and opens it in the editor as a new connection.
+/// The base of an imported VPN connection: its name, started by hand, and the user's own.
+fn imported_settings(kind: editor::Kind, name: &str, owner: Option<&str>) -> lituus_nm::Settings {
+    let mut settings = editor::new_settings(kind, &secrets::new_uuid());
+    let connection = settings.entry("connection".into()).or_default();
+    let mut put = |k: &str, v: zbus::zvariant::Value| {
+        connection.insert(k.into(), zbus::zvariant::OwnedValue::try_from(v).expect("no fds"));
+    };
+    put("id", name.into());
+    put("autoconnect", false.into());
+    if let Some(owner) = owner {
+        put("permissions", vec![format!("user:{owner}:")].into());
+    }
+    settings
+}
+
+/// Asks for a WireGuard or OpenVPN file, or openconnect-saml's config, and opens it in the editor
+/// as a new connection.
 async fn import_file(client: &lituus_nm::Client, weak: &slint::Weak<MainWindow>) {
-    let filters: &[portal::Filter] = &[("WireGuard and OpenVPN", &["*.conf", "*.ovpn"]), ("All files", &["*"])];
-    let path = match portal::open_file("Import a VPN connection", filters).await {
+    let filters: &[portal::Filter] =
+        &[("WireGuard, OpenVPN and openconnect-saml", &["*.conf", "*.ovpn", "*.toml"]), ("All files", &["*"])];
+    // With openconnect-saml set up, its (hidden) folder is the likely one.
+    let saml = openconnect::saml_config();
+    let folder = saml.as_deref().and_then(std::path::Path::parent);
+    let path = match portal::open_file("Import a VPN connection", filters, folder).await {
         Ok(Some(path)) => path,
         Ok(None) => return,
         Err(e) => return notice(weak, &format!("{e}.")),
@@ -1793,6 +2082,9 @@ async fn import_file(client: &lituus_nm::Client, weak: &slint::Weak<MainWindow>)
         Err(e) => return notice(weak, &format!("Couldn't read {}: {e}.", path.display())),
     };
     let file = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    if openconnect::is_saml_config(&file, &text) {
+        return import_saml(client, weak, &file, &text).await;
+    }
     let owner = secrets::username();
     let uuid = secrets::new_uuid();
     let looks_wireguard = text.lines().any(|l| l.trim().eq_ignore_ascii_case("[interface]"));
@@ -1823,17 +2115,7 @@ async fn import_file(client: &lituus_nm::Client, weak: &slint::Weak<MainWindow>)
                 return notice(weak, &format!("Couldn't save {}: {e}.", path.display()));
             }
         }
-        let mut settings = editor::new_settings(editor::Kind::OpenVpn, &uuid);
-        let put = |s: &mut lituus_nm::Settings, k: &str, v: zbus::zvariant::Value| {
-            s.entry("connection".into())
-                .or_default()
-                .insert(k.into(), zbus::zvariant::OwnedValue::try_from(v).expect("no fds"));
-        };
-        put(&mut settings, "id", imported.name.as_str().into());
-        put(&mut settings, "autoconnect", false.into());
-        if let Some(owner) = &owner {
-            put(&mut settings, "permissions", vec![format!("user:{owner}:")].into());
-        }
+        let mut settings = imported_settings(editor::Kind::OpenVpn, &imported.name, owner.as_deref());
         openvpn::write(&mut settings, None, &imported.form);
         let mut banner = format!("Imported from {file}");
         if !imported.files.is_empty() {
@@ -1857,6 +2139,52 @@ async fn import_file(client: &lituus_nm::Client, weak: &slint::Weak<MainWindow>)
         });
         render(&window);
     });
+}
+
+/// openconnect-saml's profiles: one opens in the editor; several are added at once.
+async fn import_saml(client: &lituus_nm::Client, weak: &slint::Weak<MainWindow>, file: &str, text: &str) {
+    if openconnect::missing() {
+        return notice(weak, secrets::openconnect_missing());
+    }
+    let profiles = match openconnect::import_saml(text) {
+        Ok(profiles) => profiles,
+        Err(e) => return notice(weak, &format!("{file} isn't an openconnect-saml file Lituus can read: {e}")),
+    };
+    let owner = secrets::username();
+    let settings_of = |name: &str, form: &openconnect::OcForm| {
+        let mut settings = imported_settings(editor::Kind::OpenConnect, name, owner.as_deref());
+        openconnect::write(&mut settings, None, form);
+        settings
+    };
+    if let [(name, form)] = profiles.as_slice() {
+        let settings = settings_of(name, form);
+        let banner = format!("Imported from openconnect-saml ({file})");
+        let zones = client.firewall_zones().await;
+        let _ = weak.upgrade_in_event_loop(move |window| {
+            APP.with(|app| {
+                let extras = editing::Extras { wg_key: None, banner };
+                editing::open(&mut app.borrow_mut(), None, settings, zones, None, extras)
+            });
+            render(&window);
+        });
+        return;
+    }
+    let (mut added, mut failed) = (Vec::new(), Vec::new());
+    for (name, form) in &profiles {
+        match client.add(&settings_of(name, form)).await {
+            Ok(_) => added.push(name.clone()),
+            Err(e) => failed.push(format!("{name} ({e})")),
+        }
+    }
+    let mut text = if added.is_empty() {
+        "Couldn't add the AnyConnect connections from openconnect-saml.".to_owned()
+    } else {
+        format!("Added {} AnyConnect connections from openconnect-saml: {}.", added.len(), added.join(", "))
+    };
+    if !failed.is_empty() {
+        text += &format!(" Couldn't add {}.", failed.join(", "));
+    }
+    notice(weak, &text);
 }
 
 /// Saves the editor's settings and gives the saved connection's path and settings back, or why
@@ -1943,25 +2271,43 @@ async fn save_connection(
 }
 
 /// A connection attempt failed: mark its row, and offer "Try again".
-fn failed(weak: &slint::Weak<MainWindow>, reason: String, retry: Option<view::Command>) {
+fn failed(
+    weak: &slint::Weak<MainWindow>,
+    reason: String,
+    retry: Option<view::Command>,
+    target: Option<(String, String)>,
+) {
     let _ = weak.upgrade_in_event_loop(move |window| {
         APP.with(|app| {
             let mut app = app.borrow_mut();
-            let (row, name) = app.attempt.clone().unwrap_or_default();
-            app.message_title =
-                if name.is_empty() { "Couldn't connect".to_owned() } else { format!("Couldn't connect to {name}") };
-            app.message = Some((reason.clone(), "danger"));
-            app.retry = retry;
+            let name = mark_failed(&mut app, reason.clone(), retry, target);
             if app.settings.notifications
                 && !window.window().is_visible()
                 && let Some(notifier) = &app.notifier
             {
                 notifier.send(notify::failure(&name, &reason));
             }
-            app.ui.failed = (!row.is_empty()).then_some((row, reason));
         });
         render(&window);
     });
+}
+
+/// Shows a failed attempt above the list and on its row: `target`'s, or else the last
+/// attempt's (a sign-in can take minutes, and another attempt may have started meanwhile). The
+/// connection's name.
+fn mark_failed(
+    app: &mut App,
+    reason: String,
+    retry: Option<view::Command>,
+    target: Option<(String, String)>,
+) -> String {
+    let (row, name) = target.or_else(|| app.attempt.clone()).unwrap_or_default();
+    let what = if reason == openconnect::CLOSED { "Couldn't sign in" } else { "Couldn't connect" };
+    app.message_title = if name.is_empty() { what.to_owned() } else { format!("{what} to {name}") };
+    app.message = Some((reason.clone(), "danger"));
+    app.retry = retry;
+    app.ui.failed = (!row.is_empty()).then_some((row, reason));
+    name
 }
 
 /// Shows why a command failed, above the list.
@@ -1970,10 +2316,11 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituu
     let what = match command {
         SetWifi(true) => "Couldn't turn Wi-Fi on",
         SetWifi(false) => "Couldn't turn Wi-Fi off",
-        SetAirplane(true) => "Couldn't turn airplane mode on",
-        SetAirplane(false) => "Couldn't turn airplane mode off",
+        SetAirplane { on: true, .. } => "Couldn't turn airplane mode on",
+        SetAirplane { on: false, .. } => "Couldn't turn airplane mode off",
         Rescan { .. } => "Couldn't scan",
         Activate { .. } | ConnectOpen { .. } | Join { .. } => "Couldn't connect",
+        CancelSignIn { .. } => "Couldn't close the sign-in window",
         OpenEditor { .. } | NewEnterprise { .. } => "Couldn't read the connection",
         SaveConnection { .. } => "Couldn't save the connection",
         SetSetting { .. } => "Couldn't change the connection",
@@ -1998,9 +2345,13 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituu
         ),
         other => (format!("{what}: {other}."), "danger"),
     };
+    let airplane_failed = matches!(command, SetAirplane { on: true, .. });
     let _ = weak.upgrade_in_event_loop(move |window| {
         APP.with(|app| {
             let mut app = app.borrow_mut();
+            if airplane_failed {
+                app.airplane = None;
+            }
             app.message_title.clear();
             app.retry = None;
             app.message = Some((text, tone));
@@ -2202,13 +2553,565 @@ fn set_theme(t: Theme<'_>, p: &theme::Palette) {
 }
 
 #[cfg(test)]
+mod dialog_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use i_slint_backend_testing::mock_elapsed_time;
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
+
+    use super::{DisplaysView, FilesView, MainWindow};
+
+    /// A window on the test backend whose dialog callbacks write down what they were called
+    /// with, and close the dialog as the app does.
+    fn dialogs() -> (MainWindow, Rc<RefCell<Vec<String>>>) {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.show().unwrap();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let (l, w) = (log.clone(), window.as_weak());
+        let note = move |what: &str| {
+            let (log, w) = (l.clone(), w.clone());
+            let what = what.to_owned();
+            move || {
+                log.borrow_mut().push(what.clone());
+                let w = w.unwrap();
+                match what.as_str() {
+                    "hostname-cancelled" | "hostname-save" => w.set_hostname_open(false),
+                    "add-cancelled" => w.set_add_open(false),
+                    "share-closed" => w.set_share_open(false),
+                    "join-cancelled" | "join-accepted" => w.set_join_open(false),
+                    _ => {}
+                }
+            }
+        };
+        window.on_hostname_cancelled(note("hostname-cancelled"));
+        window.on_hostname_save(note("hostname-save"));
+        window.on_add_cancelled(note("add-cancelled"));
+        window.on_share_closed(note("share-closed"));
+        window.on_join_cancelled(note("join-cancelled"));
+        window.on_join_accepted(note("join-accepted"));
+        window.on_join_check(|_, _, _, password| !password.is_empty());
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_bt_act(move |verb, _| {
+            l.borrow_mut().push(format!("bt {verb}"));
+            if verb == "rename-cancel" || verb == "rename-save" {
+                w.unwrap().set_bt_rename_open(false);
+            }
+        });
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_displays_act(move |verb, _, _| {
+            l.borrow_mut().push(format!("displays {verb}"));
+            let w = w.unwrap();
+            w.set_displays(DisplaysView { keep_open: false, config_open: false, ..w.get_displays() });
+        });
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_files_act(move |verb| {
+            l.borrow_mut().push(format!("files {verb}"));
+            w.unwrap().set_files(FilesView::default());
+        });
+        let l = log.clone();
+        window.on_move_selection(move |by| l.borrow_mut().push(format!("move {by}")));
+        (window, log)
+    }
+
+    /// What the password dialog shows under its fields, for one kind of security.
+    fn join_hints(window: &MainWindow) {
+        window.set_join_password_hints([SharedString::new()].as_slice().into());
+        window
+            .set_join_storage_hints([SharedString::new(), SharedString::new(), SharedString::new()].as_slice().into());
+    }
+
+    fn press(window: &MainWindow, key: impl Into<SharedString>) {
+        let key = key.into();
+        window.window().dispatch_event(WindowEvent::KeyPressed { text: key.clone() });
+        window.window().dispatch_event(WindowEvent::KeyReleased { text: key });
+    }
+
+    /// A click in the window's top left corner, beside any dialog.
+    fn click_beside(window: &MainWindow) {
+        let position = LogicalPosition::new(8.0, 8.0);
+        window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+    }
+
+    /// Opens each dialog, types into its field if it has one, and presses Esc.
+    #[test]
+    fn escape_closes_every_dialog_even_from_a_text_field() {
+        let (window, log) = dialogs();
+        let esc = |open: &dyn Fn(), expected: &str| {
+            open();
+            press(&window, Key::Escape);
+            assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), [expected]);
+        };
+
+        esc(
+            &|| {
+                window.set_hostname_input("thinkpad".into());
+                window.set_hostname_open(true);
+                // The field has the keyboard, with its text selected.
+                press(&window, "x");
+                assert_eq!(window.get_hostname_input(), "x");
+            },
+            "hostname-cancelled",
+        );
+        esc(
+            &|| {
+                window.set_join_mode("new".into());
+                join_hints(&window);
+                window.set_join_open(true);
+                press(&window, "x");
+                assert_eq!(window.get_join_password(), "x");
+            },
+            "join-cancelled",
+        );
+        esc(
+            &|| {
+                window.set_bt_rename_open(true);
+                press(&window, "x");
+                assert_eq!(window.get_bt_rename_name(), "x");
+            },
+            "bt rename-cancel",
+        );
+        esc(&|| window.set_add_open(true), "add-cancelled");
+        esc(&|| window.set_share_open(true), "share-closed");
+        esc(
+            &|| {
+                window.set_page("displays".into());
+                window.set_displays(DisplaysView { config_open: true, ..Default::default() });
+            },
+            "displays close-config",
+        );
+        // After Apply, Esc goes back to the old settings.
+        esc(&|| window.set_displays(DisplaysView { keep_open: true, ..Default::default() }), "displays revert-now");
+        esc(&|| window.set_files(FilesView { incoming: true, ..Default::default() }), "files decline");
+        esc(&|| window.set_files(FilesView { sending: true, ..Default::default() }), "files hide");
+    }
+
+    /// A click beside a dialog closes it only when nothing typed in it would be lost.
+    #[test]
+    fn a_click_beside_a_dialog_never_loses_what_was_typed() {
+        let (window, log) = dialogs();
+        let taken = || log.borrow_mut().drain(..).collect::<Vec<_>>();
+
+        window.set_add_open(true);
+        click_beside(&window);
+        assert_eq!(taken(), ["add-cancelled"]);
+        window.set_share_open(true);
+        click_beside(&window);
+        assert_eq!(taken(), ["share-closed"]);
+        window.set_page("displays".into());
+        window.set_displays(DisplaysView { config_open: true, ..Default::default() });
+        click_beside(&window);
+        assert_eq!(taken(), ["displays close-config"]);
+
+        join_hints(&window);
+        window.set_join_open(true);
+        press(&window, "x");
+        click_beside(&window);
+        assert!(window.get_join_open());
+        assert_eq!(window.get_join_password(), "x");
+        window.set_join_open(false);
+
+        window.set_hostname_open(true);
+        click_beside(&window);
+        assert!(window.get_hostname_open());
+        window.set_hostname_open(false);
+
+        window.set_bt_rename_open(true);
+        click_beside(&window);
+        assert!(window.get_bt_rename_open());
+        window.set_bt_rename_open(false);
+        assert_eq!(taken(), Vec::<String>::new());
+    }
+
+    /// Enter in the field of a one-field dialog accepts it.
+    #[test]
+    fn enter_accepts_a_dialog_with_one_field() {
+        let (window, log) = dialogs();
+        window.set_hostname_open(true);
+        press(&window, "a");
+        press(&window, Key::Return);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["hostname-save"]);
+
+        join_hints(&window);
+        window.set_join_open(true);
+        // Not with an empty password.
+        press(&window, Key::Return);
+        assert!(window.get_join_open());
+        press(&window, "x");
+        press(&window, Key::Return);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["join-accepted"]);
+    }
+
+    /// A dialog takes the keyboard from the page while it's open, and gives it back when it
+    /// closes, even when it was closed from Rust rather than by its own buttons.
+    #[test]
+    fn the_page_gets_the_keyboard_back_after_a_dialog() {
+        let (window, log) = dialogs();
+        press(&window, Key::DownArrow);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["move 1"]);
+
+        window.set_page("displays".into());
+        window.set_displays(DisplaysView { keep_open: true, ..Default::default() });
+        press(&window, Key::DownArrow);
+        assert!(log.borrow().is_empty());
+        // The time runs out.
+        window.set_displays(DisplaysView::default());
+        mock_elapsed_time(Duration::from_millis(20));
+        press(&window, Key::DownArrow);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["move 1"]);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use i_slint_backend_testing::{ElementHandle, mock_elapsed_time};
-    use slint::{ComponentHandle, LogicalSize};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
-    use super::MainWindow;
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle, mock_elapsed_time};
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, SharedString};
+
+    use super::{App, BtPage, MainWindow, act, mark_failed, openconnect, view};
+
+    /// An app with a saved AnyConnect VPN, selected, whose commands go to the receiver.
+    fn with_a_vpn() -> (App, tokio::sync::mpsc::UnboundedReceiver<view::Command>) {
+        let mut snap = view::tests::home();
+        let kind = lituus_nm::ConnectionKind::Vpn {
+            service: openconnect::SERVICE.into(),
+            gateway: "vpn.uzh.ch".into(),
+            protocol: "anyconnect".into(),
+        };
+        snap.connections.push(view::tests::saved("u-uzh", "UZH VPN", kind, "", None));
+        let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App { snapshot: Some(snap), commands: Some(commands), ..App::default() };
+        app.ui = view::UiState { page: view::Page::Vpn, selected: Some("conn:u-uzh".into()), ..Default::default() };
+        (app, receiver)
+    }
+
+    /// Enter on a VPN whose sign-in window is open (or its switch in the popup) doesn't open a
+    /// second window.
+    #[test]
+    fn connecting_while_signing_in_does_nothing() {
+        let (mut app, mut commands) = with_a_vpn();
+        app.signing_in = vec!["u-uzh".into()];
+        act(&mut app, "connect");
+        assert!(commands.try_recv().is_err());
+        act(&mut app, "cancel-sign-in");
+        assert!(matches!(commands.try_recv(), Ok(view::Command::CancelSignIn { uuid }) if uuid == "u-uzh"));
+        app.signing_in.clear();
+        act(&mut app, "connect");
+        assert!(matches!(commands.try_recv(), Ok(view::Command::Activate { .. })));
+    }
+
+    /// A sign-in that fails after minutes is reported against its VPN, not the network joined
+    /// meanwhile.
+    #[test]
+    fn a_failed_sign_in_marks_its_own_row() {
+        let (mut app, _commands) = with_a_vpn();
+        app.attempt = Some(("wifi:Aster Café".into(), "Aster Café".into()));
+        let target = Some(("conn:u-uzh".to_owned(), "UZH VPN".to_owned()));
+        assert_eq!(mark_failed(&mut app, openconnect::CLOSED.into(), None, target), "UZH VPN");
+        assert_eq!(app.message_title, "Couldn't sign in to UZH VPN");
+        assert_eq!(app.ui.failed, Some(("conn:u-uzh".into(), openconnect::CLOSED.into())));
+        // Without one, it's the last attempt's.
+        mark_failed(&mut app, "The network rejected the password.".into(), None, None);
+        assert_eq!(app.message_title, "Couldn't connect to Aster Café");
+        assert_eq!(app.ui.failed.unwrap().0, "wifi:Aster Café");
+    }
+
+    fn press(window: &MainWindow, text: impl Into<SharedString>) {
+        let text = text.into();
+        window.window().dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window.window().dispatch_event(WindowEvent::KeyReleased { text });
+        // The Tab a dialog presses again to send the focus round (connect_focus).
+        mock_elapsed_time(Duration::ZERO);
+    }
+
+    /// The window with the sidebar filled in, as the app shows it.
+    fn window() -> MainWindow {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        super::connect_focus(&window);
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
+        window.set_hostname("thinkpad-x1".into());
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.show().unwrap();
+        window
+    }
+
+    /// Whether the focus ring is drawn, and around an element with this accessible label (a
+    /// text with the same words is one too).
+    fn ring_on(window: &MainWindow, label: &str) -> bool {
+        let Some(ring) = ElementHandle::find_by_element_id(window, "Focusable::ring").next() else { return false };
+        let (r, rs) = (ring.absolute_position(), ring.size());
+        ElementHandle::find_by_accessible_label(window, label).any(|e| {
+            let (p, s) = (e.absolute_position(), e.size());
+            let (cx, cy) = (p.x + s.width / 2.0, p.y + s.height / 2.0);
+            r.x <= cx && cx <= r.x + rs.width && r.y <= cy && cy <= r.y + rs.height && rs.height <= s.height + 8.0
+        })
+    }
+
+    /// Presses Tab until the ring is on `label`; how many presses that took.
+    fn tab_to(window: &MainWindow, label: &str) -> usize {
+        for n in 1..=120 {
+            press(window, Key::Tab);
+            if ring_on(window, label) {
+                return n;
+            }
+        }
+        panic!("Tab never reached {label}");
+    }
+
+    /// The sidebar's label for a page ("Bluetooth, 2 on"), as its button reads it out.
+    fn nav_label(window: &MainWindow, id: &str) -> String {
+        let groups = window.get_nav_groups();
+        let item = groups.iter().flat_map(|g| g.items.iter().collect::<Vec<_>>()).find(|i| i.id == id).unwrap();
+        if item.sub.is_empty() { item.label.to_string() } else { format!("{}, {}", item.label, item.sub) }
+    }
+
+    /// Tab goes down the sidebar, sub-items included, and on to the page; Shift+Tab comes back;
+    /// Space and Enter work the control with the ring, which is drawn only once the keyboard
+    /// moved the focus.
+    #[test]
+    fn the_keyboard_reaches_the_sidebar_and_works_its_controls() {
+        let window = window();
+        let navigated = Rc::new(RefCell::new(Vec::new()));
+        let n = navigated.clone();
+        window.on_navigate(move |id| n.borrow_mut().push(id.to_string()));
+        let airplane = Rc::new(RefCell::new(0));
+        let a = airplane.clone();
+        window.on_airplane_toggled(move || *a.borrow_mut() += 1);
+        window.set_net_hero_actions(super::model(vec![super::Action {
+            id: "disconnect".into(),
+            label: "Disconnect".into(),
+            kind: "secondary".into(),
+            enabled: true,
+        }]));
+        assert!(ElementHandle::find_by_element_id(&window, "Focusable::ring").next().is_none());
+
+        let wired = tab_to(&window, &nav_label(&window, "wired"));
+        let settings = tab_to(&window, "Settings") + wired;
+        let plane = tab_to(&window, "Airplane mode") + settings;
+        let hostname = tab_to(&window, "Change the hostname") + plane;
+        assert!(wired < settings && settings < plane && plane < hostname);
+        // After the sidebar, the page: the hero's button.
+        tab_to(&window, "Disconnect");
+
+        press(&window, Key::Backtab);
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Airplane mode"));
+        press(&window, " ");
+        assert_eq!(*airplane.borrow(), 1);
+        // The switch keeps the focus, so Tab carries on from it.
+        assert!(ring_on(&window, "Airplane mode"));
+        press(&window, Key::Backtab);
+        press(&window, Key::Return);
+        assert_eq!(*navigated.borrow(), ["settings"]);
+    }
+
+    /// Rust sends the sidebar again after every change, and Slint rebuilds its buttons: the
+    /// focus moves to the rebuilt one instead of getting lost.
+    #[test]
+    fn a_rebuilt_sidebar_keeps_the_focus() {
+        let window = window();
+        let label = nav_label(&window, "bluetooth");
+        tab_to(&window, &label);
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
+        assert!(ring_on(&window, &label));
+        // And keeps it: the window doesn't take it for a control that's gone.
+        for _ in 0..5 {
+            mock_elapsed_time(std::time::Duration::from_millis(100));
+        }
+        assert!(ring_on(&window, &label));
+    }
+
+    /// Network's chevron is a Tab stop after its label: Enter and Space fold, and the folded
+    /// sidebar, rebuilt, keeps the focus on it.
+    #[test]
+    fn the_keyboard_folds_network() {
+        let window = window();
+        let folds = Rc::new(RefCell::new(0));
+        let f = folds.clone();
+        window.on_nav_fold(move |id| {
+            assert_eq!(id, "network");
+            *f.borrow_mut() += 1;
+        });
+        let label = tab_to(&window, &nav_label(&window, "network"));
+        assert_eq!(tab_to(&window, "Network pages, expanded"), 1, "after {label} presses");
+        press(&window, Key::Return);
+        press(&window, " ");
+        assert_eq!(*folds.borrow(), 2);
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &["network".to_owned()])));
+        assert!(ring_on(&window, "Network pages, collapsed"));
+    }
+
+    #[test]
+    fn the_arrow_keys_move_a_segmented_control() {
+        let window = window();
+        window.set_page("hotspot".into());
+        window.set_hotspot_available(true);
+        tab_to(&window, "Band");
+        press(&window, Key::RightArrow);
+        assert_eq!(window.get_hotspot_band(), 1);
+        press(&window, Key::RightArrow);
+        press(&window, Key::RightArrow);
+        assert_eq!(window.get_hotspot_band(), 2);
+        press(&window, Key::LeftArrow);
+        assert_eq!(window.get_hotspot_band(), 1);
+    }
+
+    #[test]
+    fn a_select_opens_with_space_and_moves_with_the_arrows() {
+        let window = window();
+        window.set_join_mode("hidden".into());
+        window.set_join_securities(super::model(vec!["None".into(), "WPA2 Personal".into(), "WPA3 Personal".into()]));
+        window.set_join_password_hints(super::model(vec![SharedString::new(); 3]));
+        window.set_join_storage_hints(super::model(vec![SharedString::new(); 3]));
+        window.set_join_open(true);
+        tab_to(&window, "Security");
+        press(&window, " ");
+        press(&window, Key::DownArrow);
+        press(&window, Key::DownArrow);
+        press(&window, Key::Return);
+        assert_eq!(window.get_join_security(), 2);
+        // Esc closes the list and keeps the choice.
+        press(&window, Key::Return);
+        press(&window, Key::UpArrow);
+        press(&window, Key::Escape);
+        assert_eq!(window.get_join_security(), 2);
+        assert!(window.get_join_open());
+    }
+
+    /// The single-letter keys work wherever the focus is on the page, but not while typing.
+    #[test]
+    fn shortcuts_wait_while_a_text_field_has_the_focus() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        let keys = Rc::new(RefCell::new(Vec::new()));
+        let k = keys.clone();
+        window.on_bt_act(move |verb, arg| k.borrow_mut().push(format!("{verb} {arg}")));
+        press(&window, "s");
+        assert_eq!(*keys.borrow(), ["key s"]);
+        // On a control.
+        tab_to(&window, "Airplane mode");
+        press(&window, "p");
+        assert_eq!(*keys.borrow(), ["key s", "key p"]);
+        // Into the sidebar's search field: typed, not a shortcut.
+        for _ in 0..30 {
+            press(&window, Key::Backtab);
+            if ElementHandle::find_by_element_id(&window, "Focusable::ring").next().is_none() {
+                break;
+            }
+        }
+        press(&window, "s");
+        press(&window, "p");
+        assert_eq!(*keys.borrow(), ["key s", "key p"]);
+        press(&window, Key::Escape);
+        press(&window, "s");
+        assert_eq!(*keys.borrow(), ["key s", "key p", "key s"]);
+    }
+
+    /// A dialog's button closes the dialog and goes with it: the window takes the focus back,
+    /// so its keys work again.
+    #[test]
+    fn the_window_takes_the_focus_when_the_focused_control_goes() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        let keys = Rc::new(RefCell::new(Vec::new()));
+        let k = keys.clone();
+        window.on_bt_act(move |verb, arg| k.borrow_mut().push(format!("{verb} {arg}")));
+        let weak = window.as_weak();
+        window.on_confirm_cancelled(move || weak.unwrap().set_confirm_open(false));
+        window.set_confirm_title("Forget Aster Café?".into());
+        window.set_confirm_open(true);
+        tab_to(&window, "Cancel");
+        press(&window, " ");
+        assert!(!window.get_confirm_open());
+        // Drawing the window removes the dialog, as the next frame does.
+        assert!(ElementHandle::find_by_accessible_label(&window, "Forget Aster Café?").next().is_none());
+        for _ in 0..5 {
+            mock_elapsed_time(std::time::Duration::from_millis(100));
+        }
+        press(&window, "s");
+        assert_eq!(*keys.borrow(), ["key s"]);
+    }
+
+    /// The same in a `Modal` (#41's dialogs), which takes the focus when it opens: round its
+    /// field and buttons, and back to the control that opened it after Esc.
+    #[test]
+    fn tab_stays_in_a_modal_and_the_focus_comes_back() {
+        let window = window();
+        let weak = window.as_weak();
+        window.on_hostname_cancelled(move || weak.unwrap().set_hostname_open(false));
+        tab_to(&window, "Change the hostname");
+        window.set_hostname_input("thinkpad-x1".into());
+        window.set_hostname_open(true);
+        mock_elapsed_time(Duration::ZERO);
+        // The field has the focus; Tab goes to the buttons and round.
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Cancel"));
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Save"));
+        press(&window, Key::Tab);
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Cancel"));
+        // Back past the field, round to the last button.
+        press(&window, Key::Backtab);
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Save"));
+        press(&window, Key::Escape);
+        assert!(!window.get_hostname_open());
+        mock_elapsed_time(Duration::ZERO);
+        assert!(ring_on(&window, "Change the hostname"));
+    }
+
+    /// Tab and Shift+Tab go round a dialog's controls instead of on to the page behind it, and
+    /// when the dialog closes, the control that had the focus before gets it back.
+    #[test]
+    fn tab_stays_in_a_dialog_and_the_focus_comes_back() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        tab_to(&window, "Airplane mode");
+        window.set_confirm_title("Forget Aster Café?".into());
+        window.set_confirm_button("Forget".into());
+        window.set_confirm_open(true);
+        tab_to(&window, "Cancel");
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Forget"));
+        // Past the last button: round to the first, not to the sidebar.
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Cancel"));
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Forget"));
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Cancel"));
+        for _ in 0..6 {
+            press(&window, Key::Tab);
+            assert!(ring_on(&window, "Cancel") || ring_on(&window, "Forget"));
+        }
+        window.set_confirm_open(false);
+        // The next turn of the event loop.
+        mock_elapsed_time(Duration::ZERO);
+        assert!(ring_on(&window, "Airplane mode"));
+        // And it stays there: the window doesn't take it for the button that went.
+        for _ in 0..5 {
+            mock_elapsed_time(Duration::from_millis(100));
+        }
+        assert!(ring_on(&window, "Airplane mode"));
+    }
 
     /// Widening the window must not show the closed editor in the new space, not even while
     /// the editor's slide animation would be running.
@@ -2236,6 +3139,381 @@ mod tests {
         assert!(0.0 < x && x < 1600.0, "{x}");
         mock_elapsed_time(Duration::from_millis(500));
         assert_eq!(editor(), Some(0.0));
+    }
+
+    /// A wide window's width goes to the list, also when it shows an empty state (Wi-Fi off) and
+    /// there are no details beside it.
+    #[test]
+    fn the_network_list_fills_a_wide_window_when_empty() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_empty_icon("wifi-off".into());
+        window.set_empty_title("Wi-Fi is off".into());
+        window.set_empty_text("Wired and VPN connections keep working.".into());
+        window.set_empty_action("Turn on Wi-Fi".into());
+        window.set_has_details(false);
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        window.show().unwrap();
+        let list =
+            ElementHandle::find_by_element_id(&window, "MainWindow::list-card").next().expect("the list is shown");
+        // The window less the sidebar (250) and the page's padding (44).
+        assert!(list.size().width > 1600.0, "{}", list.size().width);
+    }
+
+    /// With Network's sub-items open, the sidebar's pages scroll in the smallest window instead
+    /// of pushing Settings and Airplane mode out of it.
+    #[test]
+    fn the_sidebar_keeps_its_footer_in_a_short_window() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
+        window.set_hostname("thinkpad-x1".into());
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        let bottom = |label: &str| {
+            let e = ElementHandle::find_by_accessible_label(&window, label).next().expect(label);
+            e.absolute_position().y + e.size().height
+        };
+        // The hint bar is 30 px; the footer ends above the window's bottom edge.
+        assert!(bottom("Airplane mode") < 590.0, "{}", bottom("Airplane mode"));
+        assert!(bottom("Settings") < bottom("Airplane mode"));
+        // The last page is still there, below the fold.
+        assert!(bottom(&nav_label(&window, "sound")) > 0.0);
+    }
+
+    /// The Bluetooth hero has a Visible switch beside the Bluetooth one, with the time it has
+    /// left, while Bluetooth is on; a click anywhere on its pill switches it. The adapter dialog
+    /// sets how long it lasts.
+    #[test]
+    fn the_visible_switch_is_in_the_bluetooth_hero() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.set_page("bluetooth".into());
+        let list = BtPage { state: "list".into(), powered: true, visible: true, ..BtPage::default() };
+        window.set_bt(BtPage { visible_left: "2:41".into(), ..list.clone() });
+        let acts = Rc::new(RefCell::new(Vec::new()));
+        let seen = acts.clone();
+        window.on_bt_act(move |verb, argument| seen.borrow_mut().push(format!("{verb} {argument}")));
+        window.show().unwrap();
+        let switch = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Switch))
+        };
+
+        let visible = switch("Visible").expect("the Visible switch");
+        let bluetooth = switch("Bluetooth").expect("the Bluetooth switch");
+        assert_eq!(visible.accessible_checked(), Some(true));
+        assert!(visible.absolute_position().x < bluetooth.absolute_position().x);
+        let left = ElementHandle::find_by_accessible_label(&window, "2:41").next().expect("the time left");
+        assert!(left.absolute_position().x < visible.absolute_position().x);
+        // The old card's chips are gone.
+        assert_eq!(ElementHandle::find_by_accessible_label(&window, "Pairable").count(), 0);
+
+        // On the label, beside the switch itself.
+        let (at, size) = (visible.absolute_position(), visible.size());
+        let position = LogicalPosition::new(at.x - 60.0, at.y + size.height / 2.0);
+        window.window().dispatch_event(WindowEvent::PointerMoved { position });
+        window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+        assert_eq!(*acts.borrow(), ["visible "]);
+
+        // Hidden: no time.
+        window.set_bt(BtPage { visible: false, ..list.clone() });
+        assert_eq!(switch("Visible").and_then(|s| s.accessible_checked()), Some(false));
+        assert_eq!(ElementHandle::find_by_accessible_label(&window, "2:41").count(), 0);
+
+        // The adapter dialog: how long, not whether.
+        acts.borrow_mut().clear();
+        window.set_bt_adapter_open(true);
+        let choices: Vec<String> = ElementHandle::find_by_accessible_label(&window, "Visible switch")
+            .find(|e| e.accessible_role() == Some(AccessibleRole::TabList))
+            .expect("the Visible switch's time")
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::Tab)
+            .find_all()
+            .iter()
+            .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
+            .collect();
+        assert_eq!(choices, ["3 minutes", "Always"]);
+        ElementHandle::find_by_accessible_label(&window, "Always").next().unwrap().invoke_accessible_default_action();
+        assert_eq!(*acts.borrow(), ["adapter-visible 1"]);
+        window.set_bt_adapter_open(false);
+
+        // Bluetooth off: only the Bluetooth switch.
+        window.set_bt(BtPage { state: "off".into(), ..BtPage::default() });
+        assert!(switch("Visible").is_none());
+        assert_eq!(switch("Bluetooth").and_then(|s| s.accessible_checked()), Some(false));
+    }
+
+    /// In the smallest window with Network's sub-items shown, and more pages than fit, the wheel
+    /// brings every page of the sidebar into view, between the search field and Settings, which
+    /// stays where it is.
+    #[test]
+    fn the_sidebar_scrolls_to_every_page() {
+        use slint::Model;
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        let mut groups = super::nav::groups(&entries, "", "wifi", &[]);
+        // Pages still to come, so that they don't fit whatever pages there are now.
+        let item = |label: &str| super::NavItem {
+            id: label.into(),
+            label: label.into(),
+            icon: "settings".into(),
+            ..Default::default()
+        };
+        groups.push(super::NavGroup {
+            title: "MORE".into(),
+            items: super::model(["Input", "Keyboard", "Mouse", "Power", "Night light"].map(item).to_vec()),
+        });
+        window.set_nav_groups(super::model(groups));
+        window.set_hostname("thinkpad-x1".into());
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        let list = ElementHandle::find_by_element_id(&window, "Sidebar::page-list").next().expect("the pages");
+        let (top, end) = (list.absolute_position().y, list.absolute_position().y + list.size().height);
+        let labels: Vec<String> = window
+            .get_nav_groups()
+            .iter()
+            .flat_map(|g| g.items.iter().collect::<Vec<_>>())
+            .map(|i| if i.sub.is_empty() { i.label.to_string() } else { format!("{}, {}", i.label, i.sub) })
+            .collect();
+        let in_view = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label).any(|e| {
+                let y = e.absolute_position().y;
+                y >= top - 0.5 && y + e.size().height <= end + 0.5
+            })
+        };
+        let wheel = |dy: f32| {
+            window.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(120.0, top + 40.0),
+                delta_x: 0.0,
+                delta_y: dy,
+            });
+            mock_elapsed_time(Duration::from_millis(300));
+        };
+        // It doesn't all fit, or there'd be nothing to scroll.
+        assert!(!labels.iter().all(|l| in_view(l)));
+        let (settings, airplane) = (bottom(&window, "Settings"), bottom(&window, "Airplane mode"));
+        assert!(airplane < 590.0, "{airplane}");
+        for label in &labels {
+            wheel(1000.0);
+            for _ in 0..20 {
+                if in_view(label) {
+                    break;
+                }
+                wheel(-30.0);
+            }
+            assert!(in_view(label), "{label} never came into view");
+            assert_eq!((bottom(&window, "Settings"), bottom(&window, "Airplane mode")), (settings, airplane));
+        }
+    }
+
+    /// Tab down the sidebar scrolls its pages, so the control with the ring is in view.
+    #[test]
+    fn tab_scrolls_the_sidebar_to_the_ring() {
+        let window = window();
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        let entries = super::nav_entries(&super::App::default());
+        let mut groups = super::nav::groups(&entries, "", "wifi", &[]);
+        let item = |label: &str| super::NavItem {
+            id: label.into(),
+            label: label.into(),
+            icon: "settings".into(),
+            ..Default::default()
+        };
+        groups.push(super::NavGroup {
+            title: "MORE".into(),
+            items: super::model(["Input", "Keyboard", "Mouse", "Power", "Night light"].map(item).to_vec()),
+        });
+        window.set_nav_groups(super::model(groups));
+        mock_elapsed_time(Duration::from_millis(50));
+        let list = ElementHandle::find_by_element_id(&window, "Sidebar::page-list").next().expect("the pages");
+        let (top, end) = (list.absolute_position().y, list.absolute_position().y + list.size().height);
+        let in_view = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label).any(|e| {
+                let y = e.absolute_position().y;
+                y >= top - 0.5 && y + e.size().height <= end + 0.5
+            })
+        };
+        assert!(!in_view("Night light"));
+        tab_to(&window, "Night light");
+        mock_elapsed_time(Duration::from_millis(300));
+        assert!(in_view("Night light"));
+        // And round to the top again.
+        tab_to(&window, &nav_label(&window, "wifi"));
+        mock_elapsed_time(Duration::from_millis(300));
+        assert!(in_view(&nav_label(&window, "wifi")));
+    }
+
+    /// The bottom edge of the first element with this accessible label.
+    fn bottom(window: &MainWindow, label: &str) -> f32 {
+        let e = ElementHandle::find_by_accessible_label(window, label).next().expect(label);
+        e.absolute_position().y + e.size().height
+    }
+
+    fn wifi_rows(n: usize, selected: usize) -> Vec<super::Row> {
+        (0..n)
+            .map(|i| super::Row {
+                id: format!("n{i}").into(),
+                name: format!("Network {i}").into(),
+                meta: "WPA2 · 5 GHz".into(),
+                icon: "bars".into(),
+                bars: 3,
+                selected: i == selected,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    /// In the smallest window, Wi-Fi keeps its hint bar, the button under the list and a
+    /// details pane that ends inside the window, however long the list and the details are.
+    #[test]
+    fn the_network_page_fits_the_smallest_window() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("wifi".into());
+        window.set_count("12 networks in range".into());
+        window.set_bottom_label("Connect to hidden network…".into());
+        let section = super::Section { title: "AVAILABLE".into(), rows: super::model(wifi_rows(12, 0)) };
+        window.set_sections(super::model(vec![section]));
+        window.set_has_details(true);
+        let toggle = |id: &str| super::Toggle {
+            id: id.into(),
+            label: "Trusted".into(),
+            sub: "Connects and uses its services without asking you first, every time".into(),
+            on: false,
+        };
+        let item =
+            |i: usize| super::DetailItem { label: format!("Item {i}").into(), value: "value".into(), mono: false };
+        window.set_details(super::Details {
+            title: "Network 0".into(),
+            toggles: super::model(vec![toggle("a"), toggle("b")]),
+            items: super::model((0..12).map(item).collect()),
+            ..Default::default()
+        });
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        mock_elapsed_time(Duration::from_millis(50));
+
+        // The hint bar is the bottom 30 px.
+        assert!(
+            bottom(&window, "Connect to hidden network…") <= 570.0,
+            "{}",
+            bottom(&window, "Connect to hidden network…")
+        );
+        let pane = ElementHandle::find_by_element_type_name(&window, "DetailsPane").next().expect("the details");
+        let (pane_at, pane_size) = (pane.absolute_position(), pane.size());
+        assert!(pane_at.y + pane_size.height <= 570.0);
+        assert!(pane_at.x + pane_size.width <= 1040.0);
+        // The details scroll on their own: the last item is out of view, and the wheel brings
+        // it in.
+        assert!(ElementHandle::find_by_accessible_label(&window, "Item 11").next().is_none());
+        window.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(pane_at.x + 100.0, pane_at.y + 100.0),
+            delta_x: 0.0,
+            delta_y: -2000.0,
+        });
+        mock_elapsed_time(Duration::from_millis(500));
+        assert!(bottom(&window, "Item 11") <= pane_at.y + pane_size.height);
+    }
+
+    /// The bar with Apply stays in the smallest window, below the monitor's settings, with the
+    /// banner about the Hyprland config shown too.
+    #[test]
+    fn the_displays_apply_bar_stays_in_the_smallest_window() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("displays".into());
+        window.set_displays(super::DisplaysView {
+            state: "list".into(),
+            not_loaded: true,
+            can_apply: true,
+            ..Default::default()
+        });
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        mock_elapsed_time(Duration::from_millis(50));
+        let apply = ElementHandle::find_by_accessible_label(&window, "Apply").next().expect("Apply");
+        assert!(apply.absolute_position().y > 400.0, "{}", apply.absolute_position().y);
+        assert!(bottom(&window, "Apply") <= 570.0, "{}", bottom(&window, "Apply"));
+    }
+
+    /// Moving the selection with the arrow keys scrolls the list to the selected row.
+    #[test]
+    fn the_selected_row_scrolls_into_view() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("wifi".into());
+        let set = |w: &MainWindow, selected: usize| {
+            let section = super::Section { title: "AVAILABLE".into(), rows: super::model(wifi_rows(20, selected)) };
+            w.set_sections(super::model(vec![section]));
+        };
+        set(&window, 0);
+        let selected = std::rc::Rc::new(std::cell::Cell::new(0));
+        let weak = window.as_weak();
+        let s = selected.clone();
+        window.on_move_selection(move |delta| {
+            s.set((s.get() as i32 + delta).clamp(0, 19) as usize);
+            set(&weak.unwrap(), s.get());
+        });
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        mock_elapsed_time(Duration::from_millis(50));
+        // Where a row is, if it's in view (a scrolled-away element isn't found).
+        let row = |i: usize| {
+            ElementHandle::find_by_accessible_label(&window, &format!("Network {i}, WPA2 · 5 GHz"))
+                .next()
+                .map(|e| (e.absolute_position().y, e.absolute_position().y + e.size().height))
+        };
+        let (list_top, _) = row(0).expect("the first row");
+        assert_eq!(row(15), None);
+
+        for _ in 0..15 {
+            window.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                text: slint::platform::Key::DownArrow.into(),
+            });
+            mock_elapsed_time(Duration::from_millis(20));
+        }
+        assert_eq!(selected.get(), 15);
+        // Scrolled: the first row went out of the list, and the selected one is in it.
+        assert_eq!(row(0), None);
+        let (top, bottom) = row(15).expect("the selected row");
+        assert!(top >= list_top && bottom <= 570.0, "{top} {bottom}");
+    }
+
+    /// Network's chevron says whether its pages are shown, and folds them without going to a
+    /// page.
+    #[test]
+    fn the_network_chevron_folds_its_pages() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        let show = |folded: &[String]| {
+            window.set_nav_groups(super::model(super::nav::groups(&entries, "", "bluetooth", folded)))
+        };
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let c = calls.clone();
+        window.on_nav_fold(move |id| c.borrow_mut().push(format!("fold {id}")));
+        let c = calls.clone();
+        window.on_navigate(move |id| c.borrow_mut().push(format!("go {id}")));
+        show(&[]);
+        window.show().unwrap();
+        let hotspots = || ElementHandle::find_by_accessible_label(&window, "Hotspot").count();
+        let shown = hotspots();
+
+        let chevron = ElementHandle::find_by_accessible_label(&window, "Network pages, expanded").next().unwrap();
+        assert_eq!(chevron.accessible_expanded(), Some(true));
+        chevron.invoke_accessible_default_action();
+        assert_eq!(*calls.borrow(), ["fold network"]);
+
+        show(&["network".to_owned()]);
+        let chevron = ElementHandle::find_by_accessible_label(&window, "Network pages, collapsed").next().unwrap();
+        assert_eq!(chevron.accessible_expanded(), Some(false));
+        // The Hotspot item is gone.
+        assert!(hotspots() < shown, "{} {shown}", hotspots());
     }
 
     /// Settings starts with the app's look, fits the smallest window, and puts the colour files

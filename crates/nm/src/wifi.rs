@@ -232,6 +232,7 @@ mod tests {
             metered: None,
             hotspot: false,
             port: None,
+            timestamp: 0,
         }
     }
 

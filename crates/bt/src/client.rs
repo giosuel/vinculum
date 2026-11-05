@@ -159,9 +159,15 @@ impl Client {
     /// Lets other devices find this computer, for `timeout` seconds (0: until switched off).
     pub async fn set_discoverable(&self, adapter: &str, on: bool, timeout: u32) -> Result<(), Error> {
         if on {
-            self.set(adapter, ADAPTER, "DiscoverableTimeout", Value::from(timeout)).await?;
+            self.set_discoverable_timeout(adapter, timeout).await?;
         }
         self.set(adapter, ADAPTER, "Discoverable", Value::from(on)).await
+    }
+
+    /// How long the adapter stays discoverable when it's made so (0: until switched off). BlueZ
+    /// keeps it across restarts, and starts the time again if the adapter is discoverable now.
+    pub async fn set_discoverable_timeout(&self, adapter: &str, timeout: u32) -> Result<(), Error> {
+        self.set(adapter, ADAPTER, "DiscoverableTimeout", Value::from(timeout)).await
     }
 
     /// Whether other devices may ask to pair.

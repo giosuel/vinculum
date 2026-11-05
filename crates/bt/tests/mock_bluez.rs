@@ -179,6 +179,12 @@ async fn power_and_discovery_show_up_in_the_watch() {
     client.set_discoverable(&adapter, true, 120).await.unwrap();
     let s = until(&mut stream, |s| s.adapter().is_some_and(|a| a.discoverable)).await;
     assert_eq!(s.adapter().unwrap().discoverable_timeout, 120);
+    client.set_discoverable(&adapter, false, 0).await.unwrap();
+    until(&mut stream, |s| s.adapter().is_some_and(|a| !a.discoverable)).await;
+    // The time alone, for the next time: it stays hidden.
+    client.set_discoverable_timeout(&adapter, 0).await.unwrap();
+    let s = until(&mut stream, |s| s.adapter().is_some_and(|a| a.discoverable_timeout == 0)).await;
+    assert!(!s.adapter().unwrap().discoverable);
     client.set_pairable(&adapter, false).await.unwrap();
     until(&mut stream, |s| s.adapter().is_some_and(|a| !a.pairable)).await;
     client.set_adapter_alias(&adapter, "work laptop").await.unwrap();

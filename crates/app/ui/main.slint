@@ -1,5 +1,5 @@
-// The main window: sidebar, a list page (Wi-Fi, Wired, VPN, Saved) with its details pane, or the
-// Settings page. Everything shown comes from Rust (src/view.rs); this file is layout and looks,
+// The main window: sidebar, a list page (Wi-Fi, Wired, VPN) with its details pane, the Hotspot
+// page, or one of the other pages. Everything shown comes from Rust (src/view.rs); this file is layout and looks,
 // following the approved mockups.
 import "fonts/Inter-Regular.ttf";
 import "fonts/Inter-Medium.ttf";
@@ -9,8 +9,8 @@ import "fonts/JetBrainsMono-Medium.ttf";
 import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Kbd } from "controls.slint";
-import { JoinDialog, TextField, Segmented } from "dialogs.slint";
+import { Button, IconButton, Switch, PillSwitch, SectionLabel, Kbd, Scroll, Focusable, Focus, FocusTrap } from "controls.slint";
+import { JoinDialog, TextField, Segmented, Modal } from "dialogs.slint";
 import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
 import { Sidebar, Hero, HeroSubject, Card, SettingRow, NavItem, NavGroup, HeroInfo } from "shell.slint";
@@ -21,7 +21,7 @@ import { SoundPage, SoundView, SoundDevice, SoundApp, SoundCard } from "sound.sl
 import { BluetoothPage, BtAudio, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, FilesView, FileRow, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, Focus, FilesView, FileRow, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -29,16 +29,33 @@ export struct Row { id: string, name: string, meta: string, tone: string, icon: 
 export struct Section { title: string, rows: [Row] }
 export struct HostRow { name: string, address: string, since: string }
 
-component ListRow inherits Rectangle {
+// Space selects it, Enter selects it and connects (the window's Enter, for the selection), and
+// the arrow keys move the selection, taking the focus along.
+component ListRow inherits Focusable {
     in property <Row> entry;
+    /// Whether the selected row scrolls into view (after a move with the keyboard).
+    in property <bool> follow;
     callback clicked();
+    /// Its place in the window, for the list to scroll to.
+    callback reveal(length, length);
     height: 52px;
     border-radius: 8px;
-    background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    // The list would cut off a ring outside it.
+    ring-gap: -2px;
+    focus-key: "row:" + entry.id;
+    selected-key: entry.selected ? "list:selected" : "";
+    background: entry.selected ? Theme.accent-soft-bg : self.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
     accessible-label: entry.name + ", " + entry.meta;
     accessible-item-selected: entry.selected;
     accessible-action-default => { clicked(); }
+    activated => { root.clicked(); }
+    key(event) => {
+        if event.text == Key.Return { root.clicked(); root.focus(); return reject; }
+        // The window moves the selection; the focus goes with it.
+        if event.text == Key.UpArrow || event.text == Key.DownArrow { Focus.key = "list:selected"; }
+        reject
+    }
     HorizontalLayout {
         padding-left: root.entry.indent ? 34px : 10px;
         padding-right: 10px;
@@ -54,7 +71,12 @@ component ListRow inherits Rectangle {
         }
         if root.entry.secure: Icon { name: "lock"; tint: Theme.faint; size: 14px; y: (parent.height - 14px) / 2; }
     }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    // Rows are made anew with each update, so this runs once the new selected row is laid out.
+    Timer {
+        interval: 1ms;
+        running: root.follow && root.entry.selected;
+        triggered => { self.running = false; root.reveal(root.absolute-position.y, root.height); }
+    }
 }
 
 export component MainWindow inherits Window {
@@ -64,13 +86,15 @@ export component MainWindow inherits Window {
     in property <string> hostname;
     in property <string> page: "wifi";
     in property <string> page-title: "Wi-Fi";
-    // The Network page: its hero (the connection in use) and the buttons on it.
-    property <bool> network-page: root.page == "wifi" || root.page == "wired" || root.page == "vpn" || root.page == "hotspot" || root.page == "saved";
+    // Network's pages (its sub-items in the sidebar): the hero, the line under its title, and the
+    // buttons for what it shows.
+    property <bool> network-page: root.page == "wifi" || root.page == "wired" || root.page == "vpn" || root.page == "hotspot";
     in property <string> net-sub;
     in property <HeroInfo> net-hero;
     in property <[Action]> net-hero-actions;
     in property <bool> wifi-available;
-    // Header of the list page.
+    // Above the list: "4 networks in range", the search field and Rescan.
+    in property <string> count;
     in property <bool> show-wifi-switch;
     in property <bool> wifi-on: true;
     in property <bool> show-rescan;
@@ -128,7 +152,7 @@ export component MainWindow inherits Window {
     // A bold first line for the message ("Couldn't connect to Aster Café"), and a button on it.
     in property <string> message-title;
     in property <string> message-action;
-    // The confirmation dialog (forgetting a connection).
+    // The confirmation dialog (forgetting a connection or a device, changing a display profile).
     in property <bool> confirm-open;
     in property <string> confirm-title;
     in property <string> confirm-text;
@@ -173,7 +197,6 @@ export component MainWindow inherits Window {
     // The hotspot page.
     in property <bool> hotspot-available;
     in property <bool> hotspot-on;
-    in property <string> hotspot-status;
     in property <string> hotspot-warning;
     in property <image> hotspot-qr;
     in property <[HostRow]> hotspot-clients;
@@ -209,6 +232,8 @@ export component MainWindow inherits Window {
     out property <bool> prefers-dark: Palette.color-scheme != ColorScheme.light;
 
     callback navigate(string);
+    /// The chevron of a sidebar item with sub-items (Network).
+    callback nav-fold(string);
     callback nav-search(string);
     callback nav-search-accepted();
     /// A button on the Network hero, for the connection it shows.
@@ -258,6 +283,15 @@ export component MainWindow inherits Window {
     pure callback join-check(string, string, int, string) -> bool;
     // Incremented to move the keyboard focus into the search field.
     property <int> search-focus-requests;
+    // Set by the arrow keys, so the selected row stays in view; scrolling clears it.
+    property <bool> follow-selection;
+    // The window's height, set when it changes rather than bound to it: the height depends on
+    // the layout, and the heroes' heights on this.
+    property <length> window-height: 760px;
+    changed height => { root.window-height = root.height; }
+    init => { root.window-height = root.height; }
+    // A short window: the heroes are smaller, so the lists keep their room.
+    property <bool> compact: root.window-height < 720px;
 
     title: "Lituus";
     icon: @image-url("assets/logo-mark.svg");
@@ -276,11 +310,16 @@ export component MainWindow inherits Window {
     forward-focus: keys;
     keys := FocusScope {
         init => { self.focus(); }
+        // It has the focus when no control does; not a stop of its own for Tab.
+        focus-on-tab-navigation: false;
         key-pressed(event) => {
+            // The confirmation dialog is over everything: Esc cancels it, and the page gets no keys.
+            if root.confirm-open && event.text == Key.Escape { root.confirm-cancelled(); return accept; }
+            if root.confirm-open { return reject; }
             if event.modifiers.control && (event.text == "k" || event.text == "K") { root.nav-focus-requests += 1; return accept; }
             if event.text == "/" && root.show-search { root.search-focus-requests += 1; return accept; }
-            if event.text == Key.DownArrow { root.move-selection(1); return accept; }
-            if event.text == Key.UpArrow { root.move-selection(-1); return accept; }
+            if event.text == Key.DownArrow { root.follow-selection = true; root.move-selection(1); return accept; }
+            if event.text == Key.UpArrow { root.follow-selection = true; root.move-selection(-1); return accept; }
             if event.text == Key.Escape && root.editor-open && root.editor-routes != "" { root.editor-routes-done(false); return accept; }
             if event.text == Key.Escape && root.editor-open { root.editor-back(); return accept; }
             if root.editor-open { return reject; }
@@ -292,9 +331,8 @@ export component MainWindow inherits Window {
             if event.text == Key.Escape && root.add-open { root.add-cancelled(); return accept; }
             if event.text == Key.Escape && root.share-open { root.share-closed(); return accept; }
             if event.text == Key.Escape && root.hostname-open { root.hostname-cancelled(); return accept; }
-            if event.text == "e" && root.has-details && !root.confirm-open && !root.join-open { root.action("edit"); return accept; }
-            if event.text == Key.Return && !root.confirm-open && !root.join-open { root.activate-selected(); return accept; }
-            if event.text == Key.Escape && root.confirm-open { root.confirm-cancelled(); return accept; }
+            if event.text == "e" && root.has-details && !root.join-open { root.action("edit"); return accept; }
+            if event.text == Key.Return && !root.join-open { root.activate-selected(); return accept; }
             if event.text == Key.Escape && root.join-open { root.join-cancelled(); return accept; }
             reject
         }
@@ -307,6 +345,7 @@ export component MainWindow inherits Window {
                 hostname: root.hostname;
                 focus-requests: root.nav-focus-requests;
                 navigate(id) => { root.navigate(id); keys.focus(); }
+                fold(id) => { root.nav-fold(id); }
                 search(text) => { root.nav-search(text); }
                 search-accepted => { root.nav-search-accepted(); }
                 search-left => { keys.focus(); }
@@ -325,7 +364,7 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         padding-left: 16px;
                         spacing: 10px;
-                        Icon { name: "warning"; tint: Theme.warn-text; y: (parent.height - 16px) / 2; }
+                        VerticalLayout { alignment: center; Icon { name: "warning"; tint: Theme.warn-text; } }
                         Text { text: root.banner; color: Theme.warn-text; font-size: 13px; vertical-alignment: center; }
                     }
                 }
@@ -335,17 +374,19 @@ export component MainWindow inherits Window {
                     padding-left: 22px;
                     padding-right: 22px;
                     spacing: 14px;
-                    // Network: Wi-Fi, Wired, VPN, Hotspot and Saved are its tabs.
+                    // Network's pages: Wi-Fi, Wired, VPN and Hotspot, each with its hero.
                     if root.network-page: Hero {
-                        title: "Network";
+                        title: root.page-title;
                         sub: root.net-sub;
-                        hero-height: 206px;
+                        hero-height: root.compact ? 136px : 206px;
+                        compact: root.compact;
+                        aside: net-tools.width + 18px;
                         HeroSubject {
                             x: 24px;
-                            y: parent.height - self.height - 22px;
+                            y: parent.height - self.height - (root.compact ? 16px : 22px);
                             width: parent.width - 48px - hero-actions.width - 20px;
-                            height: 96px;
-                            circle: 88px;
+                            height: root.compact ? 56px : 96px;
+                            compact: root.compact;
                             info: root.net-hero;
                         }
                         hero-actions := HorizontalLayout {
@@ -355,6 +396,7 @@ export component MainWindow inherits Window {
                             height: 34px;
                             spacing: 8px;
                             for a in root.net-hero-actions: Button {
+                                focus-key: "hero:" + a.id;
                                 label: a.label;
                                 kind: a.kind;
                                 enabled: a.enabled;
@@ -362,18 +404,19 @@ export component MainWindow inherits Window {
                                 clicked => { root.hero-action(a.id); keys.focus(); }
                             }
                         }
-                        HorizontalLayout {
+                        net-tools := HorizontalLayout {
                             x: parent.width - self.width - 18px;
                             y: 18px;
                             width: self.preferred-width;
                             height: 34px;
                             spacing: 8px;
-                            if root.wifi-available: Rectangle {
+                            if root.page == "wifi" && root.wifi-available: Rectangle {
                                 width: wifi-pill.preferred-width;
                                 border-radius: 8px;
                                 border-width: 1px;
                                 border-color: Theme.ctrl-border;
                                 background: Theme.input-bg;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.wifi-switched(); } }
                                 wifi-pill := HorizontalLayout {
                                     padding-left: 12px;
                                     padding-right: 6px;
@@ -388,293 +431,318 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            IconButton { icon: "plus"; label: "Add a connection"; width: 34px; height: 34px; clicked => { root.add-clicked(); } }
+                            if root.page == "hotspot" && root.hotspot-available: Rectangle {
+                                width: hotspot-pill.preferred-width;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: Theme.ctrl-border;
+                                background: Theme.input-bg;
+                                TouchArea { mouse-cursor: pointer; clicked => { root.hotspot-toggled(); } }
+                                hotspot-pill := HorizontalLayout {
+                                    padding-left: 12px;
+                                    padding-right: 6px;
+                                    spacing: 10px;
+                                    Text { text: "Hotspot"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+                                    Switch {
+                                        on: root.hotspot-on;
+                                        label: "Hotspot";
+                                        switch-width: 40px;
+                                        y: (parent.height - self.height) / 2;
+                                        toggled => { root.hotspot-toggled(); }
+                                    }
+                                }
+                            }
+                            if root.page != "hotspot": IconButton { icon: "plus"; label: "Add a connection"; width: 34px; height: 34px; clicked => { root.add-clicked(); } }
                         }
                     }
-                    if root.network-page: HorizontalLayout {
-                        height: 40px;
-                        spacing: 10px;
-                        Segmented {
-                            label: "Network";
-                            horizontal-stretch: 0;
-                            options: ["Wi-Fi", "Wired", "VPN", "Hotspot", "Saved"];
-                            selected: root.page == "wired" ? 1 : root.page == "vpn" ? 2 : root.page == "hotspot" ? 3 : root.page == "saved" ? 4 : 0;
-                            changed(i) => { root.navigate(i == 1 ? "wired" : i == 2 ? "vpn" : i == 3 ? "hotspot" : i == 4 ? "saved" : "wifi"); keys.focus(); }
+                    // Below the hero, the page scrolls when the window is too short for the list
+                    // and details at their smallest.
+                    if root.network-page: Scroll {
+                        vertical-stretch: 1;
+                        fill: true;
+                        spacing: 14px;
+                        bar-inset: -16px;
+                        if root.network-page && root.page != "hotspot" && (root.count != "" || root.show-search): HorizontalLayout {
+                            height: 34px;
+                            spacing: 10px;
+                            Text { text: root.count; color: Theme.muted; font-size: 13px; vertical-alignment: center; overflow: elide; }
+                            Rectangle { horizontal-stretch: 1; }
+                            if root.show-search: Rectangle {
+                                property <int> focus-requests: root.search-focus-requests;
+                                changed focus-requests => { search-input.focus(); }
+                                width: 260px;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: search-input.has-focus ? Theme.accent : Theme.border2;
+                                background: Theme.input-bg;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    spacing: 8px;
+                                    Icon { name: "search"; tint: Theme.faint; size: 15px; y: (parent.height - 15px) / 2; }
+                                    Rectangle {
+                                        horizontal-stretch: 1;
+                                        search-input := TextInput {
+                                            color: Theme.text;
+                                            font-size: 13px;
+                                            vertical-alignment: center;
+                                            single-line: true;
+                                            accessible-label: root.search-placeholder;
+                                            edited => { root.search(self.text); }
+                                            key-pressed(event) => {
+                                                if event.text == Key.Escape { self.text = ""; root.search(""); keys.focus(); return accept; }
+                                                reject
+                                            }
+                                        }
+                                        if search-input.text == "": Text { text: root.search-placeholder; color: Theme.faint; font-size: 13px; vertical-alignment: center; x: 0; }
+                                    }
+                                    Rectangle {
+                                        width: 18px;
+                                        height: 16px;
+                                        y: (parent.height - self.height) / 2;
+                                        border-width: 1px;
+                                        border-color: Theme.ctrl-border;
+                                        border-radius: 4px;
+                                        Text { text: "/"; color: Theme.faint; font-size: 11px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
+                                    }
+                                }
+                            }
+                            if root.show-rescan && root.wifi-on: IconButton { icon: "rescan"; label: "Rescan"; width: 34px; height: 34px; clicked => { root.rescan(); } }
                         }
-                        Rectangle { horizontal-stretch: 1; }
-                        if root.page != "hotspot" && root.show-search && root.empty-title == "": Rectangle {
-                            property <int> focus-requests: root.search-focus-requests;
-                            changed focus-requests => { search-input.focus(); }
-                            width: 260px;
-                            border-radius: 10px;
-                            border-width: 1px;
-                            border-color: search-input.has-focus ? Theme.accent : Theme.border2;
-                            background: Theme.input-bg;
-                            HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 8px;
-                                Icon { name: "search"; tint: Theme.faint; size: 15px; y: (parent.height - 15px) / 2; }
-                                Rectangle {
-                                    horizontal-stretch: 1;
-                                    search-input := TextInput {
-                                        color: Theme.text;
-                                        font-size: 13px;
-                                        vertical-alignment: center;
-                                        single-line: true;
-                                        accessible-label: root.search-placeholder;
-                                        edited => { root.search(self.text); }
-                                        key-pressed(event) => {
-                                            if event.text == Key.Escape { self.text = ""; root.search(""); keys.focus(); return accept; }
-                                            reject
+                        if root.network-page && root.page != "hotspot" && root.placeholder == "": HorizontalLayout {
+                            vertical-stretch: 1;
+                            spacing: 14px;
+                            list-card := Card {
+                                horizontal-stretch: 1;
+                                min-width: 330px;
+                                preferred-width: 440px;
+                                VerticalLayout {
+                                    padding: 10px;
+                                    spacing: 10px;
+                            if root.message != "": Rectangle {
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-border : Theme.ctrl-border;
+                                background: root.message-tone == "warn" ? Theme.warn-bg : transparent;
+                                accessible-role: text;
+                                accessible-label: root.message;
+                                HorizontalLayout {
+                                    padding: 10px;
+                                    padding-right: 6px;
+                                    spacing: 10px;
+                                    // On the first line of the text.
+                                    VerticalLayout {
+                                        alignment: start;
+                                        Icon {
+                                            name: root.message-tone == "info" ? "error" : root.message-tone == "warn" ? "warning" : "error";
+                                            tint: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-text : Theme.muted;
                                         }
                                     }
-                                    if search-input.text == "": Text { text: root.search-placeholder; color: Theme.faint; font-size: 13px; vertical-alignment: center; x: 0; }
-                                }
-                                Rectangle {
-                                    width: 18px;
-                                    height: 16px;
-                                    y: (parent.height - self.height) / 2;
-                                    border-width: 1px;
-                                    border-color: Theme.ctrl-border;
-                                    border-radius: 4px;
-                                    Text { text: "/"; color: Theme.faint; font-size: 11px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
+                                    VerticalLayout {
+                                        spacing: 2px;
+                                        horizontal-stretch: 1;
+                                        if root.message-title != "": Text {
+                                            text: root.message-title;
+                                            color: root.message-tone == "danger" ? Theme.danger : Theme.text;
+                                            font-size: 13px;
+                                            font-weight: 600;
+                                            wrap: word-wrap;
+                                        }
+                                        Text {
+                                            text: root.message;
+                                            color: root.message-tone == "warn" ? Theme.warn-text : root.message-title != "" ? Theme.muted : Theme.text;
+                                            font-size: 13px;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                    if root.message-action != "": Button {
+                                        label: root.message-action;
+                                        button-height: 28px;
+                                        min-width: self.preferred-width;
+                                        y: (parent.height - self.height) / 2;
+                                        clicked => { root.message-action-clicked(); }
+                                    }
+                                    Focusable {
+                                        width: 24px;
+                                        height: 24px;
+                                        border-radius: 6px;
+                                        background: self.has-hover ? Theme.hover : transparent;
+                                        accessible-role: button;
+                                        accessible-label: "Dismiss";
+                                        accessible-action-default => { root.dismiss-message(); }
+                                        activated => { root.dismiss-message(); }
+                                        Path {
+                                            width: 12px; height: 12px;
+                                            viewbox-width: 16; viewbox-height: 16;
+                                            stroke: Theme.faint; stroke-width: 1.6px; fill: transparent;
+                                            commands: "M4 4l8 8M12 4l-8 8";
+                                        }
+                                    }
                                 }
                             }
-                        }
-                        if root.show-rescan && root.wifi-on: IconButton { icon: "rescan"; label: "Rescan"; width: 40px; height: 40px; clicked => { root.rescan(); } }
-                    }
-                    if root.network-page && root.page != "hotspot" && root.placeholder == "": HorizontalLayout {
-                        vertical-stretch: 1;
-                        spacing: 14px;
-                        Card {
-                            horizontal-stretch: 1;
-                            min-width: 330px;
-                            preferred-width: 440px;
-                            VerticalLayout {
-                                padding: 10px;
-                                spacing: 10px;
-                        if root.message != "": Rectangle {
-                            border-radius: 8px;
-                            border-width: 1px;
-                            border-color: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-border : Theme.ctrl-border;
-                            background: root.message-tone == "warn" ? Theme.warn-bg : transparent;
-                            accessible-role: text;
-                            accessible-label: root.message;
-                            HorizontalLayout {
-                                padding: 10px;
-                                padding-right: 6px;
-                                spacing: 10px;
-                                Icon {
-                                    name: root.message-tone == "info" ? "error" : root.message-tone == "warn" ? "warning" : "error";
-                                    tint: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-text : Theme.muted;
-                                    y: 2px;
-                                }
-                                VerticalLayout {
-                                    spacing: 2px;
-                                    horizontal-stretch: 1;
-                                    if root.message-title != "": Text {
-                                        text: root.message-title;
-                                        color: root.message-tone == "danger" ? Theme.danger : Theme.text;
-                                        font-size: 13px;
-                                        font-weight: 600;
-                                        wrap: word-wrap;
-                                    }
-                                    Text {
-                                        text: root.message;
-                                        color: root.message-tone == "warn" ? Theme.warn-text : root.message-title != "" ? Theme.muted : Theme.text;
-                                        font-size: 13px;
-                                        wrap: word-wrap;
-                                    }
-                                }
-                                if root.message-action != "": Button {
-                                    label: root.message-action;
-                                    button-height: 28px;
-                                    min-width: self.preferred-width;
-                                    y: (parent.height - self.height) / 2;
-                                    clicked => { root.message-action-clicked(); }
-                                }
-                                Rectangle {
-                                    width: 24px;
-                                    height: 24px;
-                                    border-radius: 6px;
-                                    background: close-touch.has-hover ? Theme.sel-bg : transparent;
-                                    accessible-role: button;
-                                    accessible-label: "Dismiss";
-                                    accessible-action-default => { root.dismiss-message(); }
-                                    Path {
-                                        width: 12px; height: 12px;
-                                        viewbox-width: 16; viewbox-height: 16;
-                                        stroke: Theme.faint; stroke-width: 1.6px; fill: transparent;
-                                        commands: "M4 4l8 8M12 4l-8 8";
-                                    }
-                                    close-touch := TouchArea { mouse-cursor: pointer; clicked => { root.dismiss-message(); } }
-                                }
-                            }
-                        }
-                        if root.empty-title == "": Flickable {
-                            vertical-stretch: 1;
-                            content-height: rows.preferred-height;
-                            rows := VerticalLayout {
-                                alignment: start;
+                            // At least three rows before the page itself scrolls.
+                            if root.empty-title == "": list := Scroll {
+                                vertical-stretch: 1;
+                                min-height: 160px;
                                 spacing: 2px;
+                                bar-inset: -8px;
+                                scrolled => { root.follow-selection = false; }
                                 for section[si] in root.sections: VerticalLayout {
                                     spacing: 2px;
                                     padding-top: si == 0 ? 4px : 14px;
                                     SectionLabel { text: section.title; x: 8px; height: 22px; vertical-alignment: center; }
                                     for row in section.rows: ListRow {
                                         entry: row;
-                                        clicked => { root.select(row.id); keys.focus(); }
+                                        follow: root.follow-selection;
+                                        reveal(top, size) => { list.reveal(top, size); }
+                                        clicked => { root.follow-selection = false; root.select(row.id); keys.focus(); }
                                     }
                                 }
                             }
-                        }
-                        if root.empty-title != "": VerticalLayout {
-                            vertical-stretch: 1;
-                            alignment: center;
-                            spacing: 14px;
-                            Icon { name: root.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
-                            Text { text: root.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
-                            Text { text: root.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
-                            if root.empty-action != "": HorizontalLayout {
+                            if root.empty-title != "": VerticalLayout {
+                                vertical-stretch: 1;
                                 alignment: center;
-                                Button { label: root.empty-action; kind: "primary"; button-height: 36px; clicked => { root.empty-action-clicked(); } }
-                            }
-                        }
-                        if root.bottom-label != "" && root.empty-title == "": Rectangle {
-                            height: 36px;
-                            border-radius: 8px;
-                            border-width: 1px;
-                            border-color: Theme.ctrl-border;
-                            background: bottom-touch.has-hover ? Theme.sel-bg : transparent;
-                            accessible-role: button;
-                            accessible-label: root.bottom-label;
-                            accessible-action-default => { root.bottom-clicked(); }
-                            Text { text: root.bottom-label; color: Theme.icon-soft; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
-                            bottom-touch := TouchArea { mouse-cursor: pointer; clicked => { root.bottom-clicked(); } }
-                        }
-                            }
-                        }
-                        if root.has-details: DetailsPane {
-                            horizontal-stretch: 1;
-                            details: root.details;
-                            action(id) => { root.action(id); }
-                            toggle(id) => { root.toggle(id); }
-                        }
-                    }
-                    if root.placeholder != "" && root.network-page: Card {
-                        vertical-stretch: 1;
-                        Text { text: root.placeholder; color: Theme.muted; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; width: 70%; }
-                    }
-                    if root.page == "hotspot": Card {
-                        vertical-stretch: 1;
-                    if !root.hotspot-available: VerticalLayout {
-                        alignment: center;
-                        spacing: 12px;
-                        Icon { name: "hotspot"; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
-                        Text { text: "No Wi-Fi card"; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
-                        Text { text: "A hotspot needs a Wi-Fi card to share the connection over."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
-                    }
-                    if root.hotspot-available: HorizontalLayout {
-                        padding: 16px;
-                        spacing: 40px;
-                        VerticalLayout {
-                            spacing: 16px;
-                            alignment: start;
-                            horizontal-stretch: 1;
-                            HorizontalLayout {
-                                height: 32px;
-                                Text { text: "Hotspot"; color: Theme.text; font-size: 18px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
-                                Switch { on: root.hotspot-on; label: "Hotspot"; switch-width: 40px; y: (parent.height - self.height) / 2; toggled => { root.hotspot-toggled(); } }
-                            }
-                            HorizontalLayout {
-                                spacing: 8px;
-                                alignment: start;
-                                Rectangle { width: 8px; height: 8px; border-radius: 4px; y: (parent.height - 8px) / 2; background: root.hotspot-on ? Theme.accent : Theme.faint; }
-                                Text { text: root.hotspot-status; color: root.hotspot-on ? Theme.accent : Theme.muted; font-size: 13px; }
-                            }
-                            for field[i] in ["Network name", "Password"]: HorizontalLayout {
-                                spacing: 10px;
-                                Text { text: field; color: Theme.text; font-size: 13px; width: 168px; vertical-alignment: center; }
-                                if i == 0: TextField { text <=> root.hotspot-ssid; mono: true; label: "Network name"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
-                                if i == 1: TextField { text <=> root.hotspot-password; mono: true; label: "Password"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
-                                if i == 1: Button { label: "New"; button-height: 36px; horizontal-stretch: 0; enabled: !root.hotspot-on; clicked => { root.hotspot-new-password(); } }
-                            }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                Text { text: "Security"; color: Theme.text; font-size: 13px; width: 168px; }
-                                Text { text: "WPA2 Personal"; color: Theme.text; font-size: 13px; }
-                            }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                Text { text: "Band"; color: Theme.text; font-size: 13px; width: 168px; vertical-alignment: center; }
-                                HorizontalLayout {
-                                    alignment: start;
-                                    Segmented { options: ["Automatic", "2.4 GHz", "5 GHz"]; selected <=> root.hotspot-band; label: "Band"; }
+                                spacing: 14px;
+                                HorizontalLayout { alignment: center; Icon { name: root.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
+                                Text { text: root.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+                                Text { text: root.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
+                                if root.empty-action != "": HorizontalLayout {
+                                    alignment: center;
+                                    Button { label: root.empty-action; kind: "primary"; button-height: 36px; clicked => { root.empty-action-clicked(); } }
                                 }
                             }
-                            if root.hotspot-warning != "": Rectangle {
+                            if root.bottom-label != "" && root.empty-title == "": Focusable {
+                                height: 36px;
                                 border-radius: 8px;
                                 border-width: 1px;
-                                border-color: Theme.warn-border;
-                                background: Theme.warn-bg;
-                                height: warn.preferred-height;
-                                warn := HorizontalLayout {
-                                    padding: 10px;
-                                    spacing: 10px;
-                                    Icon { name: "warning"; tint: Theme.warn-text; y: 2px; }
-                                    Text { text: root.hotspot-warning; color: Theme.warn-text; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
+                                border-color: Theme.ctrl-border;
+                                ring-gap: -2px;
+                                background: self.has-hover ? Theme.hover : transparent;
+                                accessible-role: button;
+                                accessible-label: root.bottom-label;
+                                accessible-action-default => { root.bottom-clicked(); }
+                                activated => { root.bottom-clicked(); }
+                                Text { text: root.bottom-label; color: Theme.icon-soft; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
                                 }
                             }
-                            if root.hotspot-on: VerticalLayout {
-                                spacing: 8px;
-                                SectionLabel { text: root.hotspot-clients.length == 0 ? "NO DEVICES YET" : "CONNECTED DEVICES · " + root.hotspot-clients.length; }
-                                for c in root.hotspot-clients: Rectangle {
-                                    height: 50px;
-                                    border-radius: 8px;
-                                    border-width: 1px;
-                                    border-color: Theme.border2;
+                            if root.has-details: DetailsPane {
+                                horizontal-stretch: 1;
+                                details: root.details;
+                                action(id) => { root.action(id); }
+                                toggle(id) => { root.toggle(id); }
+                            }
+                        }
+                        if root.placeholder != "" && root.network-page: Card {
+                            vertical-stretch: 1;
+                            Text { text: root.placeholder; color: Theme.muted; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; width: 70%; }
+                        }
+                        if root.page == "hotspot" && !root.hotspot-available: Card {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 12px;
+                                HorizontalLayout { alignment: center; Icon { name: "hotspot"; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
+                                Text { text: "No Wi-Fi card"; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+                                Text { text: "A hotspot needs a Wi-Fi card to share the connection over."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
+                            }
+                        }
+                        // The switch and the state are in the hero; the card is as tall as the form.
+                        if root.page == "hotspot" && root.hotspot-available: Card {
+                            height: hotspot-form.preferred-height;
+                            hotspot-form := HorizontalLayout {
+                                padding: 16px;
+                                spacing: 40px;
+                                VerticalLayout {
+                                    spacing: 16px;
+                                    alignment: start;
+                                    horizontal-stretch: 1;
+                                    for field[i] in ["Network name", "Password"]: HorizontalLayout {
+                                        spacing: 10px;
+                                        Text { text: field; color: Theme.text; font-size: 13px; width: 168px; vertical-alignment: center; }
+                                        if i == 0: TextField { text <=> root.hotspot-ssid; mono: true; label: "Network name"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
+                                        if i == 1: TextField { text <=> root.hotspot-password; mono: true; label: "Password"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
+                                        if i == 1: Button { label: "New"; button-height: 36px; horizontal-stretch: 0; enabled: !root.hotspot-on; clicked => { root.hotspot-new-password(); } }
+                                    }
                                     HorizontalLayout {
-                                        padding-left: 12px;
-                                        padding-right: 12px;
-                                        VerticalLayout {
-                                            alignment: center;
-                                            horizontal-stretch: 1;
-                                            Text { text: c.name; color: Theme.text; font-weight: 500; }
-                                            Text { text: c.address; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; }
+                                        spacing: 10px;
+                                        Text { text: "Security"; color: Theme.text; font-size: 13px; width: 168px; }
+                                        Text { text: "WPA2 Personal"; color: Theme.text; font-size: 13px; }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 10px;
+                                        Text { text: "Band"; color: Theme.text; font-size: 13px; width: 168px; vertical-alignment: center; }
+                                        HorizontalLayout {
+                                            alignment: start;
+                                            Segmented { options: ["Automatic", "2.4 GHz", "5 GHz"]; selected <=> root.hotspot-band; label: "Band"; }
                                         }
-                                        Text { text: c.since; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                                    }
+                                    if root.hotspot-warning != "": Rectangle {
+                                        border-radius: 8px;
+                                        border-width: 1px;
+                                        border-color: Theme.warn-border;
+                                        background: Theme.warn-bg;
+                                        height: warn.preferred-height;
+                                        warn := HorizontalLayout {
+                                            padding: 10px;
+                                            spacing: 10px;
+                                            // On the first line of the text.
+                                            VerticalLayout { alignment: start; Icon { name: "warning"; tint: Theme.warn-text; } }
+                                            Text { text: root.hotspot-warning; color: Theme.warn-text; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
+                                        }
+                                    }
+                                    if root.hotspot-on: VerticalLayout {
+                                        spacing: 8px;
+                                        SectionLabel { text: root.hotspot-clients.length == 0 ? "NO DEVICES YET" : "CONNECTED DEVICES · " + root.hotspot-clients.length; }
+                                        for c in root.hotspot-clients: Rectangle {
+                                            height: 50px;
+                                            border-radius: 8px;
+                                            border-width: 1px;
+                                            border-color: Theme.border2;
+                                            HorizontalLayout {
+                                                padding-left: 12px;
+                                                padding-right: 12px;
+                                                VerticalLayout {
+                                                    alignment: center;
+                                                    horizontal-stretch: 1;
+                                                    Text { text: c.name; color: Theme.text; font-weight: 500; }
+                                                    Text { text: c.address; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; }
+                                                }
+                                                Text { text: c.since; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                                            }
+                                        }
                                     }
                                 }
+                                VerticalLayout {
+                                    alignment: start;
+                                    spacing: 12px;
+                                    Rectangle {
+                                        width: 220px;
+                                        height: 220px;
+                                        border-radius: 12px;
+                                        background: white;
+                                        Image { source: root.hotspot-qr; width: 200px; height: 200px; image-rendering: pixelated; }
+                                    }
+                                    Text { text: "Scan with a phone camera to join"; color: Theme.muted; font-size: 12px; horizontal-alignment: center; }
+                                }
                             }
                         }
-                        VerticalLayout {
-                            alignment: start;
-                            spacing: 12px;
-                            padding-top: 40px;
-                            Rectangle {
-                                width: 220px;
-                                height: 220px;
-                                border-radius: 12px;
-                                background: white;
-                                Image { source: root.hotspot-qr; width: 200px; height: 200px; image-rendering: pixelated; }
-                            }
-                            Text { text: "Scan with a phone camera to join"; color: Theme.muted; font-size: 12px; horizontal-alignment: center; }
-                        }
-                    }
                     }
                     if root.page == "bluetooth": Hero {
                         title: "Bluetooth";
                         sub: root.bt.hero-sub;
-                        hero-height: 206px;
+                        hero-height: root.compact ? 136px : 206px;
+                        compact: root.compact;
+                        aside: bt-tools.width + 18px;
                         if root.bt.state == "list": HeroSubject {
                             x: 24px;
-                            y: parent.height - self.height - 22px;
+                            y: parent.height - self.height - (root.compact ? 16px : 22px);
                             width: parent.width - 48px;
-                            height: 96px;
+                            height: root.compact ? 56px : 96px;
+                            compact: root.compact;
                             info: root.bt.hero;
                         }
-                        HorizontalLayout {
+                        bt-tools := HorizontalLayout {
                             x: parent.width - self.width - 18px;
                             y: 18px;
                             width: self.preferred-width;
@@ -682,35 +750,34 @@ export component MainWindow inherits Window {
                             spacing: 8px;
                             if root.bt.state == "list": IconButton { icon: "rescan"; label: "Look for devices again"; width: 34px; height: 34px; clicked => { root.bt-act("rescan", ""); keys.focus(); } }
                             if root.bt.state == "list": IconButton { icon: "gear"; label: "Adapter settings"; width: 34px; height: 34px; clicked => { root.bt-act("adapter", ""); } }
-                            if root.bt.state == "list" || root.bt.state == "off": Rectangle {
-                                width: bt-pill.preferred-width;
-                                border-radius: 8px;
-                                border-width: 1px;
-                                border-color: Theme.ctrl-border;
-                                background: Theme.input-bg;
-                                bt-pill := HorizontalLayout {
-                                    padding-left: 12px;
-                                    padding-right: 6px;
-                                    spacing: 10px;
-                                    Text { text: "Bluetooth"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
-                                    Switch {
-                                        on: root.bt.powered;
-                                        label: "Bluetooth";
-                                        switch-width: 40px;
-                                        y: (parent.height - self.height) / 2;
-                                        toggled => { root.bt-act("power", ""); keys.focus(); }
-                                    }
-                                }
+                            if root.bt.state == "list": PillSwitch {
+                                label: "Visible";
+                                on: root.bt.visible;
+                                note: root.bt.visible-left;
+                                toggled => { root.bt-act("visible", ""); keys.focus(); }
+                            }
+                            if root.bt.state == "list" || root.bt.state == "off": PillSwitch {
+                                label: "Bluetooth";
+                                on: root.bt.powered;
+                                toggled => { root.bt-act("power", ""); keys.focus(); }
                             }
                         }
                     }
-                    if root.page == "bluetooth": BluetoothPage {
+                    if root.page == "bluetooth": Scroll {
                         vertical-stretch: 1;
-                        page: root.bt;
-                        act(verb, argument) => { root.bt-act(verb, argument); keys.focus(); }
+                        fill: true;
+                        bar-inset: -16px;
+                        BluetoothPage {
+                            vertical-stretch: 1;
+                            page: root.bt;
+                            follow-selection <=> root.follow-selection;
+                            act(verb, argument) => { root.bt-act(verb, argument); keys.focus(); }
+                        }
                     }
                     if root.page == "displays": DisplaysPage {
                         vertical-stretch: 1;
+                        compact: root.compact;
+                        window-height: root.window-height;
                         view: root.displays;
                         tab <=> root.displays-tab;
                         page-tab <=> root.displays-page-tab;
@@ -719,6 +786,7 @@ export component MainWindow inherits Window {
                     }
                     if root.page == "sound": SoundPage {
                         vertical-stretch: 1;
+                        compact: root.compact;
                         page: root.sound;
                         tab <=> root.sound-tab;
                         act(verb, id, value) => { root.sound-act(verb, id, value); }
@@ -730,14 +798,18 @@ export component MainWindow inherits Window {
                         name-text: root.ap-name-text;
                         chips: root.ap-chips;
                     }
-                    if root.page == "settings": Card {
+                    if root.page == "settings": settings-scroll := Scroll {
+                        // Wide enough for the colour files beside the rest.
+                        property <bool> two-columns: self.width >= 1240px;
+                        // The columns follow its width, so its least width can't follow them; one
+                        // column fits the smallest window.
+                        min-width: 0;
                         vertical-stretch: 1;
-                        settings-scroll := Flickable {
-                            // Wide enough for the colour files beside the rest.
-                            property <bool> two-columns: self.width >= 1240px;
-                            content-height: settings-form.preferred-height;
-                            settings-form := HorizontalLayout {
-                                width: settings-scroll.width;
+                        fill: true;
+                        bar-inset: -16px;
+                        Card {
+                            vertical-stretch: 1;
+                            HorizontalLayout {
                                 padding: 22px;
                                 padding-top: 10px;
                                 spacing: 40px;
@@ -772,7 +844,7 @@ export component MainWindow inherits Window {
                                         SettingRow {
                                             label: o.label;
                                             description: o.sub;
-                                            Switch { on: o.on; label: o.label; y: (parent.height - self.height) / 2; toggled => { root.option-toggled(o.id); } }
+                                            Switch { on: o.on; label: o.label; focus-key: "option:" + o.id; y: (parent.height - self.height) / 2; toggled => { root.option-toggled(o.id); } }
                                         }
                                     }
                                     SectionLabel { text: "PASSWORDS"; height: 46px; vertical-alignment: bottom; }
@@ -801,9 +873,9 @@ export component MainWindow inherits Window {
                         spacing: 18px;
                         alignment: start;
                         Kbd { key: "Ctrl K"; label: "Find a setting"; }
-                        if root.network-page: Kbd { key: "/"; label: "Search"; }
-                        Kbd { key: "↑↓"; label: "Select"; }
-                        Kbd { key: "↵"; label: "Connect"; }
+                        if root.network-page && root.show-search: Kbd { key: "/"; label: "Search"; }
+                        if root.page != "hotspot": Kbd { key: "↑↓"; label: "Select"; }
+                        if root.page != "hotspot": Kbd { key: "↵"; label: "Connect"; }
                         if root.page == "bluetooth": Kbd { key: "p"; label: "Pair"; }
                         if root.page == "bluetooth": Kbd { key: "s"; label: "Look for devices"; }
                         // Lets the bar (and so the window) grow wider than its hints.
@@ -814,11 +886,36 @@ export component MainWindow inherits Window {
         }
     }
 
+    // A dialog that closes takes the keyboard focus with it, and not every dialog closes through
+    // its own buttons (the time after Apply runs out, NetworkManager withdraws its question, a
+    // choice in "Add a connection" opens the editor): the window's keys get it back, and then the
+    // control that had the focus before the dialog opened, if there was one.
+    property <bool> modal-open: root.confirm-open || root.join-open || root.add-open || root.hostname-open || root.share-open
+        || root.bt-pair-open || root.bt-adapter-open || root.bt-rename-open || root.files.sending || root.files.incoming
+        || (root.page == "displays" && (root.displays.keep-open || root.displays.config-open));
+    changed modal-open => { if !self.modal-open { keys.focus(); Focus.give-back(); } }
+
+    // The control with the focus can go away (a dialog closes, a button isn't offered any more),
+    // and Slint drops the focus with it: no key would arrive anywhere. While a control has the
+    // focus, it answers these probes; when one goes unanswered, the window takes the focus.
+    Timer {
+        interval: 150ms;
+        running: Focus.on-control;
+        triggered => {
+            if Focus.answer != Focus.probe {
+                Focus.on-control = false;
+                Focus.key = "";
+                keys.focus();
+            }
+            Focus.probe += 1;
+        }
+    }
+
     // The confirmation dialog, over everything.
     if root.confirm-open: Rectangle {
         background: #05060799;
         TouchArea { clicked => { root.confirm-cancelled(); } }
-        Rectangle {
+        FocusTrap {
             width: 420px;
             height: dialog.preferred-height;
             x: (parent.width - self.width) / 2;
@@ -841,8 +938,8 @@ export component MainWindow inherits Window {
                     padding-top: 6px;
                     spacing: 8px;
                     alignment: end;
-                    Button { label: "Cancel"; button-height: 36px; clicked => { root.confirm-cancelled(); } }
-                    Button { label: root.confirm-button; kind: "destructive"; button-height: 36px; clicked => { root.confirm-accepted(); } }
+                    Button { label: "Cancel"; button-height: 36px; clicked => { root.confirm-cancelled(); keys.focus(); } }
+                    Button { label: root.confirm-button; kind: "destructive"; button-height: 36px; clicked => { root.confirm-accepted(); keys.focus(); } }
                 }
             }
         }
@@ -908,168 +1005,128 @@ export component MainWindow inherits Window {
         add-allowed(i) => { root.editor-add-allowed(i); }
     }
 
-    if root.add-open: Rectangle {
-        background: #05060799;
-        TouchArea { clicked => { root.add-cancelled(); } }
-        Rectangle {
-            width: 660px;
-            height: add-form.preferred-height;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 14px;
-            border-width: 1px;
-            border-color: Theme.ctrl-border;
-            background: Theme.surface;
-            drop-shadow-blur: 40px;
-            drop-shadow-color: #00000080;
-            TouchArea {}
-            add-form := VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                Text { text: "Add a connection"; color: Theme.text; font-size: 17px; font-weight: 600; }
-                GridLayout {
-                    spacing: 10px;
-                    for group[g] in ["NETWORKS", "VPN", "VIRTUAL INTERFACES"]: SectionLabel {
-                        text: group;
-                        col: 0;
-                        colspan: 3;
-                        row: g * 2;
-                    }
-                    for kind[i] in [
-                        { id: "wifi", icon: "wifi", title: "Wi-Fi", text: "Hidden and Enterprise (802.1X) too", ready: true },
-                        { id: "wired", icon: "wired", title: "Wired", text: "Ethernet, DHCP or static", ready: true },
-                        { id: "hotspot", icon: "hotspot", title: "Hotspot", text: "Share a connection over Wi-Fi", ready: true },
-                        { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Built in. Empty or from a .conf", ready: true },
-                        { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "By hand or from an .ovpn", ready: true },
-                        { id: "import", icon: "saved", title: "Import from file…", text: "A .conf or an .ovpn", ready: true },
-                        { id: "vlan", icon: "vlan", title: "VLAN", text: "A tagged network on a wired device", ready: true },
-                        { id: "bridge", icon: "bridge", title: "Bridge", text: "Join devices into one network, e.g. for VMs", ready: true },
-                        { id: "bond", icon: "bond", title: "Bond", text: "Combine devices for failover or speed", ready: true },
-                    ]: Rectangle {
-                        col: mod(i, 3);
-                        row: floor(i / 3) * 2 + 1;
-                        width: 196px;
-                        height: 76px;
-                        border-radius: 10px;
-                        border-width: 1px;
-                        border-color: Theme.border2;
-                        background: tile.has-hover && kind.ready ? Theme.sel-bg : transparent;
-                        opacity: kind.ready ? 1 : 0.5;
-                        accessible-role: button;
-                        accessible-label: kind.title;
-                        accessible-enabled: kind.ready;
-                        accessible-action-default => { if kind.ready { root.add-chosen(kind.id); } }
-                        HorizontalLayout {
-                            padding: 14px;
-                            spacing: 12px;
-                            Icon { name: kind.icon; tint: Theme.accent; y: 2px; }
-                            VerticalLayout {
-                                spacing: 3px;
-                                alignment: start;
-                                Text { text: kind.title; color: Theme.text; font-weight: 600; font-size: 14px; }
-                                Text { text: kind.text; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
-                            }
+    if root.add-open: add-modal := Modal {
+        card-width: min(760px, self.width - 32px);
+        label: "Add a connection";
+        backdrop-dismisses: true;
+        dismissed => { root.add-cancelled(); keys.focus(); }
+        Text { text: "Add a connection"; color: Theme.text; font-size: 17px; font-weight: 600; }
+        for group in [
+            { title: "NETWORKS", kinds: [
+                { id: "wifi", icon: "wifi", title: "Wi-Fi", text: "Hidden and Enterprise (802.1X) too", ready: true },
+                { id: "wired", icon: "wired", title: "Wired", text: "Ethernet, DHCP or static", ready: true },
+                { id: "hotspot", icon: "hotspot", title: "Hotspot", text: "Share a connection over Wi-Fi", ready: true },
+            ] },
+            { title: "VPN", kinds: [
+                { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Built in. Empty or from a .conf", ready: true },
+                { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "By hand or from an .ovpn", ready: true },
+                { id: "openconnect", icon: "vpn", title: "AnyConnect", text: "Cisco, with Microsoft 365 sign‑in too", ready: true },
+                { id: "import", icon: "saved", title: "Import…", text: "A .conf, an .ovpn, or your openconnect-saml profiles", ready: true },
+            ] },
+            { title: "VIRTUAL INTERFACES", kinds: [
+                { id: "vlan", icon: "vlan", title: "VLAN", text: "A tagged network on a wired device", ready: true },
+                { id: "bridge", icon: "bridge", title: "Bridge", text: "Join devices into one network, e.g. for VMs", ready: true },
+                { id: "bond", icon: "bond", title: "Bond", text: "Combine devices for failover or speed", ready: true },
+            ] },
+        ]: VerticalLayout {
+            spacing: 10px;
+            SectionLabel { text: group.title; }
+            HorizontalLayout {
+                spacing: 10px;
+                for kind in group.kinds: Focusable {
+                    // Equal widths, and as tall as the text needs.
+                    width: (add-modal.card-width - 48px - (group.kinds.length - 1) * 10px) / group.kinds.length;
+                    min-height: max(76px, tile-text.min-height);
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: Theme.border2;
+                    enabled: kind.ready;
+                    background: self.has-hover ? Theme.hover : transparent;
+                    opacity: kind.ready ? 1 : 0.5;
+                    accessible-role: button;
+                    accessible-label: kind.title;
+                    accessible-enabled: kind.ready;
+                    accessible-action-default => { if kind.ready { root.add-chosen(kind.id); } }
+                    activated => { root.add-chosen(kind.id); }
+                    tile-text := HorizontalLayout {
+                        padding: 14px;
+                        spacing: 12px;
+                        VerticalLayout { alignment: start; Icon { name: kind.icon; tint: Theme.accent; } }
+                        VerticalLayout {
+                            spacing: 3px;
+                            alignment: start;
+                            Text { text: kind.title; color: Theme.text; font-weight: 600; font-size: 14px; wrap: word-wrap; }
+                            Text { text: kind.text; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
                         }
-                        tile := TouchArea { enabled: kind.ready; mouse-cursor: kind.ready ? pointer : default; clicked => { root.add-chosen(kind.id); } }
                     }
-                }
-                HorizontalLayout {
-                    padding-top: 6px;
-                    alignment: end;
-                    Button { label: "Cancel"; button-height: 36px; clicked => { root.add-cancelled(); keys.focus(); } }
                 }
             }
         }
-    }
-
-    if root.hostname-open: Rectangle {
-        background: #05060799;
-        TouchArea { clicked => { root.hostname-cancelled(); keys.focus(); } }
-        Rectangle {
-            width: 420px;
-            height: host-form.preferred-height;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 14px;
-            border-width: 1px;
-            border-color: Theme.ctrl-border;
-            background: Theme.surface;
-            drop-shadow-blur: 40px;
-            drop-shadow-color: #00000080;
-            TouchArea {}
-            host-form := VerticalLayout {
-                padding: 24px;
-                spacing: 12px;
-                Text { text: "Hostname"; color: Theme.text; font-size: 17px; font-weight: 600; }
-                Text { text: "The computer's name on the network. Changing it needs an admin password."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-                TextField {
-                    text <=> root.hostname-input;
-                    mono: true;
-                    autofocus: true;
-                    label: "Hostname";
-                    invalid: root.hostname-error != "";
-                    accepted => { if root.hostname-error == "" { root.hostname-save(); keys.focus(); } }
-                }
-                if root.hostname-error != "": Text { text: root.hostname-error; color: Theme.danger; font-size: 12px; }
-                HorizontalLayout {
-                    padding-top: 6px;
-                    spacing: 8px;
-                    alignment: end;
-                    Button { label: "Cancel"; button-height: 36px; clicked => { root.hostname-cancelled(); keys.focus(); } }
-                    Button { label: "Save"; kind: "primary"; button-height: 36px; enabled: root.hostname-error == ""; clicked => { root.hostname-save(); keys.focus(); } }
-                }
-            }
+        HorizontalLayout {
+            padding-top: 6px;
+            alignment: end;
+            Button { label: "Cancel"; button-height: 36px; clicked => { root.add-cancelled(); keys.focus(); } }
         }
     }
 
-    if root.share-open: Rectangle {
-        background: #05060799;
-        TouchArea { clicked => { root.share-closed(); keys.focus(); } }
-        Rectangle {
-            width: 400px;
-            height: share-form.preferred-height;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 14px;
-            border-width: 1px;
-            border-color: Theme.ctrl-border;
-            background: Theme.surface;
-            drop-shadow-blur: 40px;
-            drop-shadow-color: #00000080;
-            TouchArea {}
-            share-form := VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                VerticalLayout {
-                    spacing: 3px;
-                    Text { text: root.share-title; color: Theme.text; font-size: 17px; font-weight: 600; }
-                    Text { text: "Scan with a phone camera to join."; color: Theme.muted; font-size: 13px; }
-                }
-                HorizontalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 264px;
-                        height: 264px;
-                        border-radius: 14px;
-                        background: white;
-                        Image { source: root.share-qr; width: 240px; height: 240px; image-rendering: pixelated; }
-                    }
-                }
-                if root.share-password != "": HorizontalLayout {
-                    spacing: 12px;
-                    Text { text: "Password"; color: Theme.muted; font-size: 13px; width: 90px; vertical-alignment: center; }
-                    Rectangle {
-                        height: 30px;
-                        horizontal-stretch: 1;
-                        TextInput { text: root.share-password; read-only: true; color: Theme.text; font-family: "JetBrains Mono"; font-size: 13px; vertical-alignment: center; single-line: true; }
-                    }
-                }
-                HorizontalLayout {
-                    padding-top: 4px;
-                    alignment: end;
-                    Button { label: "Close"; button-height: 36px; clicked => { root.share-closed(); keys.focus(); } }
-                }
+    if root.hostname-open: Modal {
+        card-width: 420px;
+        card-spacing: 12px;
+        label: "Hostname";
+        dismissed => { root.hostname-cancelled(); keys.focus(); }
+        Text { text: "Hostname"; color: Theme.text; font-size: 17px; font-weight: 600; }
+        Text { text: "The computer's name on the network. Changing it needs an admin password."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+        TextField {
+            text <=> root.hostname-input;
+            mono: true;
+            autofocus: true;
+            label: "Hostname";
+            invalid: root.hostname-error != "";
+            accepted => { if root.hostname-error == "" { root.hostname-save(); keys.focus(); } }
+        }
+        if root.hostname-error != "": Text { text: root.hostname-error; color: Theme.danger; font-size: 12px; }
+        HorizontalLayout {
+            padding-top: 6px;
+            spacing: 8px;
+            alignment: end;
+            Button { label: "Cancel"; button-height: 36px; clicked => { root.hostname-cancelled(); keys.focus(); } }
+            Button { label: "Save"; kind: "primary"; button-height: 36px; enabled: root.hostname-error == ""; clicked => { root.hostname-save(); keys.focus(); } }
+        }
+    }
+
+    if root.share-open: Modal {
+        card-width: 400px;
+        label: root.share-title;
+        backdrop-dismisses: true;
+        dismissed => { root.share-closed(); keys.focus(); }
+        VerticalLayout {
+            spacing: 3px;
+            Text { text: root.share-title; color: Theme.text; font-size: 17px; font-weight: 600; }
+            Text { text: "Scan with a phone camera to join."; color: Theme.muted; font-size: 13px; }
+        }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 264px;
+                height: 264px;
+                border-radius: 14px;
+                background: white;
+                Image { source: root.share-qr; width: 240px; height: 240px; image-rendering: pixelated; }
             }
+        }
+        if root.share-password != "": HorizontalLayout {
+            spacing: 12px;
+            Text { text: "Password"; color: Theme.muted; font-size: 13px; width: 90px; vertical-alignment: center; }
+            Rectangle {
+                height: 30px;
+                horizontal-stretch: 1;
+                TextInput { text: root.share-password; read-only: true; color: Theme.text; font-family: "JetBrains Mono"; font-size: 13px; vertical-alignment: center; single-line: true; }
+            }
+        }
+        HorizontalLayout {
+            padding-top: 4px;
+            alignment: end;
+            Button { label: "Close"; button-height: 36px; clicked => { root.share-closed(); keys.focus(); } }
         }
     }
 
@@ -1081,6 +1138,7 @@ export component MainWindow inherits Window {
     if root.page == "displays" && root.displays.config-open: ConfigDialog {
         view: root.displays;
         closed => { root.displays-act("close-config", "", 0); keys.focus(); }
+        name-by-description => { root.displays-act("name-by-description", "", 0); }
     }
     if root.files.sending: SendFilesDialog {
         view: root.files;

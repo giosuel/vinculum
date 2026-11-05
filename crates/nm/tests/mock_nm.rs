@@ -474,8 +474,8 @@ async fn a_failed_attempt_says_why() {
     // Device: FAILED (120) from CONFIG (50), reason SUPPLICANT_DISCONNECT (8).
     emit(wifi.clone(), "org.freedesktop.NetworkManager.Device", "uuu", vec![120u32.into(), 50u32.into(), 8u32.into()])
         .await;
-    // Active connection: DEACTIVATED (4), reason DEVICE_DISCONNECTED (4).
-    emit(active.clone(), "org.freedesktop.NetworkManager.Connection.Active", "uu", vec![4u32.into(), 4u32.into()])
+    // Active connection: DEACTIVATED (4), reason DEVICE_DISCONNECTED (3).
+    emit(active.clone(), "org.freedesktop.NetworkManager.Connection.Active", "uu", vec![4u32.into(), 3u32.into()])
         .await;
     let outcome = tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap().unwrap();
     assert_eq!(outcome, Outcome::Failed("The network rejected the password.".into()));

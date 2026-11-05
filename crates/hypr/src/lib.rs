@@ -9,4 +9,4 @@ mod rules;
 pub use config::{ConfigFile, config_dir};
 pub use ipc::{Error, Hyprland};
 pub use model::{HardwareDetails, Mode, Monitor, Version, Workspace, WorkspaceRef, scale_is_valid, valid_scales};
-pub use rules::{MonitorRule, WorkspaceRule, file};
+pub use rules::{MonitorRule, Unreported, WorkspaceRule, file, unreported};

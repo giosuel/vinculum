@@ -17,7 +17,6 @@ pub enum Page {
     Vpn,
     Hotspot,
     Bluetooth,
-    Saved,
     Displays,
     Sound,
     Settings,
@@ -31,7 +30,6 @@ impl Page {
             "vpn" => Self::Vpn,
             "hotspot" => Self::Hotspot,
             "bluetooth" => Self::Bluetooth,
-            "saved" => Self::Saved,
             "displays" => Self::Displays,
             "sound" => Self::Sound,
             // Lituus's own look moved to Settings.
@@ -40,9 +38,18 @@ impl Page {
         })
     }
 
-    /// A tab of the Network page.
+    /// The page a sidebar item opens: Network opens its sub-page used last.
+    pub fn open(id: &str, last_network: Self) -> Option<Self> {
+        match id {
+            "network" if last_network.is_network() => Some(last_network),
+            "network" => Some(Self::Wifi),
+            _ => Self::from_id(id),
+        }
+    }
+
+    /// A page under Network in the sidebar.
     pub fn is_network(self) -> bool {
-        matches!(self, Self::Wifi | Self::Wired | Self::Vpn | Self::Hotspot | Self::Saved)
+        matches!(self, Self::Wifi | Self::Wired | Self::Vpn | Self::Hotspot)
     }
 
     pub fn id(self) -> &'static str {
@@ -52,7 +59,6 @@ impl Page {
             Self::Vpn => "vpn",
             Self::Hotspot => "hotspot",
             Self::Bluetooth => "bluetooth",
-            Self::Saved => "saved",
             Self::Displays => "displays",
             Self::Sound => "sound",
             Self::Settings => "settings",
@@ -68,6 +74,19 @@ pub struct UiState {
     pub search: String,
     /// The row whose last connection attempt failed, and why.
     pub failed: Option<(String, String)>,
+    /// The connections (by UUID) whose sign-in window is open.
+    pub signing_in: Vec<String>,
+}
+
+/// Goes to the page of a sidebar item (or the tray's, or the search's), with nothing selected.
+/// `last_network` is the Network sub-page used last, which clicking Network opens again.
+pub fn navigate(state: &mut UiState, last_network: &mut Page, id: &str) -> Option<Page> {
+    let page = Page::open(id, *last_network)?;
+    if page.is_network() {
+        *last_network = page;
+    }
+    *state = UiState { page, ..UiState::default() };
+    Some(page)
 }
 
 /// An empty state shown instead of the list.
@@ -79,14 +98,29 @@ pub struct Empty {
     pub action: String,
 }
 
+/// The short statuses of Network's sub-items in the sidebar.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NetStatus {
+    /// "Lumen Home", "not connected", "off".
+    pub wifi: String,
+    /// "1000 Mb/s", "connected", "unplugged".
+    pub wired: String,
+    /// The VPN that's on, or "off".
+    pub vpn: String,
+    /// "on" or "off".
+    pub hotspot: String,
+}
+
 /// Everything the window shows.
 #[derive(Default)]
 pub struct View {
     /// The Network item's short status in the sidebar ("Home", "Off").
     pub net_status: String,
-    /// The line under the Network page's title.
-    pub net_sub: String,
+    pub net_items: NetStatus,
+    /// The hero of the Network page shown.
     pub net_hero: NetHero,
+    /// Left of the search field: "4 networks in range".
+    pub count: String,
     pub wifi_available: bool,
     pub page_title: String,
     pub show_wifi_switch: bool,
@@ -108,20 +142,21 @@ pub struct View {
     pub hotspot: Option<HotspotView>,
 }
 
-/// The Network page's hero: the connection the computer is online through.
+/// A Network page's hero: the line under its title, and what the page is about (the Wi-Fi
+/// network, the cable, the VPN that's on, the hotspot).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NetHero {
+    pub sub: String,
     pub icon: &'static str,
     pub name: String,
     pub meta: String,
     pub tone: &'static str,
-    /// Addresses and traffic, in monospace.
+    /// The interface and its address, in monospace.
     pub detail: String,
-    /// Where its row is, for the buttons: they act on it as on a selected row.
-    pub page: Page,
+    /// The row the buttons act on, as on a selected row.
     pub row: Option<String>,
     /// (id, label, kind)
-    pub actions: Vec<(&'static str, &'static str, &'static str)>,
+    pub actions: Vec<(&'static str, String, &'static str)>,
 }
 
 /// The hotspot page.
@@ -268,11 +303,16 @@ fn ip_items(device: &Device) -> Vec<DetailItem> {
 
 pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) -> View {
     let mut view = View { show_search: true, wifi_on: true, ..View::default() };
-    network_summary(snapshot, &mut view);
     view.hostname = snapshot.map(|s| s.hostname.clone()).unwrap_or_default();
     let Some(snapshot) = snapshot else {
         view.page_title = page_title(state.page).into();
         view.show_search = false;
+        view.net_hero = NetHero {
+            icon: page_icon(state.page),
+            name: if error.is_some() { "Not available".into() } else { String::new() },
+            tone: "muted",
+            ..NetHero::default()
+        };
         view.banner = match error {
             Some(e) => format!("{e}. Lituus needs it to manage connections."),
             None => String::new(),
@@ -294,13 +334,16 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
         return view;
     };
     view.page_title = page_title(state.page).into();
+    network_status(snapshot, &mut view);
     let rows = match state.page {
         Page::Wifi => wifi_page(snapshot, state, &mut view),
         Page::Wired => wired_page(snapshot, &mut view),
-        Page::Vpn => vpn_page(snapshot, &mut view),
-        Page::Saved => saved_page(snapshot, state, &mut view),
+        Page::Vpn => vpn_page(snapshot, state, &mut view),
         Page::Hotspot => {
-            view.hotspot = Some(hotspot_page(snapshot));
+            view.show_search = false;
+            let hotspot = hotspot_page(snapshot);
+            view.net_hero = hotspot_hero(&hotspot);
+            view.hotspot = Some(hotspot);
             Vec::new()
         }
         // Bluetooth has a page of its own (bluetooth.rs).
@@ -349,11 +392,24 @@ fn page_title(page: Page) -> &'static str {
         Page::Vpn => "VPN",
         Page::Hotspot => "Hotspot",
         Page::Bluetooth => "Bluetooth",
-        Page::Saved => "Saved connections",
         Page::Displays => "Displays",
         Page::Sound => "Sound",
         Page::Settings => "Settings",
     }
+}
+
+fn page_icon(page: Page) -> &'static str {
+    match page {
+        Page::Wired => "wired",
+        Page::Vpn => "vpn",
+        Page::Hotspot => "hotspot",
+        _ => "wifi",
+    }
+}
+
+/// "1 VPN", "3 VPNs".
+fn count(n: usize, one: &str, many: &str) -> String {
+    if n == 1 { format!("1 {one}") } else { format!("{n} {many}") }
 }
 
 fn nothing_here(page: Page, searching: bool) -> Empty {
@@ -375,7 +431,7 @@ fn nothing_here(page: Page, searching: bool) -> Empty {
         Page::Vpn => Empty {
             icon: "vpn",
             title: "No VPN connections".into(),
-            text: "Add a WireGuard or OpenVPN connection with +, or bring one in from a .conf or .ovpn file.".into(),
+            text: "Add a WireGuard, OpenVPN or AnyConnect connection with +, or bring one in from a .conf or .ovpn file, or from openconnect-saml.".into(),
             action: "Import a file…".into(),
         },
         _ => Empty {
@@ -443,43 +499,29 @@ pub(crate) fn wifi_device(snapshot: &Snapshot) -> Option<&Device> {
     snapshot.devices.iter().find(|d| d.kind == DeviceKind::Wifi)
 }
 
-/// The Network item's sidebar status, the line under the page title, and the hero.
-fn network_summary(snapshot: Option<&Snapshot>, view: &mut View) {
-    let Some(snap) = snapshot else {
-        view.net_hero = NetHero { icon: "wifi", name: "Network".into(), tone: "muted", ..NetHero::default() };
-        return;
-    };
-    view.wifi_available = wifi_device(snap).is_some();
-    let active_on = |kind: DeviceKind| {
+/// What the computer is online through: the primary connection, or else any device's.
+fn online_through(snap: &Snapshot) -> Option<&lituus_nm::ActiveConnection> {
+    snap.primary_connection.as_deref().and_then(|p| snap.active_connection(p)).filter(|a| !a.vpn).or_else(|| {
         snap.devices
             .iter()
-            .filter(|d| d.kind == kind)
-            .find_map(|d| d.active_connection.as_deref().and_then(|a| snap.active_connection(a)).map(|a| (d, a)))
-    };
-    let wifi = if !view.wifi_available {
-        None
-    } else if !snap.wireless_hardware_enabled {
-        Some("Wi-Fi blocked".to_owned())
-    } else if !snap.wireless_enabled {
-        Some("Wi-Fi off".to_owned())
-    } else {
-        Some(match active_on(DeviceKind::Wifi) {
-            Some((_, a)) => format!("Wi-Fi: {}", a.id),
-            None => "Wi-Fi not connected".to_owned(),
-        })
-    };
-    let wired_devices: Vec<&Device> = snap.devices.iter().filter(|d| d.kind == DeviceKind::Ethernet).collect();
-    let wired = match active_on(DeviceKind::Ethernet) {
-        Some((_, a)) => Some(format!("wired: {}", a.id)),
-        None if wired_devices.is_empty() => None,
-        None if wired_devices.iter().all(|d| d.wired.as_ref().is_some_and(|w| !w.carrier)) => {
-            Some("cable unplugged".to_owned())
-        }
-        None => Some("wired not connected".to_owned()),
-    };
-    let vpns: Vec<String> = snap
-        .active
+            .filter(|d| matches!(d.kind, DeviceKind::Wifi | DeviceKind::Ethernet))
+            .find_map(|d| d.active_connection.as_deref().and_then(|a| snap.active_connection(a)))
+    })
+}
+
+/// The active connection on the first device of a kind that has one.
+fn active_on(snap: &Snapshot, kind: DeviceKind) -> Option<(&Device, &lituus_nm::ActiveConnection)> {
+    snap.devices
         .iter()
+        .filter(|d| d.kind == kind)
+        .find_map(|d| d.active_connection.as_deref().and_then(|a| snap.active_connection(a)).map(|a| (d, a)))
+}
+
+/// The VPNs that are on or coming on: NetworkManager's VPN plugins, and WireGuard.
+fn active_vpns(snap: &Snapshot) -> Vec<&lituus_nm::ActiveConnection> {
+    snap.active
+        .iter()
+        .filter(|a| a.state != ActiveState::Deactivated)
         .filter(|a| {
             a.vpn
                 || a.connection
@@ -487,102 +529,257 @@ fn network_summary(snapshot: Option<&Snapshot>, view: &mut View) {
                     .and_then(|c| snap.connection(c))
                     .is_some_and(|c| c.kind == ConnectionKind::WireGuard)
         })
-        .map(|a| a.id.clone())
-        .collect();
-    let vpn = if vpns.is_empty() { "VPN off".to_owned() } else { format!("VPN: {}", vpns.join(", ")) };
-    view.net_sub = wifi.into_iter().chain(wired).chain(std::iter::once(vpn)).collect::<Vec<_>>().join(" · ");
-    view.net_hero = network_hero(snap);
-    view.net_status = if snap.airplane() {
+        .collect()
+}
+
+fn is_hotspot(snap: &Snapshot, active: &lituus_nm::ActiveConnection) -> bool {
+    snap.connections.iter().any(|c| c.hotspot && c.uuid == active.uuid)
+}
+
+/// The Network item's sidebar status, and its sub-items'.
+fn network_status(snap: &Snapshot, view: &mut View) {
+    view.wifi_available = wifi_device(snap).is_some();
+    view.net_status = if snap.wireless_off() {
         "Off".to_owned()
-    } else if view.net_hero.row.is_some() {
-        view.net_hero.name.clone()
     } else {
-        "Offline".to_owned()
+        online_through(snap).map_or_else(|| "Offline".to_owned(), |a| a.id.clone())
     };
+    let wifi = match active_on(snap, DeviceKind::Wifi) {
+        _ if !view.wifi_available => "none".to_owned(),
+        _ if !snap.wireless_hardware_enabled => "blocked".to_owned(),
+        _ if !snap.wireless_enabled => "off".to_owned(),
+        Some((_, a)) if is_hotspot(snap, a) => "hotspot".to_owned(),
+        Some((_, a)) => a.id.clone(),
+        None => "not connected".to_owned(),
+    };
+    let wired_devices: Vec<&Device> = snap.devices.iter().filter(|d| d.kind == DeviceKind::Ethernet).collect();
+    let wired = match active_on(snap, DeviceKind::Ethernet) {
+        Some((_, a)) if a.state == ActiveState::Activating => "connecting…".to_owned(),
+        Some((d, _)) => match d.wired.as_ref().map(|w| w.speed) {
+            Some(speed) if speed > 0 => format!("{speed} Mb/s"),
+            _ => "connected".to_owned(),
+        },
+        None if wired_devices.is_empty() => "none".to_owned(),
+        None if wired_devices.iter().all(|d| d.wired.as_ref().is_some_and(|w| !w.carrier)) => "unplugged".to_owned(),
+        None => "not connected".to_owned(),
+    };
+    let vpn = match active_vpns(snap).as_slice() {
+        [] => "off".to_owned(),
+        [one] => one.id.clone(),
+        more => format!("{} on", more.len()),
+    };
+    let hotspot = if hotspot_page(snap).active.is_some() { "on" } else { "off" };
+    view.net_items = NetStatus { wifi, wired, vpn, hotspot: hotspot.to_owned() };
 }
 
-/// What the computer is online through: the primary connection, or else any device's.
-fn network_hero(snap: &Snapshot) -> NetHero {
-    let active =
-        snap.primary_connection.as_deref().and_then(|p| snap.active_connection(p)).filter(|a| !a.vpn).or_else(|| {
-            snap.devices
-                .iter()
-                .filter(|d| matches!(d.kind, DeviceKind::Wifi | DeviceKind::Ethernet))
-                .find_map(|d| d.active_connection.as_deref().and_then(|a| snap.active_connection(a)))
-        });
-    let Some(active) = active else {
-        let (meta, icon) = if wifi_device(snap).is_some() && !snap.wireless_enabled {
-            ("Wi-Fi is off", "wifi-off")
-        } else if wifi_device(snap).is_some() {
-            ("Pick a network below to connect", "wifi")
-        } else {
-            ("Plug in a cable or add a connection", "wired")
+/// "wlp2s0   192.168.1.42": a device's interface and IPv4 address.
+fn device_line(device: Option<&Device>) -> String {
+    let Some(d) = device else { return String::new() };
+    let ip = d.ip4.as_ref().and_then(|ip| ip.addresses.first()).map(|(a, _)| a.clone()).unwrap_or_default();
+    [d.interface.clone(), ip].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("   ")
+}
+
+/// The saved Wi-Fi connections, hotspot included.
+fn saved_wifi(snap: &Snapshot) -> impl Iterator<Item = &SavedConnection> {
+    snap.connections.iter().filter(|c| matches!(c.kind, ConnectionKind::Wifi { .. }))
+}
+
+/// "Last used 3 days ago", from a connection's timestamp.
+fn last_used(timestamp: u64, now: u64) -> String {
+    const DAY: u64 = 86_400;
+    if timestamp == 0 {
+        return "Saved".into();
+    }
+    match now.saturating_sub(timestamp) / DAY {
+        0 => "Last used today".into(),
+        1 => "Last used yesterday".into(),
+        days @ 2..60 => format!("Last used {days} days ago"),
+        days @ 60..730 => format!("Last used {} months ago", days / 30),
+        days => format!("Last used {} years ago", days / 365),
+    }
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// The Wi-Fi page's hero: the network it's connected to, and its buttons.
+fn wifi_hero(snap: &Snapshot, device: &Device, networks: &[Network], out_of_range: usize) -> NetHero {
+    let saved_out = match out_of_range {
+        0 => None,
+        1 => Some("1 saved one out of range".to_owned()),
+        n => Some(format!("{n} saved ones out of range")),
+    };
+    let active = device.active_connection.as_deref().and_then(|a| snap.active_connection(a));
+    let hotspot = active.is_some_and(|a| is_hotspot(snap, a));
+    let Some(active) = active.filter(|_| !hotspot) else {
+        let sub = std::iter::once(count(networks.len(), "network in range", "networks in range"))
+            .chain(saved_out)
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let meta = if hotspot { "The hotspot is using the Wi-Fi card" } else { "Pick a network below to connect" };
+        return NetHero {
+            sub,
+            icon: "wifi",
+            name: "Not connected".into(),
+            meta: meta.into(),
+            tone: "muted",
+            ..NetHero::default()
         };
-        return NetHero { icon, name: "Not connected".into(), meta: meta.into(), tone: "muted", ..NetHero::default() };
     };
-    let device = active.devices.first().and_then(|d| snap.device(d));
-    let connecting = active.state != ActiveState::Activated;
-    let ip = device
-        .and_then(|d| d.ip4.as_ref())
-        .and_then(|ip| ip.addresses.first())
-        .map(|(a, _)| a.clone())
-        .unwrap_or_default();
-    let traffic =
-        device.and_then(|d| d.traffic).map(|(rx, tx)| format!("↓ {}  ↑ {}", bytes(rx), bytes(tx))).unwrap_or_default();
-    let detail = [ip, traffic].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("   ");
-    let state = if connecting { "Connecting…" } else { "Connected" };
-    let mut hero = NetHero {
+    // A hidden network isn't in the list.
+    let network = networks.iter().find(|n| n.active);
+    let others = match networks.len().saturating_sub(usize::from(network.is_some())) {
+        0 => "no other networks in range".to_owned(),
+        n => count(n, "other network in range", "other networks in range"),
+    };
+    let sub = [active.id.clone(), others].into_iter().chain(saved_out).collect::<Vec<_>>().join(" · ");
+    let wifi = device.wifi.as_ref();
+    // NetworkManager names the access point in use; failing that, the network's strongest.
+    let ap = wifi
+        .and_then(|w| w.active_access_point.as_deref().and_then(|p| w.access_points.iter().find(|ap| ap.path == p)))
+        .or_else(|| network.map(|n| n.strongest()));
+    let mut meta = vec![if active.state == ActiveState::Activated { "Connected" } else { "Connecting…" }.to_owned()];
+    if let Some(band) = ap.and_then(|ap| Band::from_mhz(ap.frequency)) {
+        meta.push(band.label().to_owned());
+    }
+    if let Some(w) = wifi.filter(|w| w.bitrate > 0) {
+        meta.push(format!("{} Mb/s", w.bitrate / 1000));
+    }
+    NetHero {
+        sub,
+        icon: "wifi",
         name: active.id.clone(),
+        meta: meta.join(" · "),
         tone: "accent",
-        detail,
-        actions: vec![("edit", "Edit", "secondary"), ("disconnect", "Disconnect", "secondary")],
-        ..NetHero::default()
-    };
-    match device.map(|d| d.kind) {
-        Some(DeviceKind::Wifi) => {
-            let d = device.unwrap();
-            let ap = d.wifi.as_ref().and_then(|w| {
-                w.active_access_point.as_deref().and_then(|p| w.access_points.iter().find(|ap| ap.path == p))
-            });
-            let networks = snap.networks().into_iter().find(|(p, _)| *p == d.path).map(|(_, n)| n).unwrap_or_default();
-            let network = networks.iter().find(|n| n.active);
-            // NetworkManager names the access point in use; failing that, the network's strongest.
-            let ap = ap.or_else(|| network.map(|n| n.strongest()));
-            let mut meta = vec![state.to_owned()];
-            if let Some(band) = ap.and_then(|ap| Band::from_mhz(ap.frequency)) {
-                meta.push(band.label().to_owned());
-            }
-            if let Some(w) = d.wifi.as_ref().filter(|w| w.bitrate > 0) {
-                meta.push(format!("{} Mbit/s", w.bitrate / 1000));
-            }
-            hero.icon = "wifi";
-            hero.meta = meta.join(" · ");
-            hero.page = Page::Wifi;
-            hero.row = network.map(network_id);
-            hero.actions.insert(0, ("share", "Share", "secondary"));
-        }
-        _ => {
-            let speed = device.and_then(|d| d.wired.as_ref()).map(|w| w.speed).filter(|&s| s > 0);
-            hero.icon = "wired";
-            hero.meta = match speed {
-                Some(speed) => format!("{state} · {speed} Mbit/s"),
-                None => state.to_owned(),
-            };
-            hero.page = Page::Wired;
-            hero.row = Some(format!("conn:{}", active.uuid));
-        }
+        detail: device_line(Some(device)),
+        row: network.map(network_id),
+        // The buttons act on the network's row, so a hidden one has none.
+        actions: match network {
+            Some(_) => vec![
+                ("share", "Share".into(), "secondary"),
+                ("edit", "Edit".into(), "secondary"),
+                ("disconnect", "Disconnect".into(), "secondary"),
+            ],
+            None => Vec::new(),
+        },
     }
-    if hero.row.is_none() {
-        hero.actions.clear();
-    }
-    hero
 }
 
-fn bytes(n: u64) -> String {
-    match n {
-        n if n >= 1 << 30 => format!("{:.1} GB", n as f64 / f64::from(1u32 << 30)),
-        n if n >= 1 << 20 => format!("{:.1} MB", n as f64 / f64::from(1u32 << 20)),
-        n => format!("{} KB", n >> 10),
+/// The Wired page's hero: the wired connection in use, or the cable's state.
+fn wired_hero(snap: &Snapshot) -> NetHero {
+    let devices: Vec<&Device> = snap.devices.iter().filter(|d| d.kind == DeviceKind::Ethernet).collect();
+    let profiles =
+        match snap.connections.iter().filter(|c| c.kind == ConnectionKind::Ethernet && c.port.is_none()).count() {
+            0 => "no saved profiles".to_owned(),
+            n => count(n, "saved profile", "saved profiles"),
+        };
+    if let Some((device, active)) = active_on(snap, DeviceKind::Ethernet) {
+        let connected = active.state == ActiveState::Activated;
+        return NetHero {
+            sub: format!("{} · {profiles}", if connected { "Connected" } else { "Connecting" }),
+            icon: "wired",
+            name: active.id.clone(),
+            meta: format!("{}{}", if connected { "Connected" } else { "Connecting…" }, speed(device)),
+            tone: "accent",
+            detail: device_line(Some(device)),
+            row: Some(format!("conn:{}", active.uuid)),
+            actions: vec![("edit", "Edit".into(), "secondary"), ("disconnect", "Disconnect".into(), "secondary")],
+        };
+    }
+    let Some(device) = devices.first() else {
+        return NetHero {
+            sub: "No wired device".into(),
+            icon: "wired",
+            name: "No wired network card".into(),
+            meta: "Plug in a USB network adapter to use one".into(),
+            tone: "muted",
+            ..NetHero::default()
+        };
+    };
+    let unplugged = devices.iter().all(|d| d.wired.as_ref().is_some_and(|w| !w.carrier));
+    let (sub, name, meta) = if unplugged {
+        ("Cable unplugged", "Cable unplugged", "Plug in a cable to connect")
+    } else {
+        ("Cable plugged in", "Not connected", "Pick a profile below to connect")
+    };
+    NetHero {
+        sub: format!("{sub} · {profiles}"),
+        icon: "wired",
+        name: name.into(),
+        meta: meta.into(),
+        tone: "accent",
+        detail: [device.interface.as_str(), device.hw_address.as_str()]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("   "),
+        ..NetHero::default()
+    }
+}
+
+/// The VPN page's hero: the VPN that's on, or else the one used last, to connect.
+fn vpn_hero(snap: &Snapshot) -> NetHero {
+    let vpns: Vec<&SavedConnection> = snap
+        .connections
+        .iter()
+        .filter(|c| matches!(c.kind, ConnectionKind::WireGuard | ConnectionKind::Vpn { .. }))
+        .collect();
+    let saved = count(vpns.len(), "saved", "saved");
+    let active = active_vpns(snap);
+    if let Some(a) = active.first() {
+        let connection = snap.connections.iter().find(|c| c.uuid == a.uuid);
+        let connected = a.state == ActiveState::Activated;
+        let mut meta = vec![if connected { "Connected" } else { "Connecting…" }.to_owned()];
+        meta.extend(connection.map(connection_kind_label));
+        let on = if active.len() == 1 { "On".to_owned() } else { format!("{} on", active.len()) };
+        return NetHero {
+            sub: format!("{on} · {saved}"),
+            icon: "vpn",
+            name: a.id.clone(),
+            meta: meta.join(" · "),
+            tone: "accent",
+            detail: device_line(a.devices.first().and_then(|d| snap.device(d))),
+            row: connection.map(|c| format!("conn:{}", c.uuid)),
+            actions: vec![("edit", "Edit".into(), "secondary"), ("disconnect", "Disconnect".into(), "secondary")],
+        };
+    }
+    // The one used last; the first if none was ever used.
+    let last = vpns.iter().rev().max_by_key(|c| c.timestamp);
+    NetHero {
+        sub: if vpns.is_empty() { "Off".into() } else { format!("Off · {saved}") },
+        icon: "vpn",
+        name: "No VPN on".into(),
+        meta: match vpns.len() {
+            0 => "Add one with +".into(),
+            n => count(n, "VPN saved", "VPNs saved"),
+        },
+        tone: "accent",
+        row: last.map(|c| format!("conn:{}", c.uuid)),
+        actions: last.map(|c| ("connect", format!("Connect {}", c.id), "secondary")).into_iter().collect(),
+        ..NetHero::default()
+    }
+}
+
+/// The Hotspot page's hero: whether it's on, and what it shares.
+fn hotspot_hero(h: &HotspotView) -> NetHero {
+    let hero = NetHero { sub: h.status.clone(), icon: "hotspot", tone: "accent", ..NetHero::default() };
+    match (&h.device, &h.active) {
+        (None, _) => NetHero {
+            name: "No Wi-Fi card".into(),
+            meta: "A hotspot needs one to share the connection over".into(),
+            tone: "muted",
+            ..hero
+        },
+        (Some(_), None) => {
+            NetHero { name: "Hotspot off".into(), meta: "Share this computer's connection over Wi-Fi".into(), ..hero }
+        }
+        (Some(_), Some(_)) => NetHero {
+            name: if h.status.starts_with("On") { "Hotspot on".into() } else { "Starting the hotspot…".into() },
+            meta: format!("Others join “{}” with the password or the QR code below", h.ssid),
+            detail: h.interface.clone(),
+            ..hero
+        },
     }
 }
 
@@ -595,20 +792,35 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
     view.wifi_on = snap.wireless_enabled && snap.wireless_hardware_enabled;
     view.show_rescan = true;
     view.search_placeholder = "Search networks".into();
+    let saved = saved_wifi(snap).count();
+    let saved_line = match saved {
+        0 => String::new(),
+        n => count(n, "saved network", "saved networks"),
+    };
+    let off = |sub: &str, name: &str| NetHero {
+        sub: sub.into(),
+        icon: "wifi",
+        name: name.into(),
+        meta: saved_line.clone(),
+        tone: "accent",
+        ..NetHero::default()
+    };
     let Some(device) = wifi_device(snap) else {
         view.show_wifi_switch = false;
         view.show_rescan = false;
         view.show_search = false;
+        view.net_hero = NetHero { icon: "wifi-off", tone: "muted", ..off("No Wi-Fi card", "No Wi-Fi card") };
         view.empty = Some(Empty {
             icon: "wifi-off",
             title: "No Wi-Fi card".into(),
-            text: "Lituus didn't find a Wi-Fi device. Wired and VPN connections are in their own sections.".into(),
+            text: "Lituus didn't find a Wi-Fi device. Wired and VPN connections are on their own pages.".into(),
             action: String::new(),
         });
         return Vec::new();
     };
     if !snap.wireless_hardware_enabled {
         view.show_search = false;
+        view.net_hero = off("Blocked", "Wi-Fi is blocked");
         view.empty = Some(Empty {
             icon: "wifi-off",
             title: "Wi-Fi is blocked".into(),
@@ -619,16 +831,27 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
     }
     if !snap.wireless_enabled {
         view.show_search = false;
+        view.net_hero = off("Off", "Wi-Fi is off");
+        let kept = match saved {
+            0 => String::new(),
+            1 => " Your saved network is kept.".into(),
+            n => format!(" Your {n} saved networks are kept."),
+        };
         view.empty = Some(Empty {
-            icon: "wifi-off",
+            icon: "wifi",
             title: "Wi-Fi is off".into(),
-            text: "Wired and VPN connections keep working.".into(),
+            text: format!("Turn it on to see networks nearby.{kept}"),
             action: "Turn on Wi-Fi".into(),
         });
         return Vec::new();
     }
     view.bottom_label = "Connect to hidden network…".into();
     let networks = snap.networks().into_iter().find(|(p, _)| *p == device.path).map(|(_, n)| n).unwrap_or_default();
+    // Saved networks that aren't in range: the old Saved page's Wi-Fi part, the hotspot included.
+    let out_of_range: Vec<&SavedConnection> =
+        saved_wifi(snap).filter(|c| !networks.iter().any(|n| Some(n.ssid.as_slice()) == c.wifi_ssid())).collect();
+    view.net_hero = wifi_hero(snap, device, &networks, out_of_range.len());
+    view.count = count(networks.len(), "network in range", "networks in range");
     let connecting = device.state.is_connecting();
     let (mut connected, mut available) = (Vec::new(), Vec::new());
     for n in networks.iter().filter(|n| matches_search(&n.name(), &state.search)) {
@@ -657,7 +880,20 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
         };
         if n.active { connected.push(row) } else { available.push(row) }
     }
-    vec![("Connected".into(), connected), ("Available".into(), available)]
+    let now = now();
+    let elsewhere = out_of_range
+        .into_iter()
+        .filter(|c| matches_search(&c.id, &state.search))
+        .map(|c| RowData {
+            id: format!("conn:{}", c.uuid),
+            name: c.id.clone(),
+            meta: if c.hotspot { "This computer's hotspot".into() } else { last_used(c.timestamp, now) },
+            tone: "faint",
+            icon: if c.hotspot { "hotspot" } else { "wifi" },
+            ..RowData::default()
+        })
+        .collect();
+    vec![("Connected".into(), connected), ("Available".into(), available), ("Saved, not in range".into(), elsewhere)]
 }
 
 fn connection_kind_label(c: &SavedConnection) -> String {
@@ -666,7 +902,10 @@ fn connection_kind_label(c: &SavedConnection) -> String {
         ConnectionKind::Ethernet => "Wired".into(),
         ConnectionKind::Bluetooth { .. } => "Bluetooth".into(),
         ConnectionKind::WireGuard => "WireGuard".into(),
-        ConnectionKind::Vpn { service } => vpn_service_label(service),
+        ConnectionKind::Vpn { service, protocol, .. } if service == crate::openconnect::SERVICE => {
+            crate::openconnect::protocol_label(protocol)
+        }
+        ConnectionKind::Vpn { service, .. } => vpn_service_label(service),
         ConnectionKind::Bridge { .. } => "Bridge".into(),
         ConnectionKind::Bond { .. } => "Bond".into(),
         ConnectionKind::Vlan { id, .. } => format!("VLAN {id}"),
@@ -704,6 +943,12 @@ fn icon_for(c: &SavedConnection) -> &'static str {
 fn wired_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
     view.show_add = true;
     view.show_search = false;
+    view.bottom_label = "Add a wired profile…".into();
+    view.net_hero = wired_hero(snap);
+    let devices = snap.devices.iter().filter(|d| d.kind == DeviceKind::Ethernet).count();
+    if devices > 0 {
+        view.count = count(devices, "wired device", "wired devices");
+    }
     let mut sections = Vec::new();
     // Bridges and bonds, each with its ports under it.
     let mut virtual_rows = Vec::new();
@@ -765,6 +1010,8 @@ fn wired_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
                 let active = active_uuid == Some(c.uuid.as_str());
                 let (meta, tone) = if active {
                     (format!("Connected{}", speed(device)), "accent")
+                } else if !carrier && c.autoconnect {
+                    ("Saved · connects when a cable is plugged in".into(), "faint")
                 } else if !carrier {
                     ("Saved · cable unplugged".into(), "faint")
                 } else {
@@ -805,6 +1052,44 @@ fn wired_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
         .collect();
     if !others.is_empty() {
         sections.push(("VLANs".to_owned(), others));
+    }
+    // What the old Saved page listed and no section above shows: profiles for a device that
+    // isn't there, and connections of other kinds (a phone's internet over Bluetooth, say).
+    let shown: Vec<String> = sections.iter().flat_map(|(_, rows)| rows.iter().map(|r| r.id.clone())).collect();
+    let (mut unplugged, mut other) = (Vec::new(), Vec::new());
+    for c in snap.connections.iter().filter(|c| !shown.contains(&format!("conn:{}", c.uuid))) {
+        let row = |meta: String| RowData {
+            id: format!("conn:{}", c.uuid),
+            name: c.id.clone(),
+            meta,
+            tone: "faint",
+            icon: icon_for(c),
+            ..RowData::default()
+        };
+        match &c.kind {
+            ConnectionKind::Ethernet | ConnectionKind::Bridge { .. } | ConnectionKind::Bond { .. } => {
+                unplugged.push(row(match &c.interface {
+                    Some(i) => format!("Saved · only on {i}"),
+                    None => format!("Saved · {}", connection_kind_label(c)),
+                }));
+            }
+            ConnectionKind::Bluetooth { .. } | ConnectionKind::Other(_) => {
+                let active = active_uuid_state(snap, &c.uuid).is_some_and(|a| a.state == ActiveState::Activated);
+                let mut r = row(if active {
+                    format!("{} · connected", connection_kind_label(c))
+                } else {
+                    connection_kind_label(c)
+                });
+                r.tone = if active { "accent" } else { "muted" };
+                other.push(r);
+            }
+            _ => {}
+        }
+    }
+    for (title, rows) in [("Saved, not plugged in", unplugged), ("Other connections", other)] {
+        if !rows.is_empty() {
+            sections.push((title.to_owned(), rows));
+        }
     }
     sections
 }
@@ -901,86 +1186,38 @@ fn device_title(device: &Device) -> String {
     }
 }
 
-fn vpn_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
+fn vpn_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, Vec<RowData>)> {
     view.show_add = true;
-    view.show_search = false;
-    view.bottom_label = "Import a WireGuard or OpenVPN file…".into();
+    view.search_placeholder = "Search VPNs".into();
+    view.bottom_label = "Import a VPN connection…".into();
+    view.net_hero = vpn_hero(snap);
+    let vpns: Vec<&SavedConnection> = snap
+        .connections
+        .iter()
+        .filter(|c| matches!(c.kind, ConnectionKind::WireGuard | ConnectionKind::Vpn { .. }))
+        .collect();
+    view.show_search = !vpns.is_empty();
+    if !vpns.is_empty() {
+        view.count = count(vpns.len(), "VPN", "VPNs");
+    }
     let (mut wireguard, mut others) = (Vec::new(), Vec::new());
-    for c in
-        snap.connections.iter().filter(|c| matches!(c.kind, ConnectionKind::WireGuard | ConnectionKind::Vpn { .. }))
-    {
+    for c in vpns.into_iter().filter(|c| matches_search(&c.id, &state.search)) {
         let active = active_uuid_state(snap, &c.uuid);
+        let id = format!("conn:{}", c.uuid);
         let (meta, tone) = match active.map(|a| a.state) {
-            Some(ActiveState::Activated) => ("Connected".to_owned(), "accent"),
+            _ if state.signing_in.contains(&c.uuid) => ("Signing in…".to_owned(), "accent"),
+            Some(ActiveState::Activated) => (format!("Connected · {}", connection_kind_label(c)), "accent"),
             Some(ActiveState::Activating) => ("Connecting…".to_owned(), "accent"),
-            _ if matches!(c.kind, ConnectionKind::WireGuard) => ("Off".to_owned(), "muted"),
+            _ if state.failed.as_ref().is_some_and(|(f, why)| *f == id && why == crate::openconnect::CLOSED) => {
+                ("Couldn't sign in".to_owned(), "danger")
+            }
+            _ if state.failed.as_ref().is_some_and(|(f, _)| *f == id) => ("Couldn't connect".to_owned(), "danger"),
             _ => (format!("Off · {}", connection_kind_label(c)), "muted"),
         };
-        let row = RowData {
-            id: format!("conn:{}", c.uuid),
-            name: c.id.clone(),
-            meta,
-            tone,
-            icon: "vpn",
-            bars: 0,
-            secure: false,
-            indent: false,
-        };
+        let row = RowData { id, name: c.id.clone(), meta, tone, icon: "vpn", bars: 0, secure: false, indent: false };
         if c.kind == ConnectionKind::WireGuard { wireguard.push(row) } else { others.push(row) }
     }
     vec![("WireGuard".into(), wireguard), ("VPN".into(), others)]
-}
-
-/// Whether a connection belongs in a group of the Saved page.
-type KindFilter = fn(&ConnectionKind) -> bool;
-
-fn saved_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, Vec<RowData>)> {
-    view.show_add = true;
-    view.search_placeholder = "Search saved connections".into();
-    view.bottom_label = "Import a connection file…".into();
-    let groups: [(&str, KindFilter); 5] = [
-        ("Wi-Fi", |k| matches!(k, ConnectionKind::Wifi { .. })),
-        ("Wired", |k| {
-            matches!(
-                k,
-                ConnectionKind::Ethernet
-                    | ConnectionKind::Bridge { .. }
-                    | ConnectionKind::Bond { .. }
-                    | ConnectionKind::Vlan { .. }
-            )
-        }),
-        ("VPN", |k| matches!(k, ConnectionKind::WireGuard | ConnectionKind::Vpn { .. })),
-        ("Bluetooth", |k| matches!(k, ConnectionKind::Bluetooth { .. })),
-        ("Other", |k| matches!(k, ConnectionKind::Other(_))),
-    ];
-    groups
-        .into_iter()
-        .map(|(title, belongs)| {
-            let rows = snap
-                .connections
-                .iter()
-                .filter(|c| belongs(&c.kind) && matches_search(&c.id, &state.search))
-                .map(|c| {
-                    let active = active_uuid_state(snap, &c.uuid).is_some_and(|a| a.state == ActiveState::Activated);
-                    RowData {
-                        id: format!("conn:{}", c.uuid),
-                        name: c.id.clone(),
-                        meta: if active {
-                            format!("{} · connected", connection_kind_label(c))
-                        } else {
-                            connection_kind_label(c)
-                        },
-                        tone: if active { "accent" } else { "muted" },
-                        icon: icon_for(c),
-                        bars: 0,
-                        secure: false,
-                        indent: false,
-                    }
-                })
-                .collect();
-            (title.to_owned(), rows)
-        })
-        .collect()
 }
 
 fn details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsData> {
@@ -988,7 +1225,7 @@ fn details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsData> {
         return wifi_details(snap, state, rest);
     }
     if let Some(uuid) = id.strip_prefix("conn:") {
-        return connection_details(snap, state.page, uuid);
+        return connection_details(snap, state, uuid);
     }
     if let Some(path) = id.strip_prefix("dev:") {
         let device = snap.device(path)?;
@@ -1090,14 +1327,22 @@ fn wifi_details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsDat
     })
 }
 
-fn connection_details(snap: &Snapshot, page: Page, uuid: &str) -> Option<DetailsData> {
+fn connection_details(snap: &Snapshot, state: &UiState, uuid: &str) -> Option<DetailsData> {
+    let page = state.page;
     let c = snap.connections.iter().find(|c| c.uuid == uuid)?;
     let active = active_uuid_state(snap, uuid);
     let device = active.and_then(|a| a.devices.first()).and_then(|p| snap.device(p));
+    let signing_in = state.signing_in.iter().any(|u| u == uuid);
+    let failed = state.failed.as_ref().filter(|(f, _)| *f == format!("conn:{uuid}")).map(|(_, why)| why.as_str());
     let (status, tone) = match active.map(|a| a.state) {
+        _ if signing_in => ("Signing in · finish in the sign-in window", "accent"),
         Some(ActiveState::Activated) => ("Connected", "accent"),
         Some(ActiveState::Activating) => ("Connecting…", "accent"),
         Some(ActiveState::Deactivating) => ("Disconnecting…", "muted"),
+        _ if failed == Some(crate::openconnect::CLOSED) => {
+            ("Couldn't sign in: the sign-in window was closed", "danger")
+        }
+        _ if failed.is_some() => ("Couldn't connect", "danger"),
         _ => ("Not connected", "faint"),
     };
     let connected = active.is_some_and(|a| a.state == ActiveState::Activated);
@@ -1105,18 +1350,29 @@ fn connection_details(snap: &Snapshot, page: Page, uuid: &str) -> Option<Details
         Some(d) if connected && c.kind == ConnectionKind::Ethernet => speed(d).trim_start_matches(" · ").to_owned(),
         _ => String::new(),
     };
-    let mut actions = vec![if connected {
+    let mut actions = vec![if signing_in {
+        action("cancel-sign-in", "Cancel", "secondary")
+    } else if connected {
         action("disconnect", "Disconnect", "secondary")
+    } else if failed.is_some() {
+        action("connect", "Try again", "primary")
     } else {
         action("connect", "Connect", "primary")
     }];
     actions.push(action("edit", "Edit", "secondary"));
-    actions.push(action("forget", "Forget", "danger"));
+    if !signing_in {
+        actions.push(action("forget", "Forget", "danger"));
+    }
     let mut toggles = vec![toggle("autoconnect", "Connect automatically", "", c.autoconnect)];
     if page != Page::Vpn {
         toggles.push(toggle("metered", "Metered connection", "", c.metered == Some(true)));
     }
     let mut items = Vec::new();
+    if let ConnectionKind::Vpn { gateway, .. } = &c.kind
+        && !gateway.is_empty()
+    {
+        items.push(item("Gateway", gateway.as_str(), true));
+    }
     if let (Some(d), true) = (device, connected) {
         items.extend(ip_items(d));
         items.extend(traffic_item(d));
@@ -1199,7 +1455,13 @@ pub enum Command {
         access_point: Option<String>,
         join: WifiJoin,
     },
-    SetAirplane(bool),
+    /// Airplane mode on or off: Wi-Fi and mobile broadband switched to these (Bluetooth is the
+    /// Bluetooth thread's; see `airplane.rs`).
+    SetAirplane {
+        on: bool,
+        wifi: bool,
+        wwan: bool,
+    },
     /// Read a connection's settings (or none, for a new one) and open the editor.
     OpenEditor {
         connection: Option<String>,
@@ -1261,6 +1523,10 @@ pub enum Command {
     },
     Deactivate {
         active: String,
+    },
+    /// Close an OpenConnect VPN's sign-in window, by its UUID.
+    CancelSignIn {
+        uuid: String,
     },
     Forget {
         connection: String,
@@ -1398,6 +1664,7 @@ pub fn intent(snap: &Snapshot, selected: &str, action: &str) -> Option<Intent> {
                 Some(Intent::Run(Command::Activate { connection: c.path.clone(), device, access_point: None }))
             }
             "disconnect" => Some(Intent::Run(Command::Deactivate { active: active?.path.clone() })),
+            "cancel-sign-in" => Some(Intent::Run(Command::CancelSignIn { uuid: c.uuid.clone() })),
             "forget" => Some(forget(c)),
             _ => None,
         };
@@ -1457,11 +1724,6 @@ pub fn row_name(snap: &Snapshot, id: &str) -> Option<String> {
     }
     let uuid = id.strip_prefix("conn:")?;
     snap.connections.iter().find(|c| c.uuid == uuid).map(|c| c.id.clone())
-}
-
-/// Airplane mode on or off.
-pub fn airplane_switch(snap: &Snapshot) -> Command {
-    Command::SetAirplane(!snap.airplane())
 }
 
 /// The Wi-Fi device a hidden network is joined on.
@@ -1559,6 +1821,7 @@ pub(crate) mod tests {
                 metered: None,
                 hotspot: false,
                 port: None,
+                timestamp: 0,
             }],
             active: vec![ActiveConnection {
                 path: "/a/1".into(),
@@ -1608,11 +1871,22 @@ pub(crate) mod tests {
         let actions: Vec<String> = d.actions.iter().map(|a| a.label.to_string()).collect();
         assert_eq!(actions, ["Disconnect", "Edit", "Share", "Forget"]);
         assert_eq!(view.net_status, "Lumen Home");
-        assert_eq!(view.net_sub, "Wi-Fi: Lumen Home · cable unplugged · VPN off");
+        assert_eq!(
+            view.net_items,
+            NetStatus {
+                wifi: "Lumen Home".into(),
+                wired: "unplugged".into(),
+                vpn: "off".into(),
+                hotspot: "off".into()
+            }
+        );
+        assert_eq!(view.count, "3 networks in range");
+        assert_eq!(view.net_hero.sub, "Lumen Home · 2 other networks in range");
         assert_eq!(view.net_hero.name, "Lumen Home");
-        assert_eq!(view.net_hero.meta, "Connected · 5 GHz · 866 Mbit/s");
+        assert_eq!(view.net_hero.meta, "Connected · 5 GHz · 866 Mb/s");
+        assert_eq!(view.net_hero.detail, "wlp2s0   192.168.1.42");
         assert_eq!(view.net_hero.row.as_deref(), Some(view.row_ids[0].as_str()));
-        let hero_actions: Vec<&str> = view.net_hero.actions.iter().map(|a| a.1).collect();
+        let hero_actions: Vec<&str> = view.net_hero.actions.iter().map(|a| a.1.as_str()).collect();
         assert_eq!(hero_actions, ["Share", "Edit", "Disconnect"]);
         assert_eq!(view.hostname, "thinkpad-x1");
     }
@@ -1631,7 +1905,13 @@ pub(crate) mod tests {
         assert_eq!(d.toggles.row_count(), 0);
     }
 
-    fn saved(uuid: &str, id: &str, kind: ConnectionKind, interface: &str, port: Option<&str>) -> SavedConnection {
+    pub(crate) fn saved(
+        uuid: &str,
+        id: &str,
+        kind: ConnectionKind,
+        interface: &str,
+        port: Option<&str>,
+    ) -> SavedConnection {
         SavedConnection {
             path: format!("/c/{uuid}"),
             uuid: uuid.into(),
@@ -1643,7 +1923,65 @@ pub(crate) mod tests {
             metered: None,
             hotspot: false,
             port: port.map(|c| lituus_nm::Port { controller: c.into(), kind: "bridge".into() }),
+            timestamp: 0,
         }
+    }
+
+    #[test]
+    fn an_anyconnect_vpn_signs_in_and_says_why_it_stopped() {
+        let mut snap = home();
+        let kind = ConnectionKind::Vpn {
+            service: crate::openconnect::SERVICE.into(),
+            gateway: "vpn.uzh.ch/staff".into(),
+            protocol: "anyconnect".into(),
+        };
+        snap.connections.push(saved("u-uzh", "UZH VPN", kind, "", None));
+        let mut state = UiState { page: Page::Vpn, selected: Some("conn:u-uzh".into()), ..UiState::default() };
+        let meta = |view: &View| {
+            view.sections.iter().find(|s| s.title == "VPN").unwrap().rows.row_data(0).unwrap().meta.to_string()
+        };
+        let actions = |view: &View| -> Vec<String> {
+            view.details.as_ref().unwrap().actions.iter().map(|a| a.label.to_string()).collect()
+        };
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(meta(&view), "Off · Cisco AnyConnect");
+        assert_eq!(detail(&view, "Gateway").as_deref(), Some("vpn.uzh.ch/staff"));
+        assert_eq!(detail(&view, "Type").as_deref(), Some("Cisco AnyConnect"));
+        assert_eq!(actions(&view), ["Connect", "Edit", "Forget"]);
+
+        state.signing_in = vec!["u-uzh".into()];
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(meta(&view), "Signing in…");
+        assert_eq!(view.details.as_ref().unwrap().status, "Signing in · finish in the sign-in window");
+        assert_eq!(actions(&view), ["Cancel", "Edit"]);
+        assert_eq!(
+            intent(&snap, "conn:u-uzh", "cancel-sign-in"),
+            Some(Intent::Run(Command::CancelSignIn { uuid: "u-uzh".into() }))
+        );
+
+        state.signing_in.clear();
+        state.failed = Some(("conn:u-uzh".into(), crate::openconnect::CLOSED.into()));
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(meta(&view), "Couldn't sign in");
+        assert_eq!(view.details.as_ref().unwrap().status, "Couldn't sign in: the sign-in window was closed");
+        assert_eq!(actions(&view), ["Try again", "Edit", "Forget"]);
+
+        // Every VPN row says its type, and a protocol Lituus doesn't know is shown as it is.
+        state.failed = None;
+        snap.connections.push(saved("u-wg", "wg0", ConnectionKind::WireGuard, "wg0", None));
+        let kind = ConnectionKind::Vpn {
+            service: crate::openconnect::SERVICE.into(),
+            gateway: "vpn.example.org".into(),
+            protocol: "pulse-ng".into(),
+        };
+        snap.connections.push(saved("u-new", "New VPN", kind, "", None));
+        let view = build(Some(&snap), None, &state);
+        let metas = |title: &str| -> Vec<String> {
+            let rows = &view.sections.iter().find(|s| s.title == title).unwrap().rows;
+            (0..rows.row_count()).map(|i| rows.row_data(i).unwrap().meta.to_string()).collect()
+        };
+        assert_eq!(metas("WIREGUARD"), ["Off · WireGuard"]);
+        assert_eq!(metas("VPN"), ["Off · Cisco AnyConnect", "Off · pulse-ng"]);
     }
 
     #[test]
@@ -1707,8 +2045,13 @@ pub(crate) mod tests {
         let mut snap = home();
         snap.wireless_enabled = false;
         let view = build(Some(&snap), None, &UiState::default());
-        assert_eq!(view.empty.as_ref().map(|e| e.action.as_str()), Some("Turn on Wi-Fi"));
-        assert!(view.net_sub.starts_with("Wi-Fi off"), "{}", view.net_sub);
+        let empty = view.empty.as_ref().unwrap();
+        assert_eq!(empty.action, "Turn on Wi-Fi");
+        assert_eq!(empty.text, "Turn it on to see networks nearby. Your saved network is kept.");
+        assert_eq!((view.net_hero.sub.as_str(), view.net_hero.name.as_str()), ("Off", "Wi-Fi is off"));
+        assert_eq!(view.net_hero.meta, "1 saved network");
+        assert_eq!(view.net_items.wifi, "off");
+        assert!(!view.show_search);
         snap.wireless_hardware_enabled = false;
         let view = build(Some(&snap), None, &UiState::default());
         assert_eq!(view.empty.as_ref().map(|e| e.title.as_str()), Some("Wi-Fi is blocked"));
@@ -1738,10 +2081,167 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn saved_page_groups_by_type() {
-        let state = UiState { page: Page::Saved, ..UiState::default() };
+    fn network_opens_the_sub_page_used_last() {
+        let (mut state, mut last) = (UiState::default(), Page::default());
+        // Wi-Fi at first.
+        assert_eq!(navigate(&mut state, &mut last, "network"), Some(Page::Wifi));
+        state.search = "lumen".into();
+        assert_eq!(navigate(&mut state, &mut last, "vpn"), Some(Page::Vpn));
+        assert_eq!((state.page, last, state.search.as_str()), (Page::Vpn, Page::Vpn, ""));
+        // Another page leaves the memory alone; Network goes back to VPN.
+        assert_eq!(navigate(&mut state, &mut last, "bluetooth"), Some(Page::Bluetooth));
+        assert_eq!(last, Page::Vpn);
+        assert_eq!(navigate(&mut state, &mut last, "network"), Some(Page::Vpn));
+        // There's no Saved page any more.
+        assert_eq!(navigate(&mut state, &mut last, "saved"), None);
+        assert_eq!(state.page, Page::Vpn);
+        assert_eq!(Page::open("network", Page::Settings), Some(Page::Wifi));
+        assert!([Page::Wifi, Page::Wired, Page::Vpn, Page::Hotspot].iter().all(|p| p.is_network()));
+        assert!(!Page::Bluetooth.is_network());
+    }
+
+    fn with_saved(snap: &mut Snapshot, uuid: &str, id: &str, kind: ConnectionKind, timestamp: u64) {
+        snap.connections.push(SavedConnection {
+            interface: None,
+            autoconnect: false,
+            timestamp,
+            ..saved(uuid, id, kind, "", None)
+        });
+    }
+
+    #[test]
+    fn saved_wifi_out_of_range_is_the_last_section_of_wifi() {
+        let mut snap = home();
+        let now = now();
+        with_saved(
+            &mut snap,
+            "u-office",
+            "Office",
+            ConnectionKind::Wifi { ssid: b"Office".to_vec() },
+            now - 3 * 86_400,
+        );
+        // The Lumen Home profile is in range, so it isn't listed twice.
+        let view = build(Some(&snap), None, &UiState::default());
+        let (title, names) = rows(&view).pop().unwrap();
+        assert_eq!((title.as_str(), names), ("SAVED, NOT IN RANGE", vec!["Office".to_owned()]));
+        let office = view.sections.last().unwrap().rows.row_data(0).unwrap();
+        assert_eq!((office.meta.as_str(), office.icon.as_str()), ("Last used 3 days ago", "wifi"));
+        assert_eq!(view.net_hero.sub, "Lumen Home · 2 other networks in range · 1 saved one out of range");
+        // Its details still edit, forget and connect it.
+        let state = UiState { selected: Some("conn:u-office".into()), ..UiState::default() };
+        let d = build(Some(&snap), None, &state).details.unwrap();
+        let actions: Vec<String> = d.actions.iter().map(|a| a.label.to_string()).collect();
+        assert_eq!(actions, ["Connect", "Edit", "Forget"]);
+        assert_eq!(d.toggles.row_data(0).unwrap().label, "Connect automatically");
+        // The search finds it too.
+        let state = UiState { search: "off".into(), ..UiState::default() };
+        assert_eq!(rows(&build(Some(&snap), None, &state)), [("SAVED, NOT IN RANGE".into(), vec!["Office".into()])]);
+        assert_eq!(last_used(0, now), "Saved");
+        assert_eq!(last_used(now - 3600, now), "Last used today");
+        assert_eq!(last_used(now - 90 * 86_400, now), "Last used 3 months ago");
+    }
+
+    #[test]
+    fn the_wired_page_keeps_what_the_saved_page_listed() {
+        let mut snap = home();
+        with_saved(&mut snap, "u-lab", "Static (lab)", ConnectionKind::Ethernet, 0);
+        snap.connections.push(saved("u-dock", "Dock", ConnectionKind::Ethernet, "enx00e04c", None));
+        with_saved(&mut snap, "u-bt", "Phone", ConnectionKind::Bluetooth { address: "01:02".into() }, 0);
+        with_saved(&mut snap, "u-gsm", "Mobile", ConnectionKind::Other("gsm".into()), 0);
+        let state = UiState { page: Page::Wired, ..UiState::default() };
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(
+            rows(&view),
+            [
+                ("ENP3S0 · E1000E".into(), vec!["Static (lab)".into()]),
+                ("SAVED, NOT PLUGGED IN".into(), vec!["Dock".into()]),
+                ("OTHER CONNECTIONS".into(), vec!["Phone".into(), "Mobile".into()]),
+            ]
+        );
+        assert_eq!(view.sections[1].rows.row_data(0).unwrap().meta, "Saved · only on enx00e04c");
+        assert_eq!(view.count, "1 wired device");
+        assert_eq!(view.bottom_label, "Add a wired profile…");
+        assert!(!view.show_search);
+        let hero = &view.net_hero;
+        assert_eq!((hero.sub.as_str(), hero.name.as_str()), ("Cable unplugged · 2 saved profiles", "Cable unplugged"));
+        assert_eq!(hero.detail, "enp3s0   54:E1:AD:7C:20:9B");
+        assert!(hero.actions.is_empty());
+        // Plugged in and connected: the hero is the connection, with its speed.
+        let eth = &mut snap.devices[1];
+        eth.wired = Some(WiredDevice { carrier: true, speed: 1000 });
+        eth.active_connection = Some("/a/lab".into());
+        snap.active.push(ActiveConnection {
+            path: "/a/lab".into(),
+            id: "Static (lab)".into(),
+            uuid: "u-lab".into(),
+            state: ActiveState::Activated,
+            devices: vec!["/d/eth".into()],
+            connection: Some("/c/u-lab".into()),
+            specific_object: None,
+            vpn: false,
+        });
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(view.net_items.wired, "1000 Mb/s");
+        assert_eq!(
+            (view.net_hero.name.as_str(), view.net_hero.meta.as_str()),
+            ("Static (lab)", "Connected · 1000 Mb/s")
+        );
+        assert_eq!(view.net_hero.row.as_deref(), Some("conn:u-lab"));
+    }
+
+    #[test]
+    fn the_vpn_hero_offers_the_vpn_used_last() {
+        let mut snap = home();
+        with_saved(&mut snap, "u-wg", "Home (WireGuard)", ConnectionKind::WireGuard, 100);
+        let openconnect = ConnectionKind::Vpn {
+            service: crate::openconnect::SERVICE.into(),
+            gateway: "vpn.uzh.ch".into(),
+            protocol: "anyconnect".into(),
+        };
+        with_saved(&mut snap, "u-uzh", "UZH VPN", openconnect, 200);
+        let openvpn =
+            ConnectionKind::Vpn { service: "openvpn".into(), gateway: String::new(), protocol: String::new() };
+        with_saved(&mut snap, "u-ovpn", "Office", openvpn, 0);
+        let mut state = UiState { page: Page::Vpn, ..UiState::default() };
+        let view = build(Some(&snap), None, &state);
+        let hero = &view.net_hero;
+        assert_eq!(
+            (hero.sub.as_str(), hero.name.as_str(), hero.meta.as_str()),
+            ("Off · 3 saved", "No VPN on", "3 VPNs saved")
+        );
+        assert_eq!(hero.actions, [("connect", "Connect UZH VPN".to_owned(), "secondary")]);
+        assert_eq!(hero.row.as_deref(), Some("conn:u-uzh"));
+        assert_eq!((view.count.as_str(), view.search_placeholder.as_str()), ("3 VPNs", "Search VPNs"));
+        assert!(view.show_search);
+        state.search = "uzh".into();
+        assert_eq!(build(Some(&snap), None, &state).row_ids, ["conn:u-uzh"]);
+        // On: the hero is that VPN, and the sidebar names it.
+        snap.active.push(ActiveConnection {
+            path: "/a/wg".into(),
+            id: "Home (WireGuard)".into(),
+            uuid: "u-wg".into(),
+            state: ActiveState::Activated,
+            devices: vec![],
+            connection: Some("/c/u-wg".into()),
+            specific_object: None,
+            vpn: false,
+        });
+        let view = build(Some(&snap), None, &UiState { page: Page::Vpn, ..UiState::default() });
+        assert_eq!(view.net_items.vpn, "Home (WireGuard)");
+        assert_eq!(view.net_hero.sub, "On · 3 saved");
+        assert_eq!(view.net_hero.meta, "Connected · WireGuard");
+        let labels: Vec<&str> = view.net_hero.actions.iter().map(|a| a.1.as_str()).collect();
+        assert_eq!(labels, ["Edit", "Disconnect"]);
+    }
+
+    #[test]
+    fn the_hotspot_hero() {
+        let state = UiState { page: Page::Hotspot, ..UiState::default() };
         let view = build(Some(&home()), None, &state);
-        assert_eq!(rows(&view), [("WI-FI".into(), vec!["Lumen Home".into()])]);
+        let hero = &view.net_hero;
+        assert_eq!((hero.sub.as_str(), hero.name.as_str()), ("Off", "Hotspot off"));
+        assert!(view.count.is_empty() && view.sections.is_empty());
+        assert_eq!(view.net_items.hotspot, "off");
     }
 
     #[test]
@@ -1802,13 +2302,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn airplane_mode_is_wifi_and_mobile_broadband_off() {
+    fn hidden_networks_are_joined_on_the_wifi_device() {
         let mut snap = home();
-        assert_eq!(airplane_switch(&snap), Command::SetAirplane(true));
         snap.wireless_enabled = false;
-        assert!(!snap.airplane(), "mobile broadband is still on");
-        snap.wwan_enabled = false;
-        assert_eq!(airplane_switch(&snap), Command::SetAirplane(false));
         assert_eq!(hidden_network_device(&snap).as_deref(), Some("/d/wlan"));
     }
 

@@ -133,7 +133,7 @@ impl Client {
         }))
     }
 
-    /// Switches Wi-Fi on or off (what airplane mode does to Wi-Fi, but only Wi-Fi).
+    /// Switches Wi-Fi on or off.
     pub async fn set_wireless_enabled(&self, on: bool) -> Result<(), Error> {
         self.conn
             .call_method(
@@ -163,16 +163,16 @@ impl Client {
         Ok(())
     }
 
-    /// Airplane mode: Wi-Fi and mobile broadband off (or back on).
-    pub async fn set_airplane(&self, on: bool) -> Result<(), Error> {
-        for property in ["WirelessEnabled", "WwanEnabled"] {
+    /// Switches Wi-Fi and mobile broadband on or off, as airplane mode does.
+    pub async fn set_radios(&self, wifi: bool, wwan: bool) -> Result<(), Error> {
+        for (property, on) in [("WirelessEnabled", wifi), ("WwanEnabled", wwan)] {
             self.conn
                 .call_method(
                     Some(BUS_NAME),
                     MANAGER,
                     Some("org.freedesktop.DBus.Properties"),
                     "Set",
-                    &(IFACE, property, Value::from(!on)),
+                    &(IFACE, property, Value::from(on)),
                 )
                 .await
                 .map_err(Error::from_dbus)?;
@@ -428,7 +428,17 @@ impl Client {
                     .unwrap_or_default(),
             },
             "wireguard" => ConnectionKind::WireGuard,
-            "vpn" => ConnectionKind::Vpn { service: string("vpn", "service-type").unwrap_or_default() },
+            "vpn" => {
+                let data = get("vpn", "data")
+                    .and_then(|v| <HashMap<String, String>>::try_from(v.clone()).ok())
+                    .unwrap_or_default();
+                let value = |key: &str| data.get(key).cloned().unwrap_or_default();
+                ConnectionKind::Vpn {
+                    service: string("vpn", "service-type").unwrap_or_default(),
+                    gateway: if data.contains_key("gateway") { value("gateway") } else { value("remote") },
+                    protocol: value("protocol"),
+                }
+            }
             // NetworkManager turns spanning tree on unless told otherwise.
             "bridge" => ConnectionKind::Bridge {
                 stp: get("bridge", "stp").and_then(|v| bool::try_from(&**v).ok()).unwrap_or(true),
@@ -467,6 +477,7 @@ impl Client {
             interface: string("connection", "interface-name").filter(|i| !i.is_empty()),
             hotspot: string("802-11-wireless", "mode").as_deref() == Some("ap"),
             port,
+            timestamp: get("connection", "timestamp").and_then(|v| u64::try_from(&**v).ok()).unwrap_or(0),
             // NMMetered: 1 yes, 2 no, 3 guessed yes, 4 guessed no; 0 (unknown) means automatic.
             metered: match get("connection", "metered").and_then(|v| i32::try_from(&**v).ok()) {
                 Some(1 | 3) => Some(true),

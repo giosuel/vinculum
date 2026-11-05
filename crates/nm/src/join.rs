@@ -127,8 +127,10 @@ impl WifiJoin {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Connected,
-    /// The user (or something else) stopped it, or no password was given: nothing to report.
+    /// The user (or something else) stopped it: nothing to report.
     Stopped,
+    /// No agent gave the secrets it needed, or the user cancelled the password dialog.
+    NoSecrets,
     /// It failed, with the reason in words.
     Failed(String),
 }
@@ -227,8 +229,7 @@ impl Client {
 /// The words for NMDeviceStateReason (when the device failed) or else NMActiveConnectionStateReason.
 fn failure(device: Option<u32>, active: u32) -> Outcome {
     let text = match device {
-        // No secrets: the user cancelled the password dialog.
-        Some(7) => return Outcome::Stopped,
+        Some(7) => return Outcome::NoSecrets,
         Some(8) => "The network rejected the password.",
         Some(9) => "The network's security settings didn't work.",
         Some(10) => "The Wi-Fi service (wpa_supplicant) failed.",
@@ -236,14 +237,15 @@ fn failure(device: Option<u32>, active: u32) -> Outcome {
         Some(5 | 15..=17) => "Couldn't get an IP address from the network.",
         Some(53) => "The network is out of range.",
         Some(_) | None => match active {
-            // Unknown, none, disconnected by the user, device disconnected, connection removed.
-            1..=4 | 12 => return Outcome::Stopped,
-            10 => return Outcome::Stopped,
-            6 => "The IP settings didn't work.",
-            7 => "It took too long.",
-            8 | 9 => "The VPN service didn't start.",
-            11 => "The login was refused.",
-            13 => "A connection it depends on failed.",
+            // None, disconnected by the user, device disconnected, connection removed.
+            1..=3 | 11 => return Outcome::Stopped,
+            9 => return Outcome::NoSecrets,
+            4 => "The VPN service stopped.",
+            5 => "The IP settings didn't work.",
+            6 => "It took too long.",
+            7 | 8 => "The VPN service didn't start.",
+            10 => "The login was refused.",
+            12 => "A connection it depends on failed.",
             _ => "NetworkManager gave no reason.",
         },
     };
@@ -307,8 +309,13 @@ mod tests {
     #[test]
     fn failures_in_words() {
         assert_eq!(failure(Some(8), 4), Outcome::Failed("The network rejected the password.".into()));
-        assert_eq!(failure(Some(7), 4), Outcome::Stopped);
+        assert_eq!(failure(Some(7), 4), Outcome::NoSecrets);
         assert_eq!(failure(None, 3), Outcome::Stopped);
-        assert_eq!(failure(None, 7), Outcome::Failed("It took too long.".into()));
+        // NMActiveConnectionStateReason, for VPNs.
+        assert_eq!(failure(None, 9), Outcome::NoSecrets);
+        assert_eq!(failure(None, 10), Outcome::Failed("The login was refused.".into()));
+        assert_eq!(failure(None, 5), Outcome::Failed("The IP settings didn't work.".into()));
+        assert_eq!(failure(None, 6), Outcome::Failed("It took too long.".into()));
+        assert_eq!(failure(None, 7), Outcome::Failed("The VPN service didn't start.".into()));
     }
 }

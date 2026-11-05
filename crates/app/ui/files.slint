@@ -3,7 +3,7 @@
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 import { Button } from "controls.slint";
-import { CheckBox } from "dialogs.slint";
+import { CheckBox, Modal } from "dialogs.slint";
 
 /// tone: the status's colour ("accent" sent, "danger" failed, "muted").
 export struct FileRow { name: string, size: string, status: string, fraction: float, active: bool, tone: string }
@@ -24,36 +24,15 @@ export struct FilesView {
     note: string,
 }
 
-component Dialog inherits Rectangle {
-    in property <length> dialog-width: 480px;
-    background: #05060799;
-    TouchArea { }
-    Rectangle {
-        width: root.dialog-width;
-        height: body.preferred-height;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: 14px;
-        border-width: 1px;
-        border-color: Theme.ctrl-border;
-        background: Theme.surface;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: #00000080;
-        body := VerticalLayout {
-            padding: 24px;
-            spacing: 12px;
-            @children
-        }
-    }
-}
-
-export component SendFilesDialog inherits Dialog {
+export component SendFilesDialog inherits Modal {
     in property <FilesView> view;
     callback cancel();
     callback hide();
-    dialog-width: 500px;
-    accessible-role: groupbox;
-    accessible-label: view.send-title;
+    card-width: 500px;
+    card-spacing: 12px;
+    label: view.send-title;
+    // Esc hides it, as Hide does; the files keep going.
+    dismissed => { root.hide(); }
     Text { text: root.view.send-title; color: Theme.text; font-size: 17px; font-weight: 600; }
     Text { text: "Keep the device unlocked; it may ask you to accept each file."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
     for f in root.view.files: VerticalLayout {
@@ -89,14 +68,14 @@ export component SendFilesDialog inherits Dialog {
     }
 }
 
-export component IncomingFileDialog inherits Dialog {
+export component IncomingFileDialog inherits Modal {
     in property <FilesView> view;
     in-out property <bool> always;
     callback accept();
     callback decline();
-    dialog-width: 440px;
-    accessible-role: groupbox;
-    accessible-label: view.in-title;
+    card-spacing: 12px;
+    label: view.in-title;
+    dismissed => { root.decline(); }
     Text { text: root.view.in-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
     Rectangle {
         height: 56px;
