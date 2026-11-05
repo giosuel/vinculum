@@ -4,7 +4,7 @@
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Battery, Spinner } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel, Scroll } from "controls.slint";
-import { TextField, Segmented, CheckBox } from "dialogs.slint";
+import { TextField, Segmented, CheckBox, Modal } from "dialogs.slint";
 import { Details, DetailsPane } from "details.slint";
 import { HeroInfo } from "shell.slint";
 
@@ -270,7 +270,7 @@ export component BluetoothPage inherits HorizontalLayout {
                 spacing: 14px;
                 padding-bottom: 40px;
                 if root.page.state == "loading": HorizontalLayout { alignment: center; Spinner { size: 20px; } }
-                if root.page.empty-icon != "": Icon { name: root.page.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; x: (parent.width - 44px) / 2; }
+                if root.page.empty-icon != "": HorizontalLayout { alignment: center; Icon { name: root.page.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
                 Text { text: root.page.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
                 if root.page.empty-text != "": HorizontalLayout {
                     alignment: center;
@@ -353,42 +353,6 @@ export component BluetoothPage inherits HorizontalLayout {
                         audio-touch := TouchArea { mouse-cursor: pointer; clicked => { root.act("audio", "" + i); } }
                     }
                 }
-            }
-        }
-    }
-}
-
-/// A dialog over the window: a dimmed backdrop and a card with the children.
-component Modal inherits Rectangle {
-    in property <length> card-width: 440px;
-    in property <string> label;
-    callback dismissed();
-    background: #05060799;
-    TouchArea { clicked => { root.dismissed(); } }
-    Rectangle {
-        width: root.card-width;
-        height: body.preferred-height;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: 14px;
-        border-width: 1px;
-        border-color: Theme.ctrl-border;
-        background: Theme.surface;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: #00000080;
-        accessible-role: groupbox;
-        accessible-label: root.label;
-        TouchArea {}
-        // Esc in a field of the dialog: the window's own keys never see it.
-        FocusScope {
-            key-pressed(event) => {
-                if event.text == Key.Escape { root.dismissed(); return accept; }
-                reject
-            }
-            body := VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                @children
             }
         }
     }
@@ -512,6 +476,8 @@ export component BtAdapterDialog inherits Modal {
     callback closed();
     card-width: 560px;
     label: "Bluetooth adapter";
+    // Its settings apply at once and the name is saved on the way out, so nothing typed is lost.
+    backdrop-dismisses: true;
     dismissed => { root.name-saved(); root.closed(); }
     Text { text: "Bluetooth adapter"; color: Theme.text; font-size: 17px; font-weight: 600; }
     GridLayout {

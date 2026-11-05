@@ -540,7 +540,7 @@ fn is_hotspot(snap: &Snapshot, active: &lituus_nm::ActiveConnection) -> bool {
 /// The Network item's sidebar status, and its sub-items'.
 fn network_status(snap: &Snapshot, view: &mut View) {
     view.wifi_available = wifi_device(snap).is_some();
-    view.net_status = if snap.airplane() {
+    view.net_status = if snap.wireless_off() {
         "Off".to_owned()
     } else {
         online_through(snap).map_or_else(|| "Offline".to_owned(), |a| a.id.clone())
@@ -1438,7 +1438,13 @@ pub enum Command {
         access_point: Option<String>,
         join: WifiJoin,
     },
-    SetAirplane(bool),
+    /// Airplane mode on or off: Wi-Fi and mobile broadband switched to these (Bluetooth is the
+    /// Bluetooth thread's; see `airplane.rs`).
+    SetAirplane {
+        on: bool,
+        wifi: bool,
+        wwan: bool,
+    },
     /// Read a connection's settings (or none, for a new one) and open the editor.
     OpenEditor {
         connection: Option<String>,
@@ -1696,11 +1702,6 @@ pub fn row_name(snap: &Snapshot, id: &str) -> Option<String> {
     }
     let uuid = id.strip_prefix("conn:")?;
     snap.connections.iter().find(|c| c.uuid == uuid).map(|c| c.id.clone())
-}
-
-/// Airplane mode on or off.
-pub fn airplane_switch(snap: &Snapshot) -> Command {
-    Command::SetAirplane(!snap.airplane())
 }
 
 /// The Wi-Fi device a hidden network is joined on.
@@ -2203,13 +2204,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn airplane_mode_is_wifi_and_mobile_broadband_off() {
+    fn hidden_networks_are_joined_on_the_wifi_device() {
         let mut snap = home();
-        assert_eq!(airplane_switch(&snap), Command::SetAirplane(true));
         snap.wireless_enabled = false;
-        assert!(!snap.airplane(), "mobile broadband is still on");
-        snap.wwan_enabled = false;
-        assert_eq!(airplane_switch(&snap), Command::SetAirplane(false));
         assert_eq!(hidden_network_device(&snap).as_deref(), Some("/d/wlan"));
     }
 

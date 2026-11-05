@@ -78,8 +78,11 @@ impl TrayIcon {
     }
 }
 
-pub fn build(snap: Option<&Snapshot>) -> Quick {
-    let Some(snap) = snap else { return Quick { status: "NetworkManager isn't running".into(), ..Quick::default() } };
+/// The popup's and the tray's rows; `airplane` is whether airplane mode is on (see `airplane.rs`).
+pub fn build(snap: Option<&Snapshot>, airplane: bool) -> Quick {
+    let Some(snap) = snap else {
+        return Quick { status: "NetworkManager isn't running".into(), airplane, ..Quick::default() };
+    };
     let device = view::wifi_device(snap);
     let wifi_available = device.is_some() && snap.wireless_hardware_enabled;
     let wifi_on = wifi_available && snap.wireless_enabled;
@@ -137,11 +140,11 @@ pub fn build(snap: Option<&Snapshot>) -> Quick {
             None => "Wi-Fi: not connected".to_owned(),
         }
     };
-    let icon = icon(snap, connected, vpns.iter().any(|v| v.connected));
-    Quick { wifi_available, wifi_on, status, networks, vpns, airplane: snap.airplane(), icon }
+    let icon = icon(snap, connected, vpns.iter().any(|v| v.connected), airplane);
+    Quick { wifi_available, wifi_on, status, networks, vpns, airplane, icon }
 }
 
-fn icon(snap: &Snapshot, wifi: Option<&QuickNetwork>, vpn: bool) -> TrayIcon {
+fn icon(snap: &Snapshot, wifi: Option<&QuickNetwork>, vpn: bool, airplane: bool) -> TrayIcon {
     let wired = snap.devices.iter().any(|d| {
         d.kind == DeviceKind::Ethernet
             && d.active_connection
@@ -154,7 +157,7 @@ fn icon(snap: &Snapshot, wifi: Option<&QuickNetwork>, vpn: bool) -> TrayIcon {
         _ if wired => TrayIcon::Wired,
         Some(n) if n.connecting => TrayIcon::Connecting,
         Some(n) => TrayIcon::Wifi(n.bars),
-        None if snap.airplane() => TrayIcon::Airplane,
+        None if airplane => TrayIcon::Airplane,
         None if view::wifi_device(snap).is_some() && !snap.wireless_enabled => TrayIcon::WifiOff,
         None => TrayIcon::Offline,
     }
@@ -167,7 +170,7 @@ mod tests {
 
     #[test]
     fn home_network_and_its_neighbours() {
-        let q = build(Some(&home()));
+        let q = build(Some(&home()), false);
         assert!(q.wifi_on);
         assert_eq!(q.status, "Wi-Fi: Lumen Home");
         let names: Vec<&str> = q.networks.iter().map(|n| n.name.as_str()).collect();
@@ -186,12 +189,14 @@ mod tests {
         snap.wireless_enabled = false;
         snap.active.clear();
         snap.devices[0].active_connection = None;
-        let q = build(Some(&snap));
+        snap.wwan_enabled = false;
+        let q = build(Some(&snap), false);
         assert_eq!(q.status, "Wi-Fi: off");
         assert!(q.networks.is_empty());
+        // Wi-Fi off isn't airplane mode, even with mobile broadband off too.
         assert_eq!(q.icon, TrayIcon::WifiOff);
-        snap.wwan_enabled = false;
-        assert_eq!(build(Some(&snap)).icon, TrayIcon::Airplane);
-        assert_eq!(build(None).icon, TrayIcon::Offline);
+        assert!(!q.airplane);
+        assert_eq!(build(Some(&snap), true).icon, TrayIcon::Airplane);
+        assert_eq!(build(None, false).icon, TrayIcon::Offline);
     }
 }

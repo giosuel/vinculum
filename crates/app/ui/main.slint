@@ -10,7 +10,7 @@ import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel, Kbd, Scroll } from "controls.slint";
-import { JoinDialog, TextField, Segmented } from "dialogs.slint";
+import { JoinDialog, TextField, Segmented, Modal } from "dialogs.slint";
 import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
 import { Sidebar, Hero, HeroSubject, Card, NavItem, NavGroup, HeroInfo } from "shell.slint";
@@ -141,7 +141,7 @@ export component MainWindow inherits Window {
     // A bold first line for the message ("Couldn't connect to Aster Café"), and a button on it.
     in property <string> message-title;
     in property <string> message-action;
-    // The confirmation dialog (forgetting a connection).
+    // The confirmation dialog (forgetting a connection or a device, changing a display profile).
     in property <bool> confirm-open;
     in property <string> confirm-title;
     in property <string> confirm-text;
@@ -300,6 +300,9 @@ export component MainWindow inherits Window {
     keys := FocusScope {
         init => { self.focus(); }
         key-pressed(event) => {
+            // The confirmation dialog is over everything: Esc cancels it, and the page gets no keys.
+            if root.confirm-open && event.text == Key.Escape { root.confirm-cancelled(); return accept; }
+            if root.confirm-open { return reject; }
             if event.modifiers.control && (event.text == "k" || event.text == "K") { root.nav-focus-requests += 1; return accept; }
             if event.text == "/" && root.show-search { root.search-focus-requests += 1; return accept; }
             if event.text == Key.DownArrow { root.follow-selection = true; root.move-selection(1); return accept; }
@@ -315,9 +318,8 @@ export component MainWindow inherits Window {
             if event.text == Key.Escape && root.add-open { root.add-cancelled(); return accept; }
             if event.text == Key.Escape && root.share-open { root.share-closed(); return accept; }
             if event.text == Key.Escape && root.hostname-open { root.hostname-cancelled(); return accept; }
-            if event.text == "e" && root.has-details && !root.confirm-open && !root.join-open { root.action("edit"); return accept; }
-            if event.text == Key.Return && !root.confirm-open && !root.join-open { root.activate-selected(); return accept; }
-            if event.text == Key.Escape && root.confirm-open { root.confirm-cancelled(); return accept; }
+            if event.text == "e" && root.has-details && !root.join-open { root.action("edit"); return accept; }
+            if event.text == Key.Return && !root.join-open { root.activate-selected(); return accept; }
             if event.text == Key.Escape && root.join-open { root.join-cancelled(); return accept; }
             reject
         }
@@ -496,7 +498,7 @@ export component MainWindow inherits Window {
                         if root.network-page && root.page != "hotspot" && root.placeholder == "": HorizontalLayout {
                             vertical-stretch: 1;
                             spacing: 14px;
-                            Card {
+                            list-card := Card {
                                 horizontal-stretch: 1;
                                 min-width: 330px;
                                 preferred-width: 440px;
@@ -853,6 +855,14 @@ export component MainWindow inherits Window {
         }
     }
 
+    // A dialog that closes takes the keyboard focus with it, and not every dialog closes through
+    // its own buttons (the time after Apply runs out, NetworkManager withdraws its question, a
+    // choice in "Add a connection" opens the editor): the window's keys get it back.
+    property <bool> modal-open: root.join-open || root.add-open || root.hostname-open || root.share-open
+        || root.bt-pair-open || root.bt-adapter-open || root.bt-rename-open || root.files.sending || root.files.incoming
+        || (root.page == "displays" && (root.displays.keep-open || root.displays.config-open));
+    changed modal-open => { if !self.modal-open { keys.focus(); } }
+
     // The confirmation dialog, over everything.
     if root.confirm-open: Rectangle {
         background: #05060799;
@@ -947,168 +957,123 @@ export component MainWindow inherits Window {
         add-allowed(i) => { root.editor-add-allowed(i); }
     }
 
-    if root.add-open: Rectangle {
-        background: #05060799;
-        TouchArea { clicked => { root.add-cancelled(); } }
-        Rectangle {
-            width: 660px;
-            height: add-form.preferred-height;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 14px;
-            border-width: 1px;
-            border-color: Theme.ctrl-border;
-            background: Theme.surface;
-            drop-shadow-blur: 40px;
-            drop-shadow-color: #00000080;
-            TouchArea {}
-            add-form := VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                Text { text: "Add a connection"; color: Theme.text; font-size: 17px; font-weight: 600; }
-                GridLayout {
-                    spacing: 10px;
-                    for group[g] in ["NETWORKS", "VPN", "VIRTUAL INTERFACES"]: SectionLabel {
-                        text: group;
-                        col: 0;
-                        colspan: 3;
-                        row: g * 2;
-                    }
-                    for kind[i] in [
-                        { id: "wifi", icon: "wifi", title: "Wi-Fi", text: "Hidden and Enterprise (802.1X) too", ready: true },
-                        { id: "wired", icon: "wired", title: "Wired", text: "Ethernet, DHCP or static", ready: true },
-                        { id: "hotspot", icon: "hotspot", title: "Hotspot", text: "Share a connection over Wi-Fi", ready: true },
-                        { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Built in. Empty or from a .conf", ready: true },
-                        { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "By hand or from an .ovpn", ready: true },
-                        { id: "import", icon: "saved", title: "Import from file…", text: "A .conf or an .ovpn", ready: true },
-                        { id: "vlan", icon: "vlan", title: "VLAN", text: "A tagged network on a wired device", ready: true },
-                        { id: "bridge", icon: "bridge", title: "Bridge", text: "Join devices into one network, e.g. for VMs", ready: true },
-                        { id: "bond", icon: "bond", title: "Bond", text: "Combine devices for failover or speed", ready: true },
-                    ]: Rectangle {
-                        col: mod(i, 3);
-                        row: floor(i / 3) * 2 + 1;
-                        width: 196px;
-                        height: 76px;
-                        border-radius: 10px;
-                        border-width: 1px;
-                        border-color: Theme.border2;
-                        background: tile.has-hover && kind.ready ? Theme.sel-bg : transparent;
-                        opacity: kind.ready ? 1 : 0.5;
-                        accessible-role: button;
-                        accessible-label: kind.title;
-                        accessible-enabled: kind.ready;
-                        accessible-action-default => { if kind.ready { root.add-chosen(kind.id); } }
-                        HorizontalLayout {
-                            padding: 14px;
-                            spacing: 12px;
-                            Icon { name: kind.icon; tint: Theme.accent; y: 2px; }
-                            VerticalLayout {
-                                spacing: 3px;
-                                alignment: start;
-                                Text { text: kind.title; color: Theme.text; font-weight: 600; font-size: 14px; }
-                                Text { text: kind.text; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
-                            }
-                        }
-                        tile := TouchArea { enabled: kind.ready; mouse-cursor: kind.ready ? pointer : default; clicked => { root.add-chosen(kind.id); } }
-                    }
-                }
-                HorizontalLayout {
-                    padding-top: 6px;
-                    alignment: end;
-                    Button { label: "Cancel"; button-height: 36px; clicked => { root.add-cancelled(); keys.focus(); } }
-                }
+    if root.add-open: Modal {
+        card-width: 660px;
+        label: "Add a connection";
+        backdrop-dismisses: true;
+        dismissed => { root.add-cancelled(); keys.focus(); }
+        Text { text: "Add a connection"; color: Theme.text; font-size: 17px; font-weight: 600; }
+        GridLayout {
+            spacing: 10px;
+            for group[g] in ["NETWORKS", "VPN", "VIRTUAL INTERFACES"]: SectionLabel {
+                text: group;
+                col: 0;
+                colspan: 3;
+                row: g * 2;
             }
-        }
-    }
-
-    if root.hostname-open: Rectangle {
-        background: #05060799;
-        TouchArea { clicked => { root.hostname-cancelled(); keys.focus(); } }
-        Rectangle {
-            width: 420px;
-            height: host-form.preferred-height;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 14px;
-            border-width: 1px;
-            border-color: Theme.ctrl-border;
-            background: Theme.surface;
-            drop-shadow-blur: 40px;
-            drop-shadow-color: #00000080;
-            TouchArea {}
-            host-form := VerticalLayout {
-                padding: 24px;
-                spacing: 12px;
-                Text { text: "Hostname"; color: Theme.text; font-size: 17px; font-weight: 600; }
-                Text { text: "The computer's name on the network. Changing it needs an admin password."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-                TextField {
-                    text <=> root.hostname-input;
-                    mono: true;
-                    autofocus: true;
-                    label: "Hostname";
-                    invalid: root.hostname-error != "";
-                    accepted => { if root.hostname-error == "" { root.hostname-save(); keys.focus(); } }
-                }
-                if root.hostname-error != "": Text { text: root.hostname-error; color: Theme.danger; font-size: 12px; }
+            for kind[i] in [
+                { id: "wifi", icon: "wifi", title: "Wi-Fi", text: "Hidden and Enterprise (802.1X) too", ready: true },
+                { id: "wired", icon: "wired", title: "Wired", text: "Ethernet, DHCP or static", ready: true },
+                { id: "hotspot", icon: "hotspot", title: "Hotspot", text: "Share a connection over Wi-Fi", ready: true },
+                { id: "wireguard", icon: "vpn", title: "WireGuard", text: "Built in. Empty or from a .conf", ready: true },
+                { id: "openvpn", icon: "vpn", title: "OpenVPN", text: "By hand or from an .ovpn", ready: true },
+                { id: "import", icon: "saved", title: "Import from file…", text: "A .conf or an .ovpn", ready: true },
+                { id: "vlan", icon: "vlan", title: "VLAN", text: "A tagged network on a wired device", ready: true },
+                { id: "bridge", icon: "bridge", title: "Bridge", text: "Join devices into one network, e.g. for VMs", ready: true },
+                { id: "bond", icon: "bond", title: "Bond", text: "Combine devices for failover or speed", ready: true },
+            ]: Rectangle {
+                col: mod(i, 3);
+                row: floor(i / 3) * 2 + 1;
+                width: 196px;
+                height: 76px;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: Theme.border2;
+                background: tile.has-hover && kind.ready ? Theme.sel-bg : transparent;
+                opacity: kind.ready ? 1 : 0.5;
+                accessible-role: button;
+                accessible-label: kind.title;
+                accessible-enabled: kind.ready;
+                accessible-action-default => { if kind.ready { root.add-chosen(kind.id); } }
                 HorizontalLayout {
-                    padding-top: 6px;
-                    spacing: 8px;
-                    alignment: end;
-                    Button { label: "Cancel"; button-height: 36px; clicked => { root.hostname-cancelled(); keys.focus(); } }
-                    Button { label: "Save"; kind: "primary"; button-height: 36px; enabled: root.hostname-error == ""; clicked => { root.hostname-save(); keys.focus(); } }
-                }
-            }
-        }
-    }
-
-    if root.share-open: Rectangle {
-        background: #05060799;
-        TouchArea { clicked => { root.share-closed(); keys.focus(); } }
-        Rectangle {
-            width: 400px;
-            height: share-form.preferred-height;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 14px;
-            border-width: 1px;
-            border-color: Theme.ctrl-border;
-            background: Theme.surface;
-            drop-shadow-blur: 40px;
-            drop-shadow-color: #00000080;
-            TouchArea {}
-            share-form := VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                VerticalLayout {
-                    spacing: 3px;
-                    Text { text: root.share-title; color: Theme.text; font-size: 17px; font-weight: 600; }
-                    Text { text: "Scan with a phone camera to join."; color: Theme.muted; font-size: 13px; }
-                }
-                HorizontalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 264px;
-                        height: 264px;
-                        border-radius: 14px;
-                        background: white;
-                        Image { source: root.share-qr; width: 240px; height: 240px; image-rendering: pixelated; }
-                    }
-                }
-                if root.share-password != "": HorizontalLayout {
+                    padding: 14px;
                     spacing: 12px;
-                    Text { text: "Password"; color: Theme.muted; font-size: 13px; width: 90px; vertical-alignment: center; }
-                    Rectangle {
-                        height: 30px;
-                        horizontal-stretch: 1;
-                        TextInput { text: root.share-password; read-only: true; color: Theme.text; font-family: "JetBrains Mono"; font-size: 13px; vertical-alignment: center; single-line: true; }
+                    Icon { name: kind.icon; tint: Theme.accent; y: 2px; }
+                    VerticalLayout {
+                        spacing: 3px;
+                        alignment: start;
+                        Text { text: kind.title; color: Theme.text; font-weight: 600; font-size: 14px; }
+                        Text { text: kind.text; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
                     }
                 }
-                HorizontalLayout {
-                    padding-top: 4px;
-                    alignment: end;
-                    Button { label: "Close"; button-height: 36px; clicked => { root.share-closed(); keys.focus(); } }
-                }
+                tile := TouchArea { enabled: kind.ready; mouse-cursor: kind.ready ? pointer : default; clicked => { root.add-chosen(kind.id); } }
             }
+        }
+        HorizontalLayout {
+            padding-top: 6px;
+            alignment: end;
+            Button { label: "Cancel"; button-height: 36px; clicked => { root.add-cancelled(); keys.focus(); } }
+        }
+    }
+
+    if root.hostname-open: Modal {
+        card-width: 420px;
+        card-spacing: 12px;
+        label: "Hostname";
+        dismissed => { root.hostname-cancelled(); keys.focus(); }
+        Text { text: "Hostname"; color: Theme.text; font-size: 17px; font-weight: 600; }
+        Text { text: "The computer's name on the network. Changing it needs an admin password."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+        TextField {
+            text <=> root.hostname-input;
+            mono: true;
+            autofocus: true;
+            label: "Hostname";
+            invalid: root.hostname-error != "";
+            accepted => { if root.hostname-error == "" { root.hostname-save(); keys.focus(); } }
+        }
+        if root.hostname-error != "": Text { text: root.hostname-error; color: Theme.danger; font-size: 12px; }
+        HorizontalLayout {
+            padding-top: 6px;
+            spacing: 8px;
+            alignment: end;
+            Button { label: "Cancel"; button-height: 36px; clicked => { root.hostname-cancelled(); keys.focus(); } }
+            Button { label: "Save"; kind: "primary"; button-height: 36px; enabled: root.hostname-error == ""; clicked => { root.hostname-save(); keys.focus(); } }
+        }
+    }
+
+    if root.share-open: Modal {
+        card-width: 400px;
+        label: root.share-title;
+        backdrop-dismisses: true;
+        dismissed => { root.share-closed(); keys.focus(); }
+        VerticalLayout {
+            spacing: 3px;
+            Text { text: root.share-title; color: Theme.text; font-size: 17px; font-weight: 600; }
+            Text { text: "Scan with a phone camera to join."; color: Theme.muted; font-size: 13px; }
+        }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 264px;
+                height: 264px;
+                border-radius: 14px;
+                background: white;
+                Image { source: root.share-qr; width: 240px; height: 240px; image-rendering: pixelated; }
+            }
+        }
+        if root.share-password != "": HorizontalLayout {
+            spacing: 12px;
+            Text { text: "Password"; color: Theme.muted; font-size: 13px; width: 90px; vertical-alignment: center; }
+            Rectangle {
+                height: 30px;
+                horizontal-stretch: 1;
+                TextInput { text: root.share-password; read-only: true; color: Theme.text; font-family: "JetBrains Mono"; font-size: 13px; vertical-alignment: center; single-line: true; }
+            }
+        }
+        HorizontalLayout {
+            padding-top: 4px;
+            alignment: end;
+            Button { label: "Close"; button-height: 36px; clicked => { root.share-closed(); keys.focus(); } }
         }
     }
 

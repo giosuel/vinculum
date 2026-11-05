@@ -6,6 +6,7 @@ use clap::Parser;
 use futures_util::StreamExt;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
+mod airplane;
 mod audio;
 mod bluetooth;
 mod config;
@@ -75,6 +76,24 @@ fn key_mgmt_at(index: i32) -> Option<lituus_nm::KeyMgmt> {
     }
 }
 
+/// The confirmation dialog: its title, text and button, and what accepting it does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Confirm {
+    pub title: String,
+    pub text: String,
+    pub button: String,
+    pub then: Confirmed,
+}
+
+/// What a confirmation dialog runs once it's accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Confirmed {
+    Network(view::Command),
+    Bluetooth(bluetooth::Command),
+    /// A Displays profile change ("profile-update", "profile-delete") and the profile's name.
+    Displays(&'static str, String),
+}
+
 /// The password dialog's three forms.
 enum Dialog {
     /// Joining a secured network from the list.
@@ -105,9 +124,8 @@ struct App {
     commands: Option<tokio::sync::mpsc::UnboundedSender<view::Command>>,
     /// The message above the list, and its tone ("danger", "warn", "info").
     message: Option<(String, &'static str)>,
-    /// The command waiting for the confirmation dialog, and the dialog's title, text and button.
-    confirm: Option<view::Command>,
-    confirm_text: Option<(String, String, String)>,
+    /// The confirmation dialog, while it's open.
+    confirm: Option<Confirm>,
     /// The password dialog, and NetworkManager's requests waiting behind it.
     dialog: Option<Dialog>,
     prompts: VecDeque<secrets::Prompt>,
@@ -150,6 +168,8 @@ struct App {
     displays: displays::State,
     /// The Sound page.
     sound: sound::State,
+    /// Airplane mode, from when it's turned on until it ends.
+    airplane: Option<airplane::Airplane>,
     /// The sidebar's search.
     nav_query: String,
     /// The sidebar items whose sub-items are folded away, for this session only (config.toml
@@ -336,7 +356,7 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
         tray::Event::Connect(id) | tray::Event::Toggle(id) => {
             update(&weak, |app| {
                 let Some(snap) = &app.snapshot else { return };
-                let q = quick::build(Some(snap));
+                let q = quick::build(Some(snap), app.quick.airplane);
                 let page = if id.starts_with("wifi:") { "wifi" } else { "vpn" };
                 let action = if id.starts_with("wifi:") {
                     if q.networks.iter().any(|n| n.id == id && n.active) {
@@ -362,7 +382,7 @@ fn on_tray(window: &MainWindow, event: tray::Event) {
             }
         }
         tray::Event::SetWifi(on) => update(&weak, |app| send(app, view::Command::SetWifi(on))),
-        tray::Event::SetAirplane(on) => update(&weak, |app| send(app, view::Command::SetAirplane(on))),
+        tray::Event::SetAirplane(on) => update(&weak, |app| set_airplane(app, on)),
         tray::Event::Open => {
             hide_quick();
             let _ = window.show();
@@ -476,8 +496,8 @@ fn toggle_quick(window: &MainWindow) {
 }
 
 /// The tray and the popup show what changed.
-fn render_quick(app: &mut App) {
-    let q = quick::build(app.snapshot.as_ref());
+fn render_quick(app: &mut App, airplane: bool) {
+    let q = quick::build(app.snapshot.as_ref(), airplane);
     let bt = bluetooth::quick(&app.bt);
     if q == app.quick && bt == app.quick_bt && !std::mem::take(&mut app.quick_new) {
         return;
@@ -524,7 +544,7 @@ fn render_quick(app: &mut App) {
         toggles.push(QuickToggle {
             id: "airplane".into(),
             name: "Airplane mode".into(),
-            meta: "Turns off Wi-Fi and mobile broadband".into(),
+            meta: "Turns off Wi-Fi, Bluetooth and mobile broadband".into(),
             on: q.airplane,
         });
         popup.set_toggles(model(toggles));
@@ -654,7 +674,11 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_displays_act(move |verb, arg, value| {
         let w = weak.clone();
-        update(&weak, |app| displays::act(&w, &mut app.displays, &verb, &arg, value))
+        update(&weak, |app| {
+            if let Some(confirm) = displays::act(&w, &mut app.displays, &verb, &arg, value) {
+                app.confirm = Some(confirm);
+            }
+        })
     });
     let weak = window.as_weak();
     window.on_displays_drag(move |i, x, y, done| {
@@ -824,10 +848,11 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_dismiss_message(move || update(&weak, |app| app.message = None));
     let weak = window.as_weak();
     window.on_confirm_accepted(move || {
-        update(&weak, |app| {
-            if let Some(command) = app.confirm.take() {
-                send(app, command);
-            }
+        update(&weak, |app| match app.confirm.take().map(|c| c.then) {
+            Some(Confirmed::Network(command)) => send(app, command),
+            Some(Confirmed::Bluetooth(command)) => app.bt.send(command),
+            Some(Confirmed::Displays(verb, name)) => displays::confirmed(&mut app.displays, verb, &name),
+            None => {}
         })
     });
     let weak = window.as_weak();
@@ -856,13 +881,7 @@ fn connect_callbacks(window: &MainWindow) {
         })
     });
     let weak = window.as_weak();
-    window.on_airplane_toggled(move || {
-        update(&weak, |app| {
-            if let Some(command) = app.snapshot.as_ref().map(view::airplane_switch) {
-                send(app, command);
-            }
-        })
-    });
+    window.on_airplane_toggled(move || update(&weak, |app| set_airplane(app, !app.quick.airplane)));
     window.on_join_check(|mode, name, security, password| {
         let password_ok = |index| key_mgmt_at(index).is_some_and(|k| k.accepts(&password));
         if mode == "hidden" {
@@ -1036,8 +1055,7 @@ fn act(app: &mut App, action: &str) {
         }
         Some(view::Intent::Join(target)) => open_dialog(app, Dialog::Join(target)),
         Some(view::Intent::Confirm { title, text, button, command }) => {
-            app.confirm = Some(command);
-            app.confirm_text = Some((title, text, button));
+            app.confirm = Some(Confirm { title, text, button, then: Confirmed::Network(command) });
         }
         None => {}
     }
@@ -1049,6 +1067,16 @@ fn send(app: &mut App, command: view::Command) {
     app.retry = None;
     if let Some(commands) = &app.commands {
         let _ = commands.send(command);
+    }
+}
+
+/// Airplane mode on or off: NetworkManager switches Wi-Fi and mobile broadband, the Bluetooth
+/// thread the adapters.
+fn set_airplane(app: &mut App, on: bool) {
+    let change = airplane::switch(&mut app.airplane, on, app.snapshot.as_ref(), app.bt.snapshot.as_ref());
+    send(app, view::Command::SetAirplane { on, wifi: change.wifi, wwan: change.wwan });
+    for (adapter, on) in change.bluetooth {
+        app.bt.send(bluetooth::Command::Power { adapter, on });
     }
 }
 
@@ -1266,6 +1294,8 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
 fn render(window: &MainWindow) {
     APP.with(|app| {
         let mut app = app.borrow_mut();
+        let state = &mut *app;
+        let airplane = airplane::follow(&mut state.airplane, state.snapshot.as_ref(), state.bt.snapshot.as_ref());
         let v = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui);
         let mut entries = nav_entries(&app);
         let statuses = [&v.net_status, &v.net_items.wifi, &v.net_items.wired, &v.net_items.vpn, &v.net_items.hotspot];
@@ -1338,14 +1368,14 @@ fn render(window: &MainWindow) {
         window.set_message(message.into());
         window.set_message_tone(if tone.is_empty() { "info".into() } else { tone.into() });
         window.set_confirm_open(app.confirm.is_some());
-        if let Some((title, text, button)) = &app.confirm_text {
-            window.set_confirm_title(title.into());
-            window.set_confirm_text(text.into());
-            window.set_confirm_button(button.into());
+        if let Some(confirm) = &app.confirm {
+            window.set_confirm_title(confirm.title.as_str().into());
+            window.set_confirm_text(confirm.text.as_str().into());
+            window.set_confirm_button(confirm.button.as_str().into());
         }
         window.set_message_title(if app.message.is_some() { app.message_title.as_str().into() } else { "".into() });
         window.set_message_action(if app.retry.is_some() { "Try again".into() } else { "".into() });
-        window.set_airplane(app.snapshot.as_ref().is_some_and(|s| s.airplane()));
+        window.set_airplane(airplane);
         let keyring = app.keyring;
         window.set_keyring_label(
             match keyring {
@@ -1386,7 +1416,7 @@ fn render(window: &MainWindow) {
         sound::render(window, &app.sound);
         displays::render(window, &app.displays);
         files::render(window, &app.files);
-        render_quick(&mut app);
+        render_quick(&mut app, airplane);
     });
 }
 
@@ -1752,7 +1782,7 @@ async fn run(
             (active, Some(device.clone()), retry)
         }
         SetWifi(on) => return client.set_wireless_enabled(*on).await.map(|()| None),
-        SetAirplane(on) => return client.set_airplane(*on).await.map(|()| None),
+        SetAirplane { wifi, wwan, .. } => return client.set_radios(*wifi, *wwan).await.map(|()| None),
         Rescan { device } => return client.request_scan(device).await.map(|()| None),
         Deactivate { active } => return client.deactivate(active).await.map(|()| None),
         Forget { connection } => return client.forget(connection).await.map(|()| None),
@@ -2018,8 +2048,8 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituu
     let what = match command {
         SetWifi(true) => "Couldn't turn Wi-Fi on",
         SetWifi(false) => "Couldn't turn Wi-Fi off",
-        SetAirplane(true) => "Couldn't turn airplane mode on",
-        SetAirplane(false) => "Couldn't turn airplane mode off",
+        SetAirplane { on: true, .. } => "Couldn't turn airplane mode on",
+        SetAirplane { on: false, .. } => "Couldn't turn airplane mode off",
         Rescan { .. } => "Couldn't scan",
         Activate { .. } | ConnectOpen { .. } | Join { .. } => "Couldn't connect",
         OpenEditor { .. } | NewEnterprise { .. } => "Couldn't read the connection",
@@ -2046,9 +2076,13 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituu
         ),
         other => (format!("{what}: {other}."), "danger"),
     };
+    let airplane_failed = matches!(command, SetAirplane { on: true, .. });
     let _ = weak.upgrade_in_event_loop(move |window| {
         APP.with(|app| {
             let mut app = app.borrow_mut();
+            if airplane_failed {
+                app.airplane = None;
+            }
             app.message_title.clear();
             app.retry = None;
             app.message = Some((text, tone));
@@ -2247,6 +2281,224 @@ fn set_theme(t: Theme<'_>, p: &theme::Palette) {
     t.set_warn_border(color(p.warn_border));
     t.set_warn_text(color(p.warn_text));
     t.set_glow(color(p.glow));
+}
+
+#[cfg(test)]
+mod dialog_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use i_slint_backend_testing::mock_elapsed_time;
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    use slint::{ComponentHandle, LogicalPosition, LogicalSize, SharedString};
+
+    use super::{DisplaysView, FilesView, MainWindow};
+
+    /// A window on the test backend whose dialog callbacks write down what they were called
+    /// with, and close the dialog as the app does.
+    fn dialogs() -> (MainWindow, Rc<RefCell<Vec<String>>>) {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.show().unwrap();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let (l, w) = (log.clone(), window.as_weak());
+        let note = move |what: &str| {
+            let (log, w) = (l.clone(), w.clone());
+            let what = what.to_owned();
+            move || {
+                log.borrow_mut().push(what.clone());
+                let w = w.unwrap();
+                match what.as_str() {
+                    "hostname-cancelled" | "hostname-save" => w.set_hostname_open(false),
+                    "add-cancelled" => w.set_add_open(false),
+                    "share-closed" => w.set_share_open(false),
+                    "join-cancelled" | "join-accepted" => w.set_join_open(false),
+                    _ => {}
+                }
+            }
+        };
+        window.on_hostname_cancelled(note("hostname-cancelled"));
+        window.on_hostname_save(note("hostname-save"));
+        window.on_add_cancelled(note("add-cancelled"));
+        window.on_share_closed(note("share-closed"));
+        window.on_join_cancelled(note("join-cancelled"));
+        window.on_join_accepted(note("join-accepted"));
+        window.on_join_check(|_, _, _, password| !password.is_empty());
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_bt_act(move |verb, _| {
+            l.borrow_mut().push(format!("bt {verb}"));
+            if verb == "rename-cancel" || verb == "rename-save" {
+                w.unwrap().set_bt_rename_open(false);
+            }
+        });
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_displays_act(move |verb, _, _| {
+            l.borrow_mut().push(format!("displays {verb}"));
+            let w = w.unwrap();
+            w.set_displays(DisplaysView { keep_open: false, config_open: false, ..w.get_displays() });
+        });
+        let w = window.as_weak();
+        let l = log.clone();
+        window.on_files_act(move |verb| {
+            l.borrow_mut().push(format!("files {verb}"));
+            w.unwrap().set_files(FilesView::default());
+        });
+        let l = log.clone();
+        window.on_move_selection(move |by| l.borrow_mut().push(format!("move {by}")));
+        (window, log)
+    }
+
+    /// What the password dialog shows under its fields, for one kind of security.
+    fn join_hints(window: &MainWindow) {
+        window.set_join_password_hints([SharedString::new()].as_slice().into());
+        window
+            .set_join_storage_hints([SharedString::new(), SharedString::new(), SharedString::new()].as_slice().into());
+    }
+
+    fn press(window: &MainWindow, key: impl Into<SharedString>) {
+        let key = key.into();
+        window.window().dispatch_event(WindowEvent::KeyPressed { text: key.clone() });
+        window.window().dispatch_event(WindowEvent::KeyReleased { text: key });
+    }
+
+    /// A click in the window's top left corner, beside any dialog.
+    fn click_beside(window: &MainWindow) {
+        let position = LogicalPosition::new(8.0, 8.0);
+        window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+    }
+
+    /// Opens each dialog, types into its field if it has one, and presses Esc.
+    #[test]
+    fn escape_closes_every_dialog_even_from_a_text_field() {
+        let (window, log) = dialogs();
+        let esc = |open: &dyn Fn(), expected: &str| {
+            open();
+            press(&window, Key::Escape);
+            assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), [expected]);
+        };
+
+        esc(
+            &|| {
+                window.set_hostname_input("thinkpad".into());
+                window.set_hostname_open(true);
+                // The field has the keyboard, with its text selected.
+                press(&window, "x");
+                assert_eq!(window.get_hostname_input(), "x");
+            },
+            "hostname-cancelled",
+        );
+        esc(
+            &|| {
+                window.set_join_mode("new".into());
+                join_hints(&window);
+                window.set_join_open(true);
+                press(&window, "x");
+                assert_eq!(window.get_join_password(), "x");
+            },
+            "join-cancelled",
+        );
+        esc(
+            &|| {
+                window.set_bt_rename_open(true);
+                press(&window, "x");
+                assert_eq!(window.get_bt_rename_name(), "x");
+            },
+            "bt rename-cancel",
+        );
+        esc(&|| window.set_add_open(true), "add-cancelled");
+        esc(&|| window.set_share_open(true), "share-closed");
+        esc(
+            &|| {
+                window.set_page("displays".into());
+                window.set_displays(DisplaysView { config_open: true, ..Default::default() });
+            },
+            "displays close-config",
+        );
+        // After Apply, Esc goes back to the old settings.
+        esc(&|| window.set_displays(DisplaysView { keep_open: true, ..Default::default() }), "displays revert-now");
+        esc(&|| window.set_files(FilesView { incoming: true, ..Default::default() }), "files decline");
+        esc(&|| window.set_files(FilesView { sending: true, ..Default::default() }), "files hide");
+    }
+
+    /// A click beside a dialog closes it only when nothing typed in it would be lost.
+    #[test]
+    fn a_click_beside_a_dialog_never_loses_what_was_typed() {
+        let (window, log) = dialogs();
+        let taken = || log.borrow_mut().drain(..).collect::<Vec<_>>();
+
+        window.set_add_open(true);
+        click_beside(&window);
+        assert_eq!(taken(), ["add-cancelled"]);
+        window.set_share_open(true);
+        click_beside(&window);
+        assert_eq!(taken(), ["share-closed"]);
+        window.set_page("displays".into());
+        window.set_displays(DisplaysView { config_open: true, ..Default::default() });
+        click_beside(&window);
+        assert_eq!(taken(), ["displays close-config"]);
+
+        join_hints(&window);
+        window.set_join_open(true);
+        press(&window, "x");
+        click_beside(&window);
+        assert!(window.get_join_open());
+        assert_eq!(window.get_join_password(), "x");
+        window.set_join_open(false);
+
+        window.set_hostname_open(true);
+        click_beside(&window);
+        assert!(window.get_hostname_open());
+        window.set_hostname_open(false);
+
+        window.set_bt_rename_open(true);
+        click_beside(&window);
+        assert!(window.get_bt_rename_open());
+        window.set_bt_rename_open(false);
+        assert_eq!(taken(), Vec::<String>::new());
+    }
+
+    /// Enter in the field of a one-field dialog accepts it.
+    #[test]
+    fn enter_accepts_a_dialog_with_one_field() {
+        let (window, log) = dialogs();
+        window.set_hostname_open(true);
+        press(&window, "a");
+        press(&window, Key::Return);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["hostname-save"]);
+
+        join_hints(&window);
+        window.set_join_open(true);
+        // Not with an empty password.
+        press(&window, Key::Return);
+        assert!(window.get_join_open());
+        press(&window, "x");
+        press(&window, Key::Return);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["join-accepted"]);
+    }
+
+    /// A dialog takes the keyboard from the page while it's open, and gives it back when it
+    /// closes, even when it was closed from Rust rather than by its own buttons.
+    #[test]
+    fn the_page_gets_the_keyboard_back_after_a_dialog() {
+        let (window, log) = dialogs();
+        press(&window, Key::DownArrow);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["move 1"]);
+
+        window.set_page("displays".into());
+        window.set_displays(DisplaysView { keep_open: true, ..Default::default() });
+        press(&window, Key::DownArrow);
+        assert!(log.borrow().is_empty());
+        // The time runs out.
+        window.set_displays(DisplaysView::default());
+        mock_elapsed_time(Duration::from_millis(20));
+        press(&window, Key::DownArrow);
+        assert_eq!(log.borrow_mut().drain(..).collect::<Vec<_>>(), ["move 1"]);
+    }
 }
 
 #[cfg(test)]
@@ -2539,5 +2791,24 @@ mod tests {
         assert_eq!(chevron.accessible_expanded(), Some(false));
         // The Hotspot item is gone.
         assert!(hotspots() < shown, "{} {shown}", hotspots());
+    }
+
+    /// A wide window's width goes to the list, also when it shows an empty state (Wi-Fi off) and
+    /// there are no details beside it.
+    #[test]
+    fn the_network_list_fills_a_wide_window_when_empty() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_empty_icon("wifi-off".into());
+        window.set_empty_title("Wi-Fi is off".into());
+        window.set_empty_text("Wired and VPN connections keep working.".into());
+        window.set_empty_action("Turn on Wi-Fi".into());
+        window.set_has_details(false);
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        window.show().unwrap();
+        let list =
+            ElementHandle::find_by_element_id(&window, "MainWindow::list-card").next().expect("the list is shown");
+        // The window less the sidebar (250) and the page's padding (44).
+        assert!(list.size().width > 1600.0, "{}", list.size().width);
     }
 }
