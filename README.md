@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/hero.svg" alt="The Lituus logo, a cube of linked nodes, beside a Lituus window where a Wi-Fi network connects" width="760">
+<img src="docs/assets/hero.svg" alt="The Lituus logo, window tiles cut in a golden spiral, beside a Lituus window where a Wi-Fi network connects" width="760">
 
 # Lituus
 
@@ -166,7 +166,7 @@ When you join a network, Lituus asks where to keep its password:
 | Key | Action |
 |---|---|
 | <kbd>Ctrl</kbd> <kbd>K</kbd> | Find a setting (the sidebar's search) |
-| <kbd>/</kbd> | Search networks |
+| <kbd>/</kbd> | Search the Wi-Fi networks or the VPNs |
 | <kbd>↑</kbd> <kbd>↓</kbd> | Select a network or connection |
 | <kbd>Enter</kbd> | Connect |
 | <kbd>E</kbd> | Edit the selected connection |

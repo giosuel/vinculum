@@ -2,11 +2,177 @@
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 
+/// The keyboard focus, shared by every control. `key` names the control that has it, so that a
+/// control Slint rebuilds (every row of a list Rust sends again) takes it back; `keyboard` says
+/// it came from the keyboard, which is when the ring shows. `on-control`, `probe` and `answer`
+/// let the window notice that the control with the focus is gone (see MainWindow).
+export global Focus {
+    in-out property <string> key;
+    in-out property <bool> keyboard;
+    in-out property <bool> on-control;
+    in-out property <int> probe;
+    in-out property <int> answer;
+    /// Counts the times a control gained the focus; each control keeps its number, so that a
+    /// dialog can give the focus back to the one that had it when it opened (`opener`, noted by
+    /// FocusTrap). `back-to` and `back-key` call that control, or its rebuilt copy.
+    in-out property <int> serial;
+    in-out property <int> opener;
+    in-out property <string> opener-key;
+    in-out property <int> back-to;
+    in-out property <string> back-key;
+    /// Moves the focus on as Tab (true) or Shift+Tab (false) would: Rust presses the key.
+    callback step(bool);
+    /// A dialog closed: the control that had the focus before it opened takes it back.
+    public function give-back() {
+        self.back-to = self.opener;
+        self.back-key = self.opener-key;
+        self.opener = 0;
+        self.opener-key = "";
+    }
+}
+
+/// What every control the keyboard reaches is built on: Tab and Shift+Tab reach it, Space and
+/// Enter activate it (as a click does), and a 2 px accent ring 2 px outside it shows the focus.
+/// The ring is only for focus from the keyboard: a click doesn't move the focus, and hides it.
+export component Focusable inherits Rectangle {
+    in property <bool> enabled: true;
+    /// Set on a control in a `for`: the rebuilt control with the same key gets the focus back.
+    in property <string> focus-key;
+    /// A second key, for the selected row of a list: when the arrow keys move the selection,
+    /// the newly selected row takes the focus.
+    in property <string> selected-key;
+    /// The gap between the control and its ring. -2px draws the ring on its edge, for rows that
+    /// fill a list, which would cut off a ring outside them.
+    in property <length> ring-gap: 2px;
+    /// False when the control handles the pointer itself (a slider, the options of a segmented
+    /// control).
+    in property <bool> clickable: true;
+    out property <bool> has-focus: scope.has-focus;
+    out property <bool> has-hover: touch.has-hover;
+    out property <bool> pressed: touch.pressed;
+    /// A click, Space or Enter.
+    callback activated();
+    /// Any other key, before Space and Enter; `accept` if it was used.
+    callback key(KeyEvent) -> EventResult;
+    forward-focus: scope;
+    init => {
+        if (root.focus-key != "" && Focus.key == root.focus-key) || (root.selected-key != "" && Focus.key == root.selected-key) {
+            scope.focus();
+        }
+    }
+    // Answers the window's probes while this control has the focus. (No `if` element: one per
+    // control makes the generated code too big to compile in 8 GB.)
+    property <int> probe: scope.has-focus ? Focus.probe : -1;
+    changed probe => { if scope.has-focus { Focus.answer = self.probe; } }
+    // Its number from the last time it gained the focus (Focus.serial).
+    property <int> serial;
+    property <bool> called-back: Focus.back-to != 0 && (Focus.back-to == root.serial || (root.focus-key != "" && Focus.back-key == root.focus-key));
+    changed called-back => { if self.called-back { scope.focus(); } }
+    scope := FocusScope {
+        enabled: root.enabled;
+        // A click doesn't take the focus from the page, so the window's shortcuts keep working.
+        focus-on-click: false;
+        focus-gained(reason) => {
+            if reason == FocusReason.tab-navigation { Focus.keyboard = true; }
+            Focus.key = root.focus-key;
+            Focus.serial += 1;
+            root.serial = Focus.serial;
+            Focus.back-to = 0;
+            Focus.back-key = "";
+            Focus.on-control = true;
+            Focus.answer = Focus.probe;
+        }
+        focus-lost(reason) => {
+            if reason != FocusReason.window-activation && Focus.key == root.focus-key { Focus.key = ""; }
+            Focus.on-control = false;
+        }
+        key-pressed(event) => {
+            if root.key(event) == EventResult.accept { return accept; }
+            if event.modifiers.control || event.modifiers.alt || event.modifiers.meta { return reject; }
+            if event.text == " " || event.text == Key.Return {
+                root.activated();
+                // What it did may have given the window the focus (as a click does); a keyboard
+                // user carries on from here.
+                scope.focus();
+                return accept;
+            }
+            reject
+        }
+    }
+    // Under the children, so that a button in a row still gets its own clicks.
+    touch := TouchArea {
+        enabled: root.enabled && root.clickable;
+        mouse-cursor: pointer;
+        pointer-event(event) => { if event.kind == PointerEventKind.down { Focus.keyboard = false; } }
+        clicked => { root.activated(); }
+    }
+    @children
+    ring := Rectangle {
+        visible: scope.has-focus && Focus.keyboard;
+        x: -root.ring-gap - 2px;
+        y: self.x;
+        width: root.width - 2 * self.x;
+        height: root.height - 2 * self.y;
+        border-width: 2px;
+        border-color: Theme.accent;
+        border-radius: root.border-radius == 0 ? 0 : root.border-radius - self.x;
+    }
+}
+
+/// A dialog's card. Tab and Shift+Tab stay among its controls, going round from the last to the
+/// first and back, instead of on to the page behind the dialog. Slint has no such scope, so two
+/// empty stops, before and after the controls, catch the focus as it leaves and send it round:
+/// the stop at the other end takes it, and Rust presses Tab again from there (Focus.step).
+/// When the card opens, it notes the control with the focus, for Focus.give-back().
+export component FocusTrap inherits Rectangle {
+    // Which way the last Tab in the card went.
+    property <bool> backward;
+    init => {
+        Focus.opener = Focus.on-control ? Focus.serial : 0;
+        Focus.opener-key = Focus.on-control ? Focus.key : "";
+    }
+    FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        capture-key-pressed(event) => {
+            if event.text == Key.Tab || event.text == Key.Backtab {
+                root.backward = event.text == Key.Backtab || event.modifiers.shift;
+            }
+            reject
+        }
+        // Only a stop going backwards, past the first control, and `end` only going forwards.
+        start := FocusScope {
+            width: 0;
+            height: 0;
+            focus-on-click: false;
+            focus-on-tab-navigation: root.backward;
+            focus-gained(reason) => {
+                if reason == FocusReason.tab-navigation {
+                    end.focus();
+                    Focus.step(false);
+                }
+            }
+        }
+        @children
+        end := FocusScope {
+            width: 0;
+            height: 0;
+            focus-on-click: false;
+            focus-on-tab-navigation: !root.backward;
+            focus-gained(reason) => {
+                if reason == FocusReason.tab-navigation {
+                    start.focus();
+                    Focus.step(true);
+                }
+            }
+        }
+    }
+}
+
 /// kind: "primary", "secondary", "danger" (red text) or "destructive" (red button).
-export component Button inherits Rectangle {
+export component Button inherits Focusable {
     in property <string> label;
     in property <string> kind: "secondary";
-    in property <bool> enabled: true;
     in property <length> button-height: 34px;
     callback clicked();
     height: button-height;
@@ -16,12 +182,13 @@ export component Button inherits Rectangle {
     border-radius: 8px;
     border-width: kind == "danger" || kind == "destructive" ? 0 : 1px;
     border-color: kind == "primary" ? Theme.accent : Theme.ctrl-border;
-    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (touch.has-hover && enabled ? Theme.hovered(Theme.ctrl-bg) : Theme.ctrl-bg);
-    opacity: enabled ? 1 : 0.45;
+    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (self.has-hover && root.enabled ? Theme.hovered(Theme.ctrl-bg) : Theme.ctrl-bg);
+    opacity: root.enabled ? 1 : 0.45;
     accessible-role: button;
     accessible-label: label;
-    accessible-enabled: enabled;
-    accessible-action-default => { if enabled { clicked(); } }
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { clicked(); } }
+    activated => { root.clicked(); }
     text := Text {
         x: 12px;
         width: parent.width - 24px;
@@ -33,15 +200,10 @@ export component Button inherits Rectangle {
         horizontal-alignment: center;
         overflow: elide;
     }
-    touch := TouchArea {
-        enabled: root.enabled;
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
 }
 
 /// A square button with only an icon.
-export component IconButton inherits Rectangle {
+export component IconButton inherits Focusable {
     in property <string> icon;
     in property <string> label;
     callback clicked();
@@ -50,18 +212,15 @@ export component IconButton inherits Rectangle {
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.ctrl-border;
-    background: touch.has-hover ? Theme.hover : transparent;
+    background: self.has-hover ? Theme.hover : transparent;
     accessible-role: button;
     accessible-label: label;
     accessible-action-default => { clicked(); }
+    activated => { root.clicked(); }
     Icon { name: root.icon; tint: Theme.icon-soft; }
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
 }
 
-export component Switch inherits Rectangle {
+export component Switch inherits Focusable {
     in property <bool> on;
     in property <string> label;
     in property <length> switch-width: 34px;
@@ -74,6 +233,7 @@ export component Switch inherits Rectangle {
     accessible-label: label;
     accessible-checked: on;
     accessible-action-default => { toggled(); }
+    activated => { root.toggled(); }
     Rectangle {
         x: root.on ? parent.width - self.width - 2px : 2px;
         y: (parent.height - self.height) / 2;
@@ -83,9 +243,36 @@ export component Switch inherits Rectangle {
         background: root.on ? Theme.on-accent : Theme.knob-off;
         animate x { duration: 120ms; easing: ease-out; }
     }
-    TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.toggled(); }
+}
+
+/// A switch in a pill with its label, as the hero's master switches are: the whole pill
+/// toggles, and the whole pill is one stop for the keyboard. note: a short machine value after
+/// the label ("2:41"), if any.
+export component PillSwitch inherits Focusable {
+    in property <string> label;
+    in property <bool> on;
+    in property <string> note;
+    callback toggled();
+    width: pill.preferred-width;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.ctrl-border;
+    background: self.has-hover ? Theme.hovered(Theme.input-bg) : Theme.input-bg;
+    activated => { root.toggled(); }
+    pill := HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 6px;
+        spacing: 10px;
+        Text { text: root.label; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+        if root.note != "": Text { text: root.note; color: Theme.accent; font-size: 12px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+        // Only shows the state: the pill takes the clicks and the keyboard.
+        Switch {
+            on: root.on;
+            label: root.label;
+            switch-width: 40px;
+            enabled: false;
+            y: (parent.height - self.height) / 2;
+        }
     }
 }
 
@@ -112,4 +299,94 @@ export component Kbd inherits HorizontalLayout {
         k := Text { text: root.key; color: Theme.icon-soft; font-size: 11px; font-family: "JetBrains Mono"; vertical-alignment: center; horizontal-alignment: center; }
     }
     Text { text: root.label; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+}
+
+/// A vertical scroll area with a thin scrollbar, shown when its content doesn't fit. Its
+/// children are laid out top to bottom at its width. With `fill`, they fill its height (a list
+/// card stretching) and only scroll once they're down to their minimum height; otherwise they
+/// keep their preferred height (the details pane).
+export component Scroll inherits Rectangle {
+    in property <bool> fill;
+    in property <length> spacing;
+    /// The scrollbar's distance from the right edge; a negative one puts it in the padding
+    /// beside the area instead of over its content.
+    in property <length> bar-inset: 2px;
+    /// The height the content asks for, for a page that sizes the area after it.
+    out property <length> content-height: body.preferred-height;
+    /// Scrolled by the user, with the wheel or the scrollbar.
+    callback scrolled();
+    // Its size comes from where it's put, never from the content; the content's width is still
+    // the least it takes.
+    min-width: body.min-width;
+    min-height: 0;
+    preferred-height: 0;
+    max-width: 100000px;
+    max-height: 100000px;
+    property <length> range: flick.content-height - flick.height;
+    /// The content doesn't fit, so it scrolls (and the scrollbar shows).
+    out property <bool> overflows: root.range > 0.5px;
+    // Content that got shorter (other details, say) stays at the bottom, not below it.
+    changed range => { flick.content-y = max(flick.content-y, -max(0, root.range)); }
+
+    /// Scrolls just enough to show the part from `top` (in window coordinates) that's `size` tall.
+    public function reveal(top: length, size: length) {
+        if top < self.absolute-position.y {
+            flick.content-y = min(0, flick.content-y + self.absolute-position.y - top);
+        } else if top + size > self.absolute-position.y + self.height {
+            flick.content-y = max(-root.range, flick.content-y - (top + size - self.absolute-position.y - self.height));
+        }
+    }
+
+    flick := Flickable {
+        width: parent.width;
+        height: parent.height;
+        // Dragging with the mouse belongs to what's under it (sliders, the monitors); the wheel,
+        // the touchpad and the scrollbar scroll.
+        mouse-drag-pan-enabled: false;
+        content-height: max(self.height, root.fill ? body.min-height : body.preferred-height);
+        flicked => { root.scrolled(); }
+        body := VerticalLayout {
+            width: flick.width;
+            height: flick.content-height;
+            spacing: root.spacing;
+            alignment: root.fill ? LayoutAlignment.stretch : LayoutAlignment.start;
+            @children
+        }
+    }
+
+    if root.overflows: Rectangle {
+        property <length> thumb: max(32px, self.height * flick.height / flick.content-height);
+        property <length> start;
+        x: root.width - self.width - root.bar-inset;
+        width: 10px;
+        accessible-role: none;
+        Rectangle {
+            x: parent.width - self.width;
+            y: (parent.height - parent.thumb) * (-flick.content-y / root.range);
+            width: touch.has-hover || touch.pressed ? 8px : 6px;
+            height: parent.thumb;
+            border-radius: self.width / 2;
+            background: touch.has-hover || touch.pressed ? Theme.muted : Theme.faint;
+            opacity: touch.has-hover || touch.pressed ? 0.9 : 0.55;
+        }
+        // Drag the thumb, or click beside it to move it there.
+        touch := TouchArea {
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    let top = (parent.height - parent.thumb) * (-flick.content-y / root.range);
+                    if self.mouse-y < top || self.mouse-y > top + parent.thumb {
+                        flick.content-y = -max(0, min(root.range, (self.mouse-y - parent.thumb / 2) / (parent.height - parent.thumb) * root.range));
+                        root.scrolled();
+                    }
+                    parent.start = flick.content-y;
+                }
+            }
+            moved => {
+                if self.pressed {
+                    flick.content-y = -max(0, min(root.range, -parent.start + (self.mouse-y - self.pressed-y) / (parent.height - parent.thumb) * root.range));
+                    root.scrolled();
+                }
+            }
+        }
+    }
 }

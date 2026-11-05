@@ -1,7 +1,8 @@
-// The form controls and the password dialog, styled like the mockups (Password, Hidden network).
+// The form controls, the dialog frame every dialog uses, and the password dialog, styled like the
+// mockups (Password, Hidden network).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button } from "controls.slint";
+import { Button, Focusable, Focus, FocusTrap } from "controls.slint";
 
 component FieldLabel inherits Text {
     color: Theme.text;
@@ -63,29 +64,37 @@ export component TextField inherits Rectangle {
                 height: parent.height;
             }
         }
-        if root.password: Rectangle {
+        if root.password: Focusable {
             width: 28px;
             height: 28px;
             y: (parent.height - self.height) / 2;
             border-radius: 6px;
-            background: eye.has-hover ? Theme.hover : transparent;
+            background: self.has-hover ? Theme.hover : transparent;
             accessible-role: button;
             accessible-label: root.shown ? "Hide password" : "Show password";
             accessible-action-default => { root.shown = !root.shown; }
+            activated => { root.shown = !root.shown; }
             Icon { name: root.shown ? "eye-off" : "eye"; tint: Theme.icon-soft; }
-            eye := TouchArea { mouse-cursor: pointer; clicked => { root.shown = !root.shown; } }
         }
     }
 }
 
-/// A row of mutually exclusive choices ("For me only", "All users", "Ask each time").
-export component Segmented inherits Rectangle {
+/// A row of mutually exclusive choices ("For me only", "All users", "Ask each time"). One stop
+/// for Tab; the arrow keys move the choice.
+export component Segmented inherits Focusable {
     in property <[string]> options;
     in property <string> label;
     in-out property <int> selected;
-    in property <bool> enabled: true;
     /// Also called when the user picks one (for a choice that isn't bound two-way).
     callback changed(int);
+    clickable: false;
+    key(event) => {
+        if event.text == Key.LeftArrow && root.selected > 0 { root.selected -= 1; root.changed(root.selected); return accept; }
+        if event.text == Key.RightArrow && root.selected < root.options.length - 1 { root.selected += 1; root.changed(root.selected); return accept; }
+        // At either end, the arrow is used up all the same, rather than moving a list behind.
+        if event.text == Key.LeftArrow || event.text == Key.RightArrow { return accept; }
+        reject
+    }
     height: 40px;
     opacity: root.enabled ? 1 : 0.5;
     border-radius: 9px;
@@ -101,7 +110,7 @@ export component Segmented inherits Rectangle {
             // Measured in the selected (heavier) weight, so choosing an option doesn't resize it.
             min-width: widest.preferred-width + 24px;
             border-radius: 7px;
-            background: i == root.selected ? Theme.accent-soft-bg : touch.has-hover && root.enabled ? Theme.hover : transparent;
+            background: i == root.selected ? Theme.accent-soft-bg : option-touch.has-hover && root.enabled ? Theme.hover : transparent;
             accessible-role: tab;
             accessible-label: option;
             accessible-item-selected: i == root.selected;
@@ -117,20 +126,22 @@ export component Segmented inherits Rectangle {
                 overflow: elide;
             }
             widest := Text { text: option; font-size: 13px; font-weight: 500; visible: false; }
-            touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.selected = i; root.changed(i); } }
+            option-touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.selected = i; root.changed(i); } }
         }
     }
 }
 
-export component CheckBox inherits Rectangle {
+export component CheckBox inherits Focusable {
     in-out property <bool> checked;
     in property <string> text;
     callback toggled(bool);
     height: 24px;
+    border-radius: 4px;
     accessible-role: checkbox;
     accessible-label: text;
     accessible-checked: checked;
     accessible-action-default => { checked = !checked; toggled(checked); }
+    activated => { root.checked = !root.checked; root.toggled(root.checked); }
     HorizontalLayout {
         spacing: 10px;
         alignment: start;
@@ -146,11 +157,11 @@ export component CheckBox inherits Rectangle {
         }
         Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; }
     }
-    TouchArea { mouse-cursor: pointer; clicked => { root.checked = !root.checked; root.toggled(root.checked); } }
 }
 
-/// A drop-down list.
-export component Select inherits Rectangle {
+/// A drop-down list. Space, Enter and the arrow keys open it; in it, the arrows move, Space or
+/// Enter picks, and Esc closes it.
+export component Select inherits Focusable {
     in property <[string]> options;
     /// A second, smaller line under each option, if given.
     in property <[string]> details;
@@ -159,26 +170,56 @@ export component Select inherits Rectangle {
     in property <length> select-height: 38px;
     /// The user picked an option.
     callback chosen(int);
+    // The option the arrow keys are on in the open list.
+    property <int> highlighted;
+    function open() {
+        root.highlighted = root.selected;
+        popup.show();
+    }
     height: select-height;
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.border2;
-    background: touch.has-hover ? Theme.hovered(Theme.input-bg) : Theme.input-bg;
+    background: self.has-hover ? Theme.hovered(Theme.input-bg) : Theme.input-bg;
     accessible-role: combobox;
     accessible-label: label;
     accessible-value: root.options[root.selected];
-    accessible-action-default => { popup.show(); }
+    accessible-action-default => { root.open(); }
+    activated => { root.open(); }
+    // Here rather than through `activated`, which would take the focus back from the list.
+    key(event) => {
+        if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow || event.text == Key.UpArrow {
+            root.open();
+            return accept;
+        }
+        reject
+    }
     HorizontalLayout {
         padding-left: 12px;
         padding-right: 10px;
         Text { text: root.options[root.selected]; color: Theme.text; font-size: root.select-height < 38px ? 13px : 14px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
         Icon { name: "chevron"; tint: Theme.icon-soft; y: (parent.height - 16px) / 2; }
     }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { popup.show(); } }
     popup := PopupWindow {
         x: 0;
         y: root.height + 4px;
         width: root.width;
+        forward-focus: list-keys;
+        list-keys := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.DownArrow { root.highlighted = min(root.highlighted + 1, root.options.length - 1); return accept; }
+                if event.text == Key.UpArrow { root.highlighted = max(root.highlighted - 1, 0); return accept; }
+                if event.text == " " || event.text == Key.Return {
+                    root.selected = root.highlighted;
+                    root.chosen(root.highlighted);
+                    popup.close();
+                    return accept;
+                }
+                if event.text == Key.Escape { popup.close(); return accept; }
+                // Nothing behind the list gets the keys while it's open.
+                accept
+            }
+        }
         Rectangle {
             border-radius: 8px;
             border-width: 1px;
@@ -192,6 +233,9 @@ export component Select inherits Rectangle {
                     height: root.details.length > i ? 44px : 32px;
                     border-radius: 6px;
                     background: item.has-hover ? Theme.hover : i == root.selected ? Theme.accent-soft-bg : transparent;
+                    // The arrow keys' option, drawn like the focus ring.
+                    border-width: i == root.highlighted && Focus.keyboard ? 2px : 0;
+                    border-color: Theme.accent;
                     VerticalLayout {
                         padding-left: 10px;
                         alignment: center;
@@ -205,9 +249,54 @@ export component Select inherits Rectangle {
     }
 }
 
+/// A dialog over the window: a dimmed backdrop and a card with the children. Esc calls
+/// `dismissed`, from any field in it; so does a click on the backdrop if `backdrop-dismisses`,
+/// which is only for dialogs with nothing typed in them.
+export component Modal inherits Rectangle {
+    in property <length> card-width: 440px;
+    in property <length> card-spacing: 14px;
+    in property <string> label;
+    in property <bool> backdrop-dismisses;
+    callback dismissed();
+    background: #05060799;
+    TouchArea { clicked => { if root.backdrop-dismisses { root.dismissed(); } } }
+    FocusTrap {
+        width: root.card-width;
+        height: body.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 14px;
+        border-width: 1px;
+        border-color: Theme.ctrl-border;
+        background: Theme.surface;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: #00000080;
+        accessible-role: groupbox;
+        accessible-label: root.label;
+        TouchArea {}
+        // The dialog takes the keyboard (a field in it that asks for focus gets it after this),
+        // so the page underneath gets no keys, and Esc from a field ends here: the window's own
+        // keys never see it.
+        FocusScope {
+            init => { self.focus(); }
+            // Not a stop for Tab of its own: Shift+Tab from the first control goes round.
+            focus-on-tab-navigation: false;
+            key-pressed(event) => {
+                if event.text == Key.Escape { root.dismissed(); return accept; }
+                reject
+            }
+            body := VerticalLayout {
+                padding: 24px;
+                spacing: root.card-spacing;
+                @children
+            }
+        }
+    }
+}
+
 /// The password dialog. `mode` is "new" (joining a network, with the storage choice), "hidden"
 /// (the network's name and security too) or "prompt" (NetworkManager asking, password only).
-export component JoinDialog inherits Rectangle {
+export component JoinDialog inherits Modal {
     in property <string> mode: "new";
     in property <string> title;
     in property <string> subtitle;
@@ -228,82 +317,65 @@ export component JoinDialog inherits Rectangle {
     // Open networks (a hidden one with "None") need no password.
     property <bool> needs-password: root.mode != "hidden" || root.security != 0;
 
-    background: #05060799;
-    TouchArea { clicked => { root.cancelled(); } }
-    Rectangle {
-        width: 440px;
-        height: form.preferred-height;
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        border-radius: 14px;
-        border-width: 1px;
-        border-color: Theme.ctrl-border;
-        background: Theme.surface;
-        drop-shadow-blur: 40px;
-        drop-shadow-color: #00000080;
-        accessible-role: groupbox;
-        accessible-label: root.title;
-        TouchArea {}
-        form := VerticalLayout {
-            padding: 24px;
-            spacing: 16px;
-            HorizontalLayout {
-                spacing: 14px;
-                if root.mode != "hidden": Rectangle {
-                    width: 40px;
-                    height: 40px;
-                    border-radius: 10px;
-                    background: Theme.accent-soft-bg;
-                    Icon { name: "lock"; tint: Theme.accent; size: 18px; }
-                }
-                VerticalLayout {
-                    spacing: 3px;
-                    alignment: center;
-                    Text { text: root.title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
-                    Text { text: root.subtitle; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-                }
-            }
-            if root.mode == "hidden": VerticalLayout {
-                spacing: 6px;
-                FieldLabel { text: "Network name"; }
-                TextField { text <=> root.name; label: "Network name"; autofocus: true; accepted => { if root.valid { root.accepted(); } } }
-            }
-            if root.mode == "hidden": VerticalLayout {
-                spacing: 6px;
-                FieldLabel { text: "Security"; }
-                Select { options: root.securities; selected <=> root.security; label: "Security"; }
-            }
-            if root.needs-password: VerticalLayout {
-                spacing: 6px;
-                FieldLabel { text: "Password"; }
-                TextField {
-                    text <=> root.password;
-                    password: true;
-                    autofocus: root.mode != "hidden";
-                    label: "Password";
-                    accepted => { if root.valid { root.accepted(); } }
-                }
-                if root.error != "": Text { text: root.error; color: Theme.danger; font-size: 12px; wrap: word-wrap; }
-                if root.error == "" && root.password-hints[root.security] != "": Text {
-                    text: root.password-hints[root.security];
-                    color: Theme.faint;
-                    font-size: 12px;
-                }
-            }
-            if root.mode != "prompt" && root.needs-password: VerticalLayout {
-                spacing: 8px;
-                FieldLabel { text: "Remember the password"; }
-                Segmented { options: ["For me only", "All users", "Ask each time"]; selected <=> root.storage; label: "Remember the password"; }
-                Text { text: root.storage-hints[root.storage]; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
-            }
-            if root.mode != "prompt": CheckBox { checked <=> root.autoconnect; text: "Connect automatically when in range"; }
-            HorizontalLayout {
-                padding-top: 4px;
-                spacing: 8px;
-                alignment: end;
-                Button { label: "Cancel"; button-height: 36px; clicked => { root.cancelled(); } }
-                Button { label: "Connect"; kind: "primary"; button-height: 36px; enabled: root.valid; clicked => { root.accepted(); } }
-            }
+    label: root.title;
+    card-spacing: 16px;
+    // A click beside it would lose the password, so only Esc and Cancel close it.
+    dismissed => { root.cancelled(); }
+    HorizontalLayout {
+        spacing: 14px;
+        if root.mode != "hidden": Rectangle {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: Theme.accent-soft-bg;
+            Icon { name: "lock"; tint: Theme.accent; size: 18px; }
         }
+        VerticalLayout {
+            spacing: 3px;
+            alignment: center;
+            Text { text: root.title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+            Text { text: root.subtitle; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+        }
+    }
+    if root.mode == "hidden": VerticalLayout {
+        spacing: 6px;
+        FieldLabel { text: "Network name"; }
+        TextField { text <=> root.name; label: "Network name"; autofocus: true; accepted => { if root.valid { root.accepted(); } } }
+    }
+    if root.mode == "hidden": VerticalLayout {
+        spacing: 6px;
+        FieldLabel { text: "Security"; }
+        Select { options: root.securities; selected <=> root.security; label: "Security"; }
+    }
+    if root.needs-password: VerticalLayout {
+        spacing: 6px;
+        FieldLabel { text: "Password"; }
+        TextField {
+            text <=> root.password;
+            password: true;
+            autofocus: root.mode != "hidden";
+            label: "Password";
+            accepted => { if root.valid { root.accepted(); } }
+        }
+        if root.error != "": Text { text: root.error; color: Theme.danger; font-size: 12px; wrap: word-wrap; }
+        if root.error == "" && root.password-hints[root.security] != "": Text {
+            text: root.password-hints[root.security];
+            color: Theme.faint;
+            font-size: 12px;
+        }
+    }
+    if root.mode != "prompt" && root.needs-password: VerticalLayout {
+        spacing: 8px;
+        FieldLabel { text: "Remember the password"; }
+        Segmented { options: ["For me only", "All users", "Ask each time"]; selected <=> root.storage; label: "Remember the password"; }
+        Text { text: root.storage-hints[root.storage]; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+    }
+    if root.mode != "prompt": CheckBox { checked <=> root.autoconnect; text: "Connect automatically when in range"; }
+    HorizontalLayout {
+        padding-top: 4px;
+        spacing: 8px;
+        alignment: end;
+        Button { label: "Cancel"; button-height: 36px; clicked => { root.cancelled(); } }
+        Button { label: "Connect"; kind: "primary"; button-height: 36px; enabled: root.valid; clicked => { root.accepted(); } }
     }
 }
