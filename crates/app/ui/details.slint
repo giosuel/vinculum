@@ -1,6 +1,7 @@
 // The details pane next to a list (Wi-Fi, Wired, VPN, Saved, Bluetooth) and the data it shows.
 import { Theme } from "theme.slint";
 import { Button, IconButton, Switch, Scroll } from "controls.slint";
+import { Segmented } from "dialogs.slint";
 
 /// kind: "primary", "secondary", "danger".
 export struct Action { id: string, label: string, kind: string, enabled: bool }
@@ -21,6 +22,10 @@ export struct Details {
     /// A paragraph under the buttons.
     intro: string,
     toggles: [Toggle],
+    /// A saved connection's Metered choice, the same three as in the editor: 0 Automatic, 1 Yes,
+    /// 2 No. Under the switches, in their box.
+    has-metered: bool,
+    metered: int,
     items: [DetailItem],
     chips-label: string,
     chips: [ChipRow],
@@ -32,6 +37,7 @@ export component DetailsPane inherits Rectangle {
     in property <Details> details;
     callback action(string);
     callback toggle(string);
+    callback metered-chosen(int);
     callback rename();
     background: Theme.surface;
     border-radius: 16px;
@@ -116,6 +122,34 @@ export component DetailsPane inherits Rectangle {
                             VerticalLayout {
                                 alignment: center;
                                 Switch { on: t.on; label: t.label; focus-key: "toggle:" + t.id; toggled => { root.toggle(t.id); } }
+                            }
+                        }
+                    }
+                    // Three states, so not a switch: the choice goes under its name, which leaves
+                    // room for it in a narrow pane.
+                    if root.details.has-metered: Rectangle {
+                        height: metered-row.preferred-height;
+                        Rectangle { y: 0; height: 1px; background: Theme.border2; }
+                        metered-row := VerticalLayout {
+                            padding: 14px;
+                            padding-top: 10px;
+                            padding-bottom: 12px;
+                            spacing: 8px;
+                            VerticalLayout {
+                                spacing: 2px;
+                                Text { text: "Metered connection"; color: Theme.text; wrap: word-wrap; }
+                                Text { text: "Apps may limit background data"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                            }
+                            HorizontalLayout {
+                                alignment: start;
+                                Segmented {
+                                    options: ["Automatic", "Yes", "No"];
+                                    label: "Metered connection";
+                                    selected: root.details.metered;
+                                    focus-key: "metered";
+                                    height: 34px;
+                                    changed(i) => { root.metered-chosen(i); }
+                                }
                             }
                         }
                     }

@@ -166,8 +166,10 @@ struct App {
     quick: quick::Quick,
     /// The popup was just made, and needs everything once.
     quick_new: bool,
-    /// The Bluetooth devices the popup shows: (id, name, meta, connected).
-    quick_bt: Vec<(String, String, String, bool)>,
+    /// The popup's Bluetooth (on or off, if there is any, and the devices) and volume (see
+    /// `sound::quick`), as last shown.
+    quick_bt: (Option<bool>, Vec<bluetooth::QuickDevice>),
+    quick_sound: Option<(f32, bool, f32)>,
     notifier: Option<notify::Notifier>,
     /// The Bluetooth page.
     bt: bluetooth::State,
@@ -455,34 +457,81 @@ fn toggle_quick(window: &MainWindow) {
                 })
             }
         });
-        popup.on_connect({
+        popup.on_row_button({
             let main = window.as_weak();
             move |id| {
-                if let Some(window) = main.upgrade() {
+                let Some(window) = main.upgrade() else { return };
+                if let Some(device) = id.strip_prefix("bt:") {
+                    // A Bluetooth device: connect or disconnect it.
+                    let device = device.to_owned();
+                    update(&main, |app| {
+                        app.bt.selected = Some(device);
+                        bluetooth::activate(&mut app.bt);
+                    });
+                } else if id.starts_with("wifi:")
+                    && APP.with(|app| app.borrow().quick.networks.iter().any(|n| n.id == id.as_str() && n.active))
+                {
+                    // The connected network: Disconnect, as in its details.
+                    update(&main, |app| {
+                        go(app, "wifi");
+                        app.ui.selected = Some(id.to_string());
+                        act(app, "disconnect");
+                    });
+                } else if id.starts_with("wifi:") {
                     on_tray(&window, tray::Event::Connect(id.into()));
+                } else {
+                    // A VPN: connect, disconnect, or cancel its sign-in.
+                    on_tray(&window, tray::Event::Toggle(id.into()));
                 }
             }
         });
-        popup.on_toggled({
+        popup.on_row_opened({
             let main = window.as_weak();
             move |id| {
-                if let Some(window) = main.upgrade() {
+                let Some(window) = main.upgrade() else { return };
+                hide_quick();
+                update(&main, |app| {
                     if let Some(device) = id.strip_prefix("bt:") {
-                        // A Bluetooth device: connect or disconnect it.
-                        let device = device.to_owned();
-                        update(&main, |app| {
-                            app.bt.selected = Some(device);
-                            bluetooth::activate(&mut app.bt);
-                        });
-                        return;
-                    }
-                    let event = if id == "airplane" {
-                        let on = APP.with(|app| app.borrow().quick.airplane);
-                        tray::Event::SetAirplane(!on)
+                        go(app, "bluetooth");
+                        app.bt.selected = Some(device.to_owned());
                     } else {
-                        tray::Event::Toggle(id.into())
-                    };
-                    on_tray(&window, event);
+                        go(app, if id.starts_with("wifi:") { "wifi" } else { "vpn" });
+                        app.ui.selected = Some(id.to_string());
+                    }
+                });
+                let _ = window.show();
+            }
+        });
+        popup.on_bt_switched({
+            let main = window.as_weak();
+            move || {
+                if let Some(window) = main.upgrade() {
+                    bluetooth::act(&window, "power", "");
+                }
+            }
+        });
+        popup.on_volume_moved({
+            let main = window.as_weak();
+            move |v| {
+                update(&main, |app| {
+                    sound::act(&mut app.sound, "out-volume", "", v);
+                })
+            }
+        });
+        popup.on_mute_clicked({
+            let main = window.as_weak();
+            move || {
+                update(&main, |app| {
+                    sound::act(&mut app.sound, "out-mute", "", 0.0);
+                })
+            }
+        });
+        popup.on_airplane_switched({
+            let main = window.as_weak();
+            move || {
+                if let Some(window) = main.upgrade() {
+                    let on = APP.with(|app| app.borrow().quick.airplane);
+                    on_tray(&window, tray::Event::SetAirplane(!on));
                 }
             }
         });
@@ -515,7 +564,8 @@ fn toggle_quick(window: &MainWindow) {
 fn render_quick(app: &mut App, airplane: bool) {
     let q = quick::build(app.snapshot.as_ref(), airplane, &app.signing_in);
     let bt = bluetooth::quick(&app.bt);
-    if q == app.quick && bt == app.quick_bt && !std::mem::take(&mut app.quick_new) {
+    let sound = sound::quick(&app.sound);
+    if q == app.quick && bt == app.quick_bt && sound == app.quick_sound && !std::mem::take(&mut app.quick_new) {
         return;
     }
     if let Some(tray) = &app.tray {
@@ -524,6 +574,8 @@ fn render_quick(app: &mut App, airplane: bool) {
     QUICK.with(|popup| {
         let Some(popup) = popup.borrow().as_ref().map(|p| p.as_weak()) else { return };
         let Some(popup) = popup.upgrade() else { return };
+        // The one quick action on a row: connect it, or disconnect it once it's on.
+        let button = |active: bool| if active { "Disconnect" } else { "Connect" };
         popup.set_wifi_available(q.wifi_available);
         popup.set_wifi_on(q.wifi_on);
         popup.set_wifi_status(q.status.as_str().into());
@@ -535,38 +587,56 @@ fn render_quick(app: &mut App, airplane: bool) {
                     id: n.id.as_str().into(),
                     name: n.name.as_str().into(),
                     meta: n.meta.as_str().into(),
+                    icon: "bars".into(),
                     bars: n.bars.into(),
                     active: n.active,
-                    connecting: n.connecting,
+                    button: button(n.active).into(),
                 })
                 .collect(),
         ));
-        let mut toggles: Vec<QuickToggle> = q
-            .vpns
-            .iter()
-            .map(|v| QuickToggle {
-                id: v.id.as_str().into(),
-                name: v.name.as_str().into(),
-                meta: v.meta.as_str().into(),
-                on: v.on,
-            })
-            .collect();
-        toggles.extend(bt.iter().map(|(id, name, meta, on)| QuickToggle {
-            id: id.as_str().into(),
-            name: name.as_str().into(),
-            meta: meta.as_str().into(),
-            on: *on,
-        }));
-        toggles.push(QuickToggle {
-            id: "airplane".into(),
-            name: "Airplane mode".into(),
-            meta: "Turns off Wi-Fi, Bluetooth and mobile broadband".into(),
-            on: q.airplane,
-        });
-        popup.set_toggles(model(toggles));
+        popup.set_vpns(model(
+            q.vpns
+                .iter()
+                .map(|v| {
+                    let signing_in = v.id.strip_prefix("conn:").is_some_and(|u| app.signing_in.iter().any(|s| s == u));
+                    QuickRow {
+                        id: v.id.as_str().into(),
+                        name: v.name.as_str().into(),
+                        meta: v.meta.as_str().into(),
+                        icon: "vpn".into(),
+                        active: v.on,
+                        button: if signing_in { "Cancel".into() } else { button(v.on).into() },
+                        ..QuickRow::default()
+                    }
+                })
+                .collect(),
+        ));
+        popup.set_bt_available(bt.0.is_some());
+        popup.set_bt_on(bt.0 == Some(true));
+        popup.set_devices(model(
+            bt.1.iter()
+                .map(|d| QuickRow {
+                    id: d.id.as_str().into(),
+                    name: d.name.as_str().into(),
+                    meta: d.meta.as_str().into(),
+                    icon: d.icon.into(),
+                    active: d.connected,
+                    button: button(d.connected).into(),
+                    ..QuickRow::default()
+                })
+                .collect(),
+        ));
+        popup.set_sound_available(sound.is_some());
+        if let Some((volume, muted, max)) = sound {
+            popup.set_volume(volume);
+            popup.set_muted(muted);
+            popup.set_volume_max(max);
+        }
+        popup.set_airplane(q.airplane);
     });
     app.quick = q;
     app.quick_bt = bt;
+    app.quick_sound = sound;
 }
 
 /// A dialog's FocusTrap asks for Tab (or Shift+Tab) to be pressed again once it has moved the
@@ -624,15 +694,6 @@ fn connect_callbacks(window: &MainWindow) {
         }
     });
     let weak = window.as_weak();
-    window.on_hero_action(move |verb| {
-        update(&weak, |app| {
-            let hero = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui).net_hero;
-            let Some(row) = hero.row else { return };
-            app.ui.selected = Some(row);
-            act(app, &verb);
-        })
-    });
-    let weak = window.as_weak();
     window.on_select(move |id| update(&weak, |app| app.ui.selected = Some(id.to_string())));
     let weak = window.as_weak();
     window.on_search(move |text| {
@@ -680,6 +741,18 @@ fn connect_callbacks(window: &MainWindow) {
         update(&weak, |app| {
             let command = match (&app.snapshot, &app.ui.selected) {
                 (Some(snap), Some(selected)) => view::toggle_command(snap, selected, &id),
+                _ => None,
+            };
+            if let Some(command) = command {
+                send(app, command);
+            }
+        })
+    });
+    let weak = window.as_weak();
+    window.on_metered_chosen(move |choice| {
+        update(&weak, |app| {
+            let command = match (&app.snapshot, &app.ui.selected) {
+                (Some(snap), Some(selected)) => view::metered_command(snap, selected, choice),
                 _ => None,
             };
             if let Some(command) = command {
@@ -840,6 +913,8 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_empty_action_clicked(move || {
         update(&weak, |app| match app.ui.page {
             view::Page::Vpn => send(app, view::Command::ImportFile),
+            // Wi-Fi is off because of airplane mode: end it, which turns Wi-Fi back on.
+            view::Page::Wifi if app.ui.airplane => set_airplane(app, false),
             _ => {
                 if let Some(command) = app.snapshot.as_ref().map(view::wifi_switch) {
                     send(app, command);
@@ -1403,6 +1478,7 @@ fn render(window: &MainWindow) {
         app.ui.signing_in = app.signing_in.clone();
         let state = &mut *app;
         let airplane = airplane::follow(&mut state.airplane, state.snapshot.as_ref(), state.bt.snapshot.as_ref());
+        app.ui.airplane = airplane;
         let v = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui);
         let mut entries = nav_entries(&app);
         let statuses = [&v.net_status, &v.net_items.wifi, &v.net_items.wired, &v.net_items.vpn, &v.net_items.hotspot];
@@ -1419,18 +1495,6 @@ fn render(window: &MainWindow) {
             tone: v.net_hero.tone.into(),
             detail: v.net_hero.detail.as_str().into(),
         });
-        window.set_net_hero_actions(model(
-            v.net_hero
-                .actions
-                .iter()
-                .map(|(id, label, kind)| Action {
-                    id: (*id).into(),
-                    label: label.as_str().into(),
-                    kind: (*kind).into(),
-                    enabled: true,
-                })
-                .collect(),
-        ));
         window.set_wifi_available(v.wifi_available);
         let on_bluetooth = app.ui.page == view::Page::Bluetooth && window.window().is_visible();
         bluetooth::set_open(&mut app.bt, on_bluetooth);
@@ -2953,11 +3017,11 @@ mod tests {
         panic!("Tab never reached {label}");
     }
 
-    /// The sidebar's label for a page ("Bluetooth, 2 on"), as its button reads it out.
+    /// The sidebar's label for a page ("Bluetooth, 2 connected"), as its button reads it out.
     fn nav_label(window: &MainWindow, id: &str) -> String {
         let groups = window.get_nav_groups();
         let item = groups.iter().flat_map(|g| g.items.iter().collect::<Vec<_>>()).find(|i| i.id == id).unwrap();
-        if item.sub.is_empty() { item.label.to_string() } else { format!("{}, {}", item.label, item.sub) }
+        if item.sub.is_empty() { item.label.to_string() } else { format!("{}, {}", item.label, item.spoken) }
     }
 
     /// Tab goes down the sidebar, sub-items included, and on to the page; Shift+Tab comes back;
@@ -2972,12 +3036,6 @@ mod tests {
         let airplane = Rc::new(RefCell::new(0));
         let a = airplane.clone();
         window.on_airplane_toggled(move || *a.borrow_mut() += 1);
-        window.set_net_hero_actions(super::model(vec![super::Action {
-            id: "disconnect".into(),
-            label: "Disconnect".into(),
-            kind: "secondary".into(),
-            enabled: true,
-        }]));
         assert!(ElementHandle::find_by_element_id(&window, "Focusable::ring").next().is_none());
 
         let wired = tab_to(&window, &nav_label(&window, "wired"));
@@ -2986,7 +3044,7 @@ mod tests {
         let hostname = tab_to(&window, "Change the hostname") + plane;
         assert!(wired < settings && settings < plane && plane < hostname);
         // After the sidebar, the page: the hero's button.
-        tab_to(&window, "Disconnect");
+        tab_to(&window, "Add a connection");
 
         press(&window, Key::Backtab);
         press(&window, Key::Backtab);
@@ -3347,10 +3405,10 @@ mod tests {
         assert_eq!(switch("Visible").and_then(|s| s.accessible_checked()), Some(false));
         assert_eq!(ElementHandle::find_by_accessible_label(&window, "2:41").count(), 0);
 
-        // The adapter dialog: how long, not whether.
+        // The adapter dialog: how long, not whether. Its choices wait for Save.
         acts.borrow_mut().clear();
         window.set_bt_adapter_open(true);
-        let choices: Vec<String> = ElementHandle::find_by_accessible_label(&window, "Visible switch")
+        let choices: Vec<String> = ElementHandle::find_by_accessible_label(&window, "Visible for")
             .find(|e| e.accessible_role() == Some(AccessibleRole::RadioGroup))
             .expect("the Visible switch's time")
             .query_descendants()
@@ -3361,7 +3419,21 @@ mod tests {
             .collect();
         assert_eq!(choices, ["3 minutes", "Always"]);
         ElementHandle::find_by_accessible_label(&window, "Always").next().unwrap().invoke_accessible_default_action();
-        assert_eq!(*acts.borrow(), ["adapter-visible 1"]);
+        let pairable = ElementHandle::find_by_accessible_label(&window, "Pairable")
+            .find(|e| e.accessible_role() == Some(AccessibleRole::Checkbox))
+            .expect("Pairable, a check box");
+        pairable.invoke_accessible_default_action();
+        assert!(acts.borrow().is_empty());
+        assert_eq!((window.get_bt_visible_choice(), window.get_bt_pairable()), (1, true));
+        let button = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                .unwrap()
+        };
+        button("Save").invoke_accessible_default_action();
+        assert_eq!(*acts.borrow(), ["adapter-save "]);
+        button("Cancel").invoke_accessible_default_action();
+        assert_eq!(*acts.borrow(), ["adapter-save ", "adapter-close "]);
         window.set_bt_adapter_open(false);
 
         // Bluetooth off: only the Bluetooth switch.
@@ -3401,7 +3473,7 @@ mod tests {
             .get_nav_groups()
             .iter()
             .flat_map(|g| g.items.iter().collect::<Vec<_>>())
-            .map(|i| if i.sub.is_empty() { i.label.to_string() } else { format!("{}, {}", i.label, i.sub) })
+            .map(|i| if i.sub.is_empty() { i.label.to_string() } else { format!("{}, {}", i.label, i.spoken) })
             .collect();
         let in_view = |label: &str| {
             ElementHandle::find_by_accessible_label(&window, label).any(|e| {
@@ -3648,6 +3720,129 @@ mod tests {
         };
         // The label's column is 168 px; the text starts 12 px into its field.
         assert_eq!(x(AccessibleRole::TextInput) - x(AccessibleRole::Text), 168.0 + 12.0);
+    }
+
+    /// The Wi-Fi hero has no buttons: the pane holds them, once each. Its Metered is the editor's
+    /// three-way choice, which goes to Rust as NetworkManager's number. The hotspot's QR code says
+    /// it works once the hotspot is on.
+    #[test]
+    fn the_pane_holds_the_actions_and_metered_has_three_states() {
+        let window = window();
+        let chosen = Rc::new(RefCell::new(Vec::new()));
+        let c = chosen.clone();
+        window.on_metered_chosen(move |i| c.borrow_mut().push(i));
+        let action = |id: &str, label: &str| super::Action {
+            id: id.into(),
+            label: label.into(),
+            kind: "secondary".into(),
+            enabled: true,
+        };
+        window.set_has_details(true);
+        window.set_details(super::Details {
+            title: "Lumen Home".into(),
+            actions: super::model(vec![action("disconnect", "Disconnect"), action("edit", "Edit")]),
+            toggles: super::model(vec![view::toggle("autoconnect", "Connect automatically", "", true)]),
+            has_metered: true,
+            metered: 0,
+            ..Default::default()
+        });
+        let buttons = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .filter(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                .count()
+        };
+        assert_eq!((buttons("Disconnect"), buttons("Edit"), buttons("Share")), (1, 1, 0));
+        let metered = ElementHandle::find_by_accessible_label(&window, "Metered connection")
+            .find(|e| e.accessible_role() == Some(AccessibleRole::RadioGroup))
+            .expect("Metered, a choice");
+        let options: Vec<(String, bool)> = metered
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::RadioButton)
+            .find_all()
+            .iter()
+            .map(|e| (e.accessible_label().unwrap().to_string(), e.accessible_checked() == Some(true)))
+            .collect();
+        assert_eq!(options, [("Automatic".into(), true), ("Yes".into(), false), ("No".into(), false)]);
+        assert!(ElementHandle::find_by_accessible_label(&window, "Apps may limit background data").next().is_some());
+        ElementHandle::find_by_accessible_label(&window, "No").next().unwrap().invoke_accessible_default_action();
+        assert_eq!(*chosen.borrow(), [2]);
+        // No switch for it any more.
+        assert!(
+            !ElementHandle::find_by_accessible_label(&window, "Metered connection")
+                .any(|e| e.accessible_role() == Some(AccessibleRole::Switch))
+        );
+
+        window.set_page("hotspot".into());
+        window.set_hotspot_available(true);
+        let shown = |text: &str| ElementHandle::find_by_accessible_label(&window, text).next().is_some();
+        assert!(shown("Turn the hotspot on to share") && !shown("Scan with a phone camera to join"));
+        window.set_hotspot_on(true);
+        assert!(!shown("Turn the hotspot on to share") && shown("Scan with a phone camera to join"));
+        assert!(shown("Generate"));
+    }
+
+    /// The quick popup: a heading for each kind, Bluetooth's switch, the volume, and rows that
+    /// react to a click: one that isn't connected connects (as its button does), a connected one
+    /// opens Lituus on it.
+    #[test]
+    fn the_quick_popup_has_headings_switches_and_rows_that_react() {
+        use super::{QuickRow, QuickWindow};
+        i_slint_backend_testing::init_no_event_loop();
+        let popup = QuickWindow::new().unwrap();
+        let row = |id: &str, name: &str, active: bool| QuickRow {
+            id: id.into(),
+            name: name.into(),
+            meta: if active { "Connected".into() } else { "WPA2".into() },
+            icon: "bars".into(),
+            bars: 3,
+            active,
+            button: if active { "Disconnect".into() } else { "Connect".into() },
+        };
+        popup.set_wifi_available(true);
+        popup.set_wifi_on(true);
+        popup.set_networks(super::model(vec![row("wifi:a", "Lumen Home", true), row("wifi:b", "Aster Café", false)]));
+        popup.set_vpns(super::model(vec![QuickRow { icon: "vpn".into(), ..row("conn:v", "UZH VPN", false) }]));
+        popup.set_bt_available(true);
+        popup.set_bt_on(true);
+        popup.set_devices(super::model(vec![QuickRow { icon: "headphones".into(), ..row("bt:/h", "Sony", true) }]));
+        popup.set_sound_available(true);
+        popup.set_volume(0.5);
+        let events = Rc::new(RefCell::new(Vec::<String>::new()));
+        let e = events.clone();
+        popup.on_row_button(move |id| e.borrow_mut().push(format!("button {id}")));
+        let e = events.clone();
+        popup.on_row_opened(move |id| e.borrow_mut().push(format!("open {id}")));
+        let e = events.clone();
+        popup.on_bt_switched(move || e.borrow_mut().push("bluetooth".into()));
+        let e = events.clone();
+        popup.on_volume_moved(move |v| e.borrow_mut().push(format!("volume {v:.2}")));
+        popup.show().unwrap();
+        let find = |label: &str, role: AccessibleRole| {
+            ElementHandle::find_by_accessible_label(&popup, label).find(|e| e.accessible_role() == Some(role))
+        };
+        for heading in ["Wi-Fi", "VPN", "Bluetooth", "Volume", "Airplane mode"] {
+            assert!(find(heading, AccessibleRole::Text).is_some(), "{heading}");
+        }
+        let press = |label: &str| {
+            let item = find(label, AccessibleRole::ListItem).expect(label);
+            let (at, size) = (item.absolute_position(), item.size());
+            // On the name, away from the button.
+            let position = LogicalPosition::new(at.x + 60.0, at.y + size.height / 2.0);
+            popup.window().dispatch_event(WindowEvent::PointerMoved { position });
+            popup.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+            popup.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+        };
+        press("Aster Café, WPA2");
+        press("Lumen Home, Connected");
+        press("UZH VPN, WPA2");
+        find("Bluetooth", AccessibleRole::Switch).expect("Bluetooth's switch").invoke_accessible_default_action();
+        find("Volume", AccessibleRole::Slider).expect("the volume").invoke_accessible_increment_action();
+        assert_eq!(*events.borrow(), ["button wifi:b", "open wifi:a", "button conn:v", "bluetooth", "volume 0.55"]);
+        // One button per row, Disconnect on the connected ones.
+        let disconnect = ElementHandle::find_by_accessible_label(&popup, "Disconnect")
+            .filter(|e| e.accessible_role() == Some(AccessibleRole::Button))
+            .count();
+        assert_eq!(disconnect, 2);
     }
 
     /// The views of a page are tabs, top right in its hero, and a card's views are tabs too; a

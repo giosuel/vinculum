@@ -1,50 +1,77 @@
 // The quick popup: a small window from the tray icon (left-click), `lituus --quick` or a
-// keybind, with the nearest networks, the VPNs and airplane mode. Its rows come from Rust
-// (src/quick.rs). Wayland doesn't let apps place windows, so a window rule floats it (see
-// extras/hyprland.lua).
+// keybind, with the nearest networks, the VPNs, the Bluetooth devices, the volume and airplane
+// mode, each under its heading. Its rows come from Rust (src/quick.rs, and main.rs for the rest).
+// Wayland doesn't let apps place windows, so a window rule floats it (see extras/hyprland.lua).
 import { Theme } from "theme.slint";
-import { SignalBars } from "icons.slint";
-import { Button, IconButton, Switch, Focus } from "controls.slint";
+import { Icon, SignalBars } from "icons.slint";
+import { Button, IconButton, Switch, CardTitle, Scroll, Focus } from "controls.slint";
+import { Slider } from "sound.slint";
 
-export struct QuickRow { id: string, name: string, meta: string, bars: int, active: bool, connecting: bool }
-export struct QuickToggle { id: string, name: string, meta: string, on: bool }
+/// A network, a VPN or a Bluetooth device. icon: "bars" (signal bars), or an icon name. active:
+/// connected or connecting, which its meta line says first. button: "Connect", "Disconnect" or
+/// "Cancel".
+export struct QuickRow { id: string, name: string, meta: string, icon: string, bars: int, active: bool, button: string }
 
-component NetworkRow inherits Rectangle {
-    in property <QuickRow> network;
-    callback connect();
+// One quick action, the button, as the guide allows in lists people scan to act on. A click on
+// the row does the same, or opens Lituus on it once it's connected.
+component Row inherits Rectangle {
+    in property <QuickRow> entry;
+    callback button-clicked();
+    callback opened();
     height: 48px;
     border-radius: 8px;
-    background: network.active ? Theme.accent-soft-bg : touch.has-hover ? Theme.hover : transparent;
+    background: touch.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
-    accessible-label: network.name + ", " + network.meta;
-    touch := TouchArea {}
+    accessible-label: entry.name + ", " + entry.meta;
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { if root.entry.active { root.opened(); } else { root.button-clicked(); } }
+    }
     HorizontalLayout {
         padding-left: 10px;
         padding-right: 10px;
         spacing: 12px;
-        SignalBars { bars: root.network.bars; y: (parent.height - 14px) / 2; }
+        // Both drawn in one place, only one of them shown: no `if` per row.
+        Rectangle {
+            width: 20px;
+            SignalBars { bars: root.entry.bars; y: (parent.height - 14px) / 2; visible: root.entry.icon == "bars"; }
+            Icon { name: root.entry.icon == "bars" ? "" : root.entry.icon; tint: root.entry.active ? Theme.accent : Theme.muted; }
+        }
         VerticalLayout {
             alignment: center;
             spacing: 1px;
             horizontal-stretch: 1;
-            Text { text: root.network.name; color: Theme.text; font-size: 13px; font-weight: 500; overflow: elide; }
-            Text { text: root.network.meta; color: Theme.muted; font-size: 11px; overflow: elide; }
+            Text { text: root.entry.name; color: Theme.text; font-size: 13px; font-weight: 500; overflow: elide; }
+            Text { text: root.entry.meta; color: root.entry.active ? Theme.accent : Theme.muted; font-size: 11px; overflow: elide; }
         }
-        if root.network.active: Text {
-            text: root.network.connecting ? "Connecting…" : "Connected";
-            color: Theme.accent;
-            font-size: 12px;
-            vertical-alignment: center;
-        }
-        if !root.network.active: Button {
-            label: "Connect";
-            focus-key: "quick:" + root.network.id;
+        if root.entry.button != "": Button {
+            label: root.entry.button;
+            focus-key: "quick:" + root.entry.id;
             button-height: 28px;
-            width: 76px;
+            horizontal-stretch: 0;
+            min-width: self.preferred-width;
+            max-width: self.preferred-width;
             y: (parent.height - self.height) / 2;
-            clicked => { root.connect(); }
+            clicked => { root.button-clicked(); }
         }
     }
+}
+
+// A section's title, with its switch or tools on the right.
+component Heading inherits HorizontalLayout {
+    in property <string> text;
+    height: 34px;
+    spacing: 10px;
+    CardTitle { text: root.text; horizontal-stretch: 1; }
+    @children
+}
+
+// A line in place of a section's rows ("Wi-Fi: off", "No paired devices").
+component Note inherits HorizontalLayout {
+    in property <string> text;
+    height: 34px;
+    padding-left: 10px;
+    Text { text: root.text; color: Theme.muted; font-size: 12px; vertical-alignment: center; overflow: elide; }
 }
 
 export component QuickWindow inherits Window {
@@ -52,11 +79,27 @@ export component QuickWindow inherits Window {
     in property <bool> wifi-on;
     in property <string> wifi-status;
     in property <[QuickRow]> networks;
-    in property <[QuickToggle]> toggles;
+    in property <[QuickRow]> vpns;
+    /// Bluetooth: there's an adapter (and BlueZ), it's on, and its paired devices.
+    in property <bool> bt-available;
+    in property <bool> bt-on;
+    in property <[QuickRow]> devices;
+    /// The output in use: its volume (1.0 is 100 %), mute, and the slider's top.
+    in property <bool> sound-available;
+    in property <float> volume;
+    in property <bool> muted;
+    in property <float> volume-max: 1;
+    in property <bool> airplane;
     callback wifi-switched();
     callback rescan();
-    callback connect(string);
-    callback toggled(string);
+    /// A row's button, or a click on a row that isn't connected.
+    callback row-button(string);
+    /// A click on a connected row: Lituus opens on it.
+    callback row-opened(string);
+    callback bt-switched();
+    callback volume-moved(float);
+    callback mute-clicked();
+    callback airplane-switched();
     callback open-main();
     callback open-settings();
     callback dismissed();
@@ -94,10 +137,9 @@ export component QuickWindow inherits Window {
         }
         VerticalLayout {
             padding: 16px;
-            spacing: 12px;
-            HorizontalLayout {
-                spacing: 10px;
-                Text { text: "Wi-Fi"; color: Theme.text; font-size: 15px; font-weight: 600; horizontal-stretch: 1; vertical-alignment: center; }
+            spacing: 8px;
+            Heading {
+                text: "Wi-Fi";
                 if root.wifi-on: IconButton { icon: "rescan"; label: "Rescan"; clicked => { root.rescan(); } }
                 if root.wifi-available: Switch {
                     on: root.wifi-on;
@@ -107,37 +149,78 @@ export component QuickWindow inherits Window {
                     toggled => { root.wifi-switched(); }
                 }
             }
-            if root.networks.length == 0: Text {
-                text: root.wifi-status;
-                color: Theme.muted;
-                height: 48px;
-                vertical-alignment: center;
-                horizontal-alignment: center;
-            }
-            VerticalLayout {
+            // The lists scroll when there's more than the popup's height; the volume, airplane
+            // mode and the buttons stay at the bottom.
+            Scroll {
+                vertical-stretch: 1;
                 spacing: 2px;
-                for n in root.networks: NetworkRow { network: n; connect => { root.connect(n.id); } }
-            }
-            if root.toggles.length > 0: Rectangle { height: 1px; background: Theme.border2; }
-            VerticalLayout {
-                spacing: 2px;
-                for t in root.toggles: HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
+                bar-inset: -12px;
+                if root.networks.length == 0: Note { text: root.wifi-status; }
+                for n in root.networks: Row { entry: n; button-clicked => { root.row-button(n.id); } opened => { root.row-opened(n.id); } }
+                if root.vpns.length > 0: Heading { text: "VPN"; padding-top: 10px; height: 44px; }
+                for v in root.vpns: Row { entry: v; button-clicked => { root.row-button(v.id); } opened => { root.row-opened(v.id); } }
+                if root.bt-available: Heading {
+                    text: "Bluetooth";
+                    padding-top: 10px;
                     height: 44px;
-                    spacing: 10px;
                     VerticalLayout {
                         alignment: center;
-                        spacing: 1px;
-                        horizontal-stretch: 1;
-                        Text { text: t.name; color: Theme.text; font-size: 13px; overflow: elide; }
-                        Text { text: t.meta; color: Theme.muted; font-size: 11px; overflow: elide; }
+                        Switch { on: root.bt-on; label: "Bluetooth"; switch-width: 40px; toggled => { root.bt-switched(); } }
                     }
-                    Switch { on: t.on; label: t.name; focus-key: "quick-toggle:" + t.id; y: (parent.height - self.height) / 2; toggled => { root.toggled(t.id); } }
+                }
+                if root.bt-available && root.devices.length == 0: Note { text: root.bt-on ? "No paired devices" : "Off"; }
+                for d in root.devices: Row { entry: d; button-clicked => { root.row-button(d.id); } opened => { root.row-opened(d.id); } }
+            }
+            Rectangle { height: 1px; background: Theme.border2; }
+            if root.sound-available: VerticalLayout {
+                spacing: 2px;
+                Heading { text: "Volume"; }
+                HorizontalLayout {
+                    padding-left: 2px;
+                    padding-right: 4px;
+                    spacing: 10px;
+                    height: 36px;
+                    IconButton {
+                        icon: root.muted ? "volume-off" : "volume";
+                        label: root.muted ? "Unmute" : "Mute";
+                        y: (parent.height - self.height) / 2;
+                        clicked => { root.mute-clicked(); }
+                    }
+                    Slider {
+                        label: "Volume";
+                        value: root.volume;
+                        maximum: root.volume-max;
+                        mark: root.volume-max > 1 ? 1 : -1;
+                        y: (parent.height - self.height) / 2;
+                        horizontal-stretch: 1;
+                        moved(v) => { root.volume-moved(v); }
+                    }
+                    Text {
+                        text: root.muted ? "Muted" : round(root.volume * 100) + " %";
+                        color: Theme.muted;
+                        font-size: 12px;
+                        font-family: "JetBrains Mono";
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                        width: 48px;
+                    }
                 }
             }
-            Rectangle { vertical-stretch: 1; }
             HorizontalLayout {
+                padding-left: 2px;
+                height: 44px;
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    horizontal-stretch: 1;
+                    CardTitle { text: "Airplane mode"; }
+                    Text { text: "Turns off Wi-Fi, Bluetooth and mobile broadband"; color: Theme.muted; font-size: 11px; overflow: elide; }
+                }
+                Switch { on: root.airplane; label: "Airplane mode"; switch-width: 40px; y: (parent.height - self.height) / 2; toggled => { root.airplane-switched(); } }
+            }
+            HorizontalLayout {
+                padding-top: 4px;
                 spacing: 8px;
                 Button { label: "Open Lituus"; button-height: 36px; horizontal-stretch: 1; clicked => { root.open-main(); } }
                 IconButton { icon: "settings"; label: "Settings"; size: 36px; clicked => { root.open-settings(); } }

@@ -71,10 +71,12 @@ pub fn groups(entries: &[Entry], query: &str, current: &str, folded: &[String]) 
                     let subs_shown = shown.iter().any(|s| s.parent == Some(e.id));
                     // On a sub-page that's folded away, the item stands for it.
                     let on_sub = current_parent == Some(e.id);
+                    let sub = if subs_shown { "" } else { e.status.as_str() };
                     NavItem {
                         id: SharedString::from(e.id),
                         label: SharedString::from(e.label),
-                        sub: SharedString::from(if subs_shown { "" } else { e.status.as_str() }),
+                        sub: SharedString::from(sub),
+                        spoken: SharedString::from(spoken(sub)),
                         icon: SharedString::from(e.icon),
                         current: e.id == current || (on_sub && !current_shown),
                         open: on_sub && current_shown,
@@ -88,6 +90,14 @@ pub fn groups(entries: &[Entry], query: &str, current: &str, folded: &[String]) 
                 .then(|| NavGroup { title: SharedString::from(group), items: ModelRc::new(VecModel::from(items)) })
         })
         .collect()
+}
+
+/// A status as a screen reader says it: the counts in full ("2 on" is "2 connected").
+pub fn spoken(status: &str) -> String {
+    match status.strip_suffix(" on") {
+        Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => format!("{n} connected"),
+        _ => status.to_owned(),
+    }
 }
 
 /// The page Enter in the search field goes to: the first item whose name matches ("wire" is
@@ -259,5 +269,17 @@ mod tests {
         assert_eq!(items("ether", "wired"), [("network".to_owned(), false), ("wired".to_owned(), true)]);
         // It isn't: Network stands for it.
         assert_eq!(items("wireg", "wifi"), [("network".to_owned(), true), ("vpn".to_owned(), false)]);
+    }
+
+    #[test]
+    fn counts_are_said_in_full() {
+        assert_eq!(spoken("2 on"), "2 connected");
+        assert_eq!(spoken("On"), "On");
+        assert_eq!(spoken("Lumen Home"), "Lumen Home");
+        assert_eq!(spoken("Turned on"), "Turned on");
+        let mut e = entries();
+        e[2].status = "1 on".into();
+        let item = groups(&e, "", "", &[])[0].items.iter().find(|i| i.id == "wired").unwrap();
+        assert_eq!((item.sub.as_str(), item.spoken.as_str()), ("1 on", "1 connected"));
     }
 }

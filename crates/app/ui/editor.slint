@@ -4,7 +4,7 @@
 // whenever it changes (see src/editor.rs) and sends back the errors.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, FieldLabel, Banner, Focusable, Focus } from "controls.slint";
+import { Button, IconButton, SectionLabel, FieldLabel, Banner, Scroll, Focusable, Focus } from "controls.slint";
 import { TextField, Segmented, CheckBox, Select, FormRow, Modal } from "dialogs.slint";
 
 export struct AddressRow { address: string, prefix: string }
@@ -463,7 +463,7 @@ component PeerCard inherits Rectangle {
                     t := Text { x: 10px; text: ip; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; height: parent.height; }
                     Remove { x: parent.width - 30px; y: 3px; label: "Remove " + ip; clicked => { root.remove-allowed(j); } }
                 }
-                TextField { text <=> root.peer.allowed-input; mono: true; width: 140px; height: 34px; label: "Add an allowed range"; placeholder: "Add range"; accepted => { root.add-allowed(); } }
+                TextField { text <=> root.peer.allowed-input; mono: true; width: 140px; height: 34px; label: "Add an allowed range"; placeholder: "Add range"; committed => { root.add-allowed(); } }
             }
             if r == 3: HorizontalLayout {
                 spacing: 10px;
@@ -569,7 +569,8 @@ component IpPage inherits VerticalLayout {
                 label: "Add a DNS server";
                 placeholder: "Add server";
                 invalid: root.dns-error != "";
-                accepted => { root.add-dns(); }
+                // Enter, or leaving the field after typing.
+                committed => { root.add-dns(); }
             }
         }
         if root.dns-error != "": Error { text: root.dns-error; }
@@ -713,11 +714,10 @@ export component Editor inherits Rectangle {
             Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
         }
         // The tab's settings
-        Flickable {
+        // A scrollbar shows when the tab's settings don't fit.
+        Scroll {
             vertical-stretch: 1;
-            content-height: page.preferred-height;
             page := VerticalLayout {
-                width: parent.width;
                 padding: 24px;
                 padding-top: 22px;
                 spacing: 18px;
@@ -732,8 +732,8 @@ export component Editor inherits Rectangle {
                     }
                     FormRow {
                         label: "Connect automatically";
-                        label-top: 0px;
-                        Switch { on: root.form.autoconnect; label: "Connect automatically"; switch-width: 40px; toggled => { root.form.autoconnect = !root.form.autoconnect; } }
+                        label-top: 2px;
+                        CheckBox { checked <=> root.form.autoconnect; text: "When it's available"; label: "Connect automatically"; }
                     }
                     FormRow {
                         label: "Priority";
@@ -748,7 +748,7 @@ export component Editor inherits Rectangle {
                     FormRow {
                         label: "Available to";
                         label-top: 12px;
-                        HorizontalLayout { alignment: start; Segmented { options: ["All users", "Only me"]; selected: root.form.only-me ? 1 : 0; label: "Available to"; width: 220px; changed(i) => { root.form.only-me = i == 1; } } }
+                        HorizontalLayout { alignment: start; Segmented { options: ["All users", "For me only"]; selected: root.form.only-me ? 1 : 0; label: "Available to"; width: 240px; changed(i) => { root.form.only-me = i == 1; } } }
                         Hint { text: root.form.only-me ? "Only you can see and use it; changing it needs no admin password." : "Everyone on this computer can use it; changing it needs an admin password."; }
                     }
                     FormRow {
@@ -1161,7 +1161,7 @@ export component Editor inherits Rectangle {
                     FormRow {
                         label: "Use UDP (DTLS)";
                         label-top: 2px;
-                        HorizontalLayout { alignment: start; Switch { on: root.form.oc.udp; label: "Use UDP (DTLS)"; switch-width: 40px; toggled => { root.form.oc.udp = !root.form.oc.udp; } } }
+                        CheckBox { checked <=> root.form.oc.udp; text: "Use UDP when the server offers it"; label: "Use UDP (DTLS)"; }
                         Hint { text: "Faster. Turn it off if the connection drops behind strict firewalls."; }
                     }
                     FormRow {
@@ -1231,12 +1231,8 @@ export component Editor inherits Rectangle {
                     FormRow {
                         label: "Spanning tree (STP)";
                         label-top: 2px;
-                        HorizontalLayout {
-                            spacing: 10px;
-                            alignment: start;
-                            Switch { on: root.form.virt.stp; label: "Spanning tree"; toggled => { root.form.virt.stp = !root.form.virt.stp; } }
-                            Hint { text: "Stops loops when the bridge has more than one way to the same network."; vertical-alignment: center; }
-                        }
+                        CheckBox { checked <=> root.form.virt.stp; text: "Turn on spanning tree"; label: "Spanning tree"; }
+                        Hint { text: "Stops loops when the bridge has more than one way to the same network."; }
                     }
                     if root.form.virt.stp: FormRow {
                         label: "STP timers";

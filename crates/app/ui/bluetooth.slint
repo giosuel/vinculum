@@ -370,21 +370,19 @@ export component BtPairDialog inherits Modal {
     }
 }
 
+// Its settings apply together when Save is pressed, as a dialog's do; Cancel (or Esc) leaves the
+// adapter as it was. Something may be typed in it, so a click beside it doesn't close it.
 export component BtAdapterDialog inherits Modal {
     in property <string> adapter;
-    in property <bool> pairable;
+    in-out property <bool> pairable;
     in-out property <string> name;
     /// How long the Visible switch keeps the computer visible: 0 "3 minutes", 1 "Always".
     in-out property <int> visible-choice;
-    callback name-saved();
-    callback visible-chosen(int);
-    callback pairable-toggled();
-    callback closed();
+    callback saved();
+    callback cancelled();
     card-width: 560px;
     label: "Bluetooth adapter";
-    // Its settings apply at once and the name is saved on the way out, so nothing typed is lost.
-    backdrop-dismisses: true;
-    dismissed => { root.name-saved(); root.closed(); }
+    dismissed => { root.cancelled(); }
     Text { text: "Bluetooth adapter"; color: Theme.text; font-size: 17px; font-weight: 600; }
     VerticalLayout {
         spacing: 12px;
@@ -395,31 +393,29 @@ export component BtAdapterDialog inherits Modal {
         }
         FormRow {
             label: "Name";
-            TextField { text <=> root.name; mono: true; label: "Name"; accepted => { root.name-saved(); } }
+            TextField { text <=> root.name; mono: true; label: "Name"; accepted => { root.saved(); } }
             Text { text: "What other devices see when they look for this computer"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
         }
         FormRow {
-            label: "Visible switch";
+            label: "Visible for";
             HorizontalLayout {
                 alignment: start;
-                Segmented { options: ["3 minutes", "Always"]; selected <=> root.visible-choice; label: "Visible switch"; height: 38px; changed(i) => { root.visible-chosen(i); } }
+                Segmented { options: ["3 minutes", "Always"]; selected <=> root.visible-choice; label: "Visible for"; height: 38px; }
             }
             Text { text: "How long the Visible switch keeps the computer visible"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
         }
         FormRow {
             label: "Pairable";
-            label-top: 2px;
-            HorizontalLayout {
-                spacing: 10px;
-                Switch { on: root.pairable; label: "Pairable"; y: (parent.height - self.height) / 2; toggled => { root.pairable-toggled(); } }
-                Text { text: "New devices can ask to pair"; color: Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
-            }
+            label-top: 0;
+            CheckBox { checked <=> root.pairable; text: "New devices can ask to pair"; label: "Pairable"; }
         }
     }
     HorizontalLayout {
         padding-top: 6px;
+        spacing: 8px;
         alignment: end;
-        Button { label: "Close"; button-height: 36px; clicked => { root.name-saved(); root.closed(); } }
+        Button { label: "Cancel"; button-height: 36px; clicked => { root.cancelled(); } }
+        Button { label: "Save"; kind: "primary"; button-height: 36px; clicked => { root.saved(); } }
     }
 }
 

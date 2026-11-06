@@ -83,6 +83,8 @@ pub struct UiState {
     pub failed: Option<(String, String)>,
     /// The connections (by UUID) whose sign-in window is open.
     pub signing_in: Vec<String>,
+    /// Airplane mode is on (it turned Wi-Fi off, so the Wi-Fi page says so).
+    pub airplane: bool,
 }
 
 /// Goes to the page of a sidebar item (or the tray's, or the search's), with nothing selected.
@@ -150,7 +152,8 @@ pub struct View {
 }
 
 /// A Network page's hero: the line under its title, and what the page is about (the Wi-Fi
-/// network, the cable, the VPN that's on, the hotspot).
+/// network, the cable, the VPN that's on, the hotspot). Its actions are the details pane's, so
+/// it has no buttons of its own.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NetHero {
     pub sub: String,
@@ -160,10 +163,6 @@ pub struct NetHero {
     pub tone: &'static str,
     /// The interface and its address, in monospace.
     pub detail: String,
-    /// The row the buttons act on, as on a selected row.
-    pub row: Option<String>,
-    /// (id, label, kind)
-    pub actions: Vec<(&'static str, String, &'static str)>,
 }
 
 /// The hotspot page.
@@ -222,8 +221,19 @@ struct DetailsData {
     status_extra: String,
     actions: Vec<Action>,
     toggles: Vec<Toggle>,
+    /// A saved connection's Metered choice, as the editor has it: 0 Automatic, 1 Yes, 2 No.
+    metered: Option<i32>,
     items: Vec<DetailItem>,
     note: String,
+}
+
+/// The Metered choice of a saved connection (0 Automatic, 1 Yes, 2 No: NetworkManager's numbers).
+fn metered_choice(c: &SavedConnection) -> i32 {
+    match c.metered {
+        None => 0,
+        Some(true) => 1,
+        Some(false) => 2,
+    }
 }
 
 impl From<DetailsData> for Details {
@@ -235,6 +245,8 @@ impl From<DetailsData> for Details {
             status_extra: s(d.status_extra),
             actions: model(d.actions),
             toggles: model(d.toggles),
+            has_metered: d.metered.is_some(),
+            metered: d.metered.unwrap_or_default(),
             items: model(d.items),
             note: s(d.note),
             ..Details::default()
@@ -662,16 +674,6 @@ fn wifi_hero(snap: &Snapshot, device: &Device, networks: &[Network], out_of_rang
         meta: meta.join(" · "),
         tone: "accent",
         detail: device_line(Some(device)),
-        row: network.map(network_id),
-        // The buttons act on the network's row, so a hidden one has none.
-        actions: match network {
-            Some(_) => vec![
-                ("share", "Share".into(), "secondary"),
-                ("edit", "Edit".into(), "secondary"),
-                ("disconnect", "Disconnect".into(), "secondary"),
-            ],
-            None => Vec::new(),
-        },
     }
 }
 
@@ -692,8 +694,6 @@ fn wired_hero(snap: &Snapshot) -> NetHero {
             meta: format!("{}{}", if connected { "Connected" } else { "Connecting…" }, speed(device)),
             tone: "accent",
             detail: device_line(Some(device)),
-            row: Some(format!("conn:{}", active.uuid)),
-            actions: vec![("edit", "Edit".into(), "secondary"), ("disconnect", "Disconnect".into(), "secondary")],
         };
     }
     let Some(device) = devices.first() else {
@@ -717,13 +717,12 @@ fn wired_hero(snap: &Snapshot) -> NetHero {
         icon: "wired",
         name: name.into(),
         meta: meta.into(),
-        tone: "accent",
+        tone: "muted",
         detail: [device.interface.as_str(), device.hw_address.as_str()]
             .into_iter()
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("   "),
-        ..NetHero::default()
     }
 }
 
@@ -749,12 +748,8 @@ fn vpn_hero(snap: &Snapshot) -> NetHero {
             meta: meta.join(" · "),
             tone: "accent",
             detail: device_line(a.devices.first().and_then(|d| snap.device(d))),
-            row: connection.map(|c| format!("conn:{}", c.uuid)),
-            actions: vec![("edit", "Edit".into(), "secondary"), ("disconnect", "Disconnect".into(), "secondary")],
         };
     }
-    // The one used last; the first if none was ever used.
-    let last = vpns.iter().rev().max_by_key(|c| c.timestamp);
     NetHero {
         sub: if vpns.is_empty() { "Off".into() } else { format!("Off · {saved}") },
         icon: "vpn",
@@ -763,9 +758,7 @@ fn vpn_hero(snap: &Snapshot) -> NetHero {
             0 => "Add one with +".into(),
             n => count(n, "VPN saved", "VPNs saved"),
         },
-        tone: "accent",
-        row: last.map(|c| format!("conn:{}", c.uuid)),
-        actions: last.map(|c| ("connect", format!("Connect {}", c.id), "secondary")).into_iter().collect(),
+        tone: "muted",
         ..NetHero::default()
     }
 }
@@ -780,9 +773,12 @@ fn hotspot_hero(h: &HotspotView) -> NetHero {
             tone: "muted",
             ..hero
         },
-        (Some(_), None) => {
-            NetHero { name: "Hotspot off".into(), meta: "Share this computer's connection over Wi-Fi".into(), ..hero }
-        }
+        (Some(_), None) => NetHero {
+            name: "Hotspot off".into(),
+            meta: "Share this computer's connection over Wi-Fi".into(),
+            tone: "muted",
+            ..hero
+        },
         (Some(_), Some(_)) => NetHero {
             name: if h.status.starts_with("On") { "Hotspot on".into() } else { "Starting the hotspot…".into() },
             meta: format!("Others join “{}” with the password or the QR code below", h.ssid),
@@ -811,7 +807,7 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
         icon: "wifi",
         name: name.into(),
         meta: saved_line.clone(),
-        tone: "accent",
+        tone: "muted",
         ..NetHero::default()
     };
     let Some(device) = wifi_device(snap) else {
@@ -840,18 +836,23 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
     }
     if !snap.wireless_enabled {
         view.show_search = false;
-        view.net_hero = off("Off", "Wi-Fi is off");
         let kept = match saved {
             0 => String::new(),
             1 => " Your saved network is kept.".into(),
             n => format!(" Your {n} saved networks are kept."),
         };
-        view.empty = Some(Empty {
-            icon: "wifi",
-            title: "Wi-Fi is off".into(),
-            text: format!("Turn it on to see networks nearby.{kept}"),
-            action: "Turn on Wi-Fi".into(),
-        });
+        // Turning Wi-Fi on would leave airplane mode on for the rest, so the way back is to end it.
+        let (sub, text, action) = if state.airplane {
+            (
+                "Off · airplane mode",
+                format!("Wi-Fi is off because airplane mode is on.{kept}"),
+                "Turn off airplane mode",
+            )
+        } else {
+            ("Off", format!("Turn it on to see networks nearby.{kept}"), "Turn on Wi-Fi")
+        };
+        view.net_hero = off(sub, "Wi-Fi is off");
+        view.empty = Some(Empty { icon: "wifi", title: "Wi-Fi is off".into(), text, action: action.into() });
         return Vec::new();
     }
     view.bottom_label = "Connect to hidden network…".into();
@@ -1246,6 +1247,7 @@ fn details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsData> {
             status_extra: String::new(),
             actions: vec![action("add-wired", "Add a connection", "secondary")],
             toggles: Vec::new(),
+            metered: None,
             items: vec![
                 item("Interface", device.interface.as_str(), true),
                 item("MAC address", device.hw_address.as_str(), true),
@@ -1300,10 +1302,7 @@ fn wifi_details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsDat
         actions.push(action("forget", "Forget", "danger"));
     }
     let toggles = match saved {
-        Some(c) => vec![
-            toggle("autoconnect", "Connect automatically", "", c.autoconnect),
-            toggle("metered", "Metered connection", "Apps may limit background data", c.metered == Some(true)),
-        ],
+        Some(c) => vec![toggle("autoconnect", "Connect automatically", "", c.autoconnect)],
         None => Vec::new(),
     };
     let mut items = vec![
@@ -1331,6 +1330,7 @@ fn wifi_details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsDat
         status_extra: extra,
         actions,
         toggles,
+        metered: saved.map(metered_choice),
         items,
         note: String::new(),
     })
@@ -1372,10 +1372,8 @@ fn connection_details(snap: &Snapshot, state: &UiState, uuid: &str) -> Option<De
     if !signing_in {
         actions.push(action("forget", "Forget", "danger"));
     }
-    let mut toggles = vec![toggle("autoconnect", "Connect automatically", "", c.autoconnect)];
-    if page != Page::Vpn {
-        toggles.push(toggle("metered", "Metered connection", "", c.metered == Some(true)));
-    }
+    let toggles = vec![toggle("autoconnect", "Connect automatically", "", c.autoconnect)];
+    let metered = (page != Page::Vpn).then(|| metered_choice(c));
     let mut items = Vec::new();
     if let ConnectionKind::Vpn { gateway, .. } = &c.kind
         && !gateway.is_empty()
@@ -1436,6 +1434,7 @@ fn connection_details(snap: &Snapshot, state: &UiState, uuid: &str) -> Option<De
         status_extra: if extra.is_empty() { String::new() } else { format!("· {extra}") },
         actions,
         toggles,
+        metered,
         items,
         note,
     })
@@ -1712,16 +1711,22 @@ pub fn saved_connection<'a>(snap: &'a Snapshot, id: &str) -> Option<&'a SavedCon
     snap.connections.iter().find(|c| c.uuid == uuid)
 }
 
-/// The switches in the details pane ("autoconnect", "metered") as a command.
+/// The switches in the details pane ("autoconnect") as a command.
 pub fn toggle_command(snap: &Snapshot, selected: &str, id: &str) -> Option<Command> {
     let c = saved_connection(snap, selected)?;
     let (key, value) = match id {
         "autoconnect" => ("autoconnect", SettingValue::Bool(!c.autoconnect)),
-        // NMMetered: 1 yes, 2 no.
-        "metered" => ("metered", SettingValue::I32(if c.metered == Some(true) { 2 } else { 1 })),
         _ => return None,
     };
     Some(Command::SetSetting { connection: c.path.clone(), setting: "connection", key, value })
+}
+
+/// The details pane's Metered choice as a command: 0 Automatic, 1 Yes, 2 No, which are
+/// NetworkManager's own numbers (NMMetered).
+pub fn metered_command(snap: &Snapshot, selected: &str, choice: i32) -> Option<Command> {
+    let c = saved_connection(snap, selected)?;
+    let value = SettingValue::I32(choice.clamp(0, 2));
+    Some(Command::SetSetting { connection: c.path.clone(), setting: "connection", key: "metered", value })
 }
 
 /// The name a row shows, for messages about it.
@@ -1894,9 +1899,10 @@ pub(crate) mod tests {
         assert_eq!(view.net_hero.name, "Lumen Home");
         assert_eq!(view.net_hero.meta, "Connected · 5 GHz · 866 Mb/s");
         assert_eq!(view.net_hero.detail, "wlp2s0   192.168.1.42");
-        assert_eq!(view.net_hero.row.as_deref(), Some(view.row_ids[0].as_str()));
-        let hero_actions: Vec<&str> = view.net_hero.actions.iter().map(|a| a.1.as_str()).collect();
-        assert_eq!(hero_actions, ["Share", "Edit", "Disconnect"]);
+        // The hero has no buttons: Share, Edit and Disconnect are the pane's, once each.
+        let d = view.details.as_ref().unwrap();
+        let actions: Vec<String> = d.actions.iter().map(|a| a.label.to_string()).collect();
+        assert_eq!(actions, ["Disconnect", "Edit", "Share", "Forget"]);
         assert_eq!(view.hostname, "thinkpad-x1");
     }
 
@@ -2061,6 +2067,12 @@ pub(crate) mod tests {
         assert_eq!(view.net_hero.meta, "1 saved network");
         assert_eq!(view.net_items.wifi, "off");
         assert!(!view.show_search);
+        // Off because of airplane mode: it says so, and the way back is to end airplane mode.
+        let view = build(Some(&snap), None, &UiState { airplane: true, ..UiState::default() });
+        let empty = view.empty.as_ref().unwrap();
+        assert_eq!(empty.action, "Turn off airplane mode");
+        assert_eq!(empty.text, "Wi-Fi is off because airplane mode is on. Your saved network is kept.");
+        assert_eq!(view.net_hero.sub, "Off · airplane mode");
         snap.wireless_hardware_enabled = false;
         let view = build(Some(&snap), None, &UiState::default());
         assert_eq!(view.empty.as_ref().map(|e| e.title.as_str()), Some("Wi-Fi is blocked"));
@@ -2142,6 +2154,10 @@ pub(crate) mod tests {
         let actions: Vec<String> = d.actions.iter().map(|a| a.label.to_string()).collect();
         assert_eq!(actions, ["Connect", "Edit", "Forget"]);
         assert_eq!(d.toggles.row_data(0).unwrap().label, "Connect automatically");
+        // Metered is the editor's three-way choice, under the switch; NetworkManager decides here.
+        assert_eq!(d.toggles.row_count(), 1);
+        assert!(d.has_metered);
+        assert_eq!(d.metered, 0);
         // The search finds it too.
         let state = UiState { search: "off".into(), ..UiState::default() };
         assert_eq!(rows(&build(Some(&snap), None, &state)), [("SAVED, NOT IN RANGE".into(), vec!["Office".into()])]);
@@ -2174,7 +2190,8 @@ pub(crate) mod tests {
         let hero = &view.net_hero;
         assert_eq!((hero.sub.as_str(), hero.name.as_str()), ("Cable unplugged · 2 saved profiles", "Cable unplugged"));
         assert_eq!(hero.detail, "enp3s0   54:E1:AD:7C:20:9B");
-        assert!(hero.actions.is_empty());
+        // What to do is a hint, not a state, so it isn't in the accent.
+        assert_eq!((hero.meta.as_str(), hero.tone), ("Plug in a cable to connect", "muted"));
         // Plugged in and connected: the hero is the connection, with its speed.
         let eth = &mut snap.devices[1];
         eth.wired = Some(WiredDevice { carrier: true, speed: 1000 });
@@ -2195,11 +2212,11 @@ pub(crate) mod tests {
             (view.net_hero.name.as_str(), view.net_hero.meta.as_str()),
             ("Static (lab)", "Connected · 1000 Mb/s")
         );
-        assert_eq!(view.net_hero.row.as_deref(), Some("conn:u-lab"));
+        assert_eq!(view.net_hero.tone, "accent");
     }
 
     #[test]
-    fn the_vpn_hero_offers_the_vpn_used_last() {
+    fn the_vpn_hero_shows_the_vpn_that_is_on() {
         let mut snap = home();
         with_saved(&mut snap, "u-wg", "Home (WireGuard)", ConnectionKind::WireGuard, 100);
         let openconnect = ConnectionKind::Vpn {
@@ -2218,8 +2235,7 @@ pub(crate) mod tests {
             (hero.sub.as_str(), hero.name.as_str(), hero.meta.as_str()),
             ("Off · 3 saved", "No VPN on", "3 VPNs saved")
         );
-        assert_eq!(hero.actions, [("connect", "Connect UZH VPN".to_owned(), "secondary")]);
-        assert_eq!(hero.row.as_deref(), Some("conn:u-uzh"));
+        assert_eq!(hero.tone, "muted");
         assert_eq!((view.count.as_str(), view.search_placeholder.as_str()), ("3 VPNs", "Search VPNs"));
         assert!(view.show_search);
         state.search = "uzh".into();
@@ -2238,9 +2254,7 @@ pub(crate) mod tests {
         let view = build(Some(&snap), None, &UiState { page: Page::Vpn, ..UiState::default() });
         assert_eq!(view.net_items.vpn, "Home (WireGuard)");
         assert_eq!(view.net_hero.sub, "On · 3 saved");
-        assert_eq!(view.net_hero.meta, "Connected · WireGuard");
-        let labels: Vec<&str> = view.net_hero.actions.iter().map(|a| a.1.as_str()).collect();
-        assert_eq!(labels, ["Edit", "Disconnect"]);
+        assert_eq!((view.net_hero.meta.as_str(), view.net_hero.tone), ("Connected · WireGuard", "accent"));
     }
 
     #[test]
@@ -2249,6 +2263,7 @@ pub(crate) mod tests {
         let view = build(Some(&home()), None, &state);
         let hero = &view.net_hero;
         assert_eq!((hero.sub.as_str(), hero.name.as_str()), ("Off", "Hotspot off"));
+        assert_eq!(hero.tone, "muted");
         assert!(view.count.is_empty() && view.sections.is_empty());
         assert_eq!(view.net_items.hotspot, "off");
     }
@@ -2336,10 +2351,27 @@ pub(crate) mod tests {
                 value: SettingValue::Bool(false)
             })
         );
-        assert!(matches!(
-            toggle_command(&snap, &ids[0], "metered"),
-            Some(Command::SetSetting { key: "metered", value: SettingValue::I32(1), .. })
-        ));
+        assert_eq!(toggle_command(&snap, &ids[0], "metered"), None);
+        // Metered: the choice is NetworkManager's number, so Automatic is 0 again.
+        for (choice, value) in [(0, 0), (1, 1), (2, 2), (7, 2)] {
+            assert_eq!(
+                metered_command(&snap, &ids[0], choice),
+                Some(Command::SetSetting {
+                    connection: "/c/1".into(),
+                    setting: "connection",
+                    key: "metered",
+                    value: SettingValue::I32(value)
+                })
+            );
+        }
+        // The unsaved café network has none.
+        assert_eq!(metered_command(&snap, &ids[1], 1), None);
+        let state = UiState { selected: Some(ids[1].clone()), ..UiState::default() };
+        assert!(!build(Some(&snap), None, &state).details.unwrap().has_metered);
+        // A saved network shows its own choice.
+        let mut metered = snap.clone();
+        metered.connections[0].metered = Some(false);
+        assert_eq!(build(Some(&metered), None, &UiState::default()).details.unwrap().metered, 2);
     }
 
     #[test]

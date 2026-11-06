@@ -5,10 +5,10 @@ import { Theme } from "theme.slint";
 import { Icon, Logo } from "icons.slint";
 import { Switch, SectionLabel, Banner, Focusable, Scroll } from "controls.slint";
 
-/// sub: a short status on the right ("Home", "2 on", "45%"). open: an item showing its
-/// sub-items, on one of their pages. indent: a sub-item. foldable: an item with sub-items, which
-/// its chevron folds away (folded).
-export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool, open: bool, indent: bool, foldable: bool, folded: bool }
+/// sub: a short status on the right ("Home", "2 on", "45%"), and `spoken`, the same as a screen
+/// reader says it ("2 connected"). open: an item showing its sub-items, on one of their pages.
+/// indent: a sub-item. foldable: an item with sub-items, which its chevron folds away (folded).
+export struct NavItem { id: string, label: string, sub: string, spoken: string, icon: string, current: bool, open: bool, indent: bool, foldable: bool, folded: bool }
 export struct NavGroup { title: string, items: [NavItem] }
 /// What a page's hero shows: a big icon, a name, a line under it and a monospaced line.
 /// tone: the colour of `meta` ("accent", "muted", "danger", "faint").
@@ -22,7 +22,7 @@ component NavButton inherits Rectangle {
     callback fold-clicked();
     height: item.indent ? 32px : 36px;
     accessible-role: button;
-    accessible-label: item.sub == "" ? item.label : item.label + ", " + item.sub;
+    accessible-label: item.sub == "" ? item.label : item.label + ", " + (item.spoken != "" ? item.spoken : item.sub);
     accessible-action-default => { clicked(); }
     forward-focus: body;
     body := Focusable {
@@ -216,6 +216,8 @@ export component Sidebar inherits Rectangle {
                 spacing: 6px;
                 Text { text: "Hostname"; color: Theme.faint; font-size: 12px; }
                 Text { text: root.hostname; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; horizontal-stretch: 1; }
+                // It opens a dialog to change the name: the pencil says so.
+                VerticalLayout { alignment: center; Icon { name: "pencil"; size: 12px; tint: Theme.faint; } }
             }
         }
     }

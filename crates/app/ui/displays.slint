@@ -3,7 +3,7 @@
 // what's applied and saved. What it shows comes from Rust (src/displays.rs).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, CardTitle, SectionLabel, FieldLabel, Scroll, Focusable } from "controls.slint";
+import { Button, IconButton, CardTitle, SectionLabel, FieldLabel, Scroll, Focusable } from "controls.slint";
 import { Segmented, ViewSwitcher, Tabs, Select, TextField, CheckBox, Modal } from "dialogs.slint";
 import { Hero, Card, LoadBanner } from "shell.slint";
 import { Slider } from "sound.slint";
@@ -449,21 +449,17 @@ export component DisplaysPage inherits VerticalLayout {
                         spacing: 8px;
                         HorizontalLayout {
                             spacing: 10px;
+                            // "In use" leads the line under the name, in accent, as rows say it.
                             VerticalLayout {
                                 horizontal-stretch: 1;
                                 spacing: 2px;
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    alignment: start;
-                                    Text { text: p.name; color: Theme.text; font-size: 14px; font-weight: 600; }
-                                    if p.active: Text { text: "In use"; color: Theme.accent; font-size: 12px; vertical-alignment: center; }
-                                }
-                                Text { text: p.summary; color: Theme.faint; font-size: 12px; }
+                                Text { text: p.name; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
+                                Text { text: p.active ? "In use · " + p.summary : p.summary; color: p.active ? Theme.accent : Theme.muted; font-size: 12px; overflow: elide; }
                             }
                             CheckBox { checked: p.auto; text: "Switch by itself"; label: "Switch to " + p.name + " by itself"; focus-key: "profile-auto:" + i; horizontal-stretch: 0; y: (parent.height - self.height) / 2; toggled => { root.act("profile-auto", "" + i, 0); } }
                             Button { label: "Use"; focus-key: "profile-use:" + i; button-height: 30px; horizontal-stretch: 0; enabled: !p.active; y: (parent.height - self.height) / 2; clicked => { root.act("profile-use", "" + i, 0); } }
                             Button { label: "Update"; focus-key: "profile-update:" + i; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-update", "" + i, 0); } }
-                            Button { label: "Delete"; kind: "danger"; focus-key: "profile-delete:" + i; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-delete", "" + i, 0); } }
+                            IconButton { icon: "trash"; label: "Delete " + p.name; focus-key: "profile-delete:" + i; flat: true; y: (parent.height - self.height) / 2; clicked => { root.act("profile-delete", "" + i, 0); } }
                         }
                         HorizontalLayout {
                             spacing: 10px;

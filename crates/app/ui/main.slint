@@ -11,7 +11,7 @@ import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
 import { Button, IconButton, Switch, PillSwitch, SectionLabel, Banner, Kbd, Scroll, Focusable, Focus } from "controls.slint";
 import { JoinDialog, TextField, Segmented, FormRow, Modal } from "dialogs.slint";
-import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
+import { QuickWindow, QuickRow } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
 import { Sidebar, Hero, HeroSubject, Card, SettingRow, NavItem, NavGroup, HeroInfo } from "shell.slint";
 import { SettingsHero, AppearanceSettings, ColourFiles, ThemeSwatch, ColourChip, SourceRow } from "appearance.slint";
@@ -22,7 +22,7 @@ import { KeyboardPage, MousePage, KeyboardView, MouseView, InputRow, InputSectio
 import { BluetoothPage, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, Focus, FilesView, FileRow, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, Focus, FilesView, FileRow, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -87,12 +87,11 @@ export component MainWindow inherits Window {
     in property <string> hostname;
     in property <string> page: "wifi";
     in property <string> page-title: "Wi-Fi";
-    // Network's pages (its sub-items in the sidebar): the hero, the line under its title, and the
-    // buttons for what it shows.
+    // Network's pages (its sub-items in the sidebar): the hero and the line under its title. The
+    // actions on what it shows are the details pane's.
     property <bool> network-page: root.page == "wifi" || root.page == "wired" || root.page == "vpn" || root.page == "hotspot";
     in property <string> net-sub;
     in property <HeroInfo> net-hero;
-    in property <[Action]> net-hero-actions;
     in property <bool> wifi-available;
     // Above the list: "4 networks in range", the search field and Rescan.
     in property <string> count;
@@ -225,7 +224,7 @@ export component MainWindow inherits Window {
     in-out property <bool> bt-pair-always;
     in property <bool> bt-adapter-open;
     in property <string> bt-adapter-label;
-    in property <bool> bt-pairable;
+    in-out property <bool> bt-pairable;
     in-out property <string> bt-adapter-name;
     in-out property <int> bt-visible-choice;
     in property <bool> bt-rename-open;
@@ -245,11 +244,11 @@ export component MainWindow inherits Window {
     callback nav-fold(string);
     callback nav-search(string);
     callback nav-search-accepted();
-    /// A button on the Network hero, for the connection it shows.
-    callback hero-action(string);
     callback select(string);
     callback action(string);
     callback toggle(string);
+    /// The details pane's Metered choice: 0 Automatic, 1 Yes, 2 No.
+    callback metered-chosen(int);
     callback search(string);
     callback move-selection(int);
     callback wifi-switched();
@@ -397,25 +396,10 @@ export component MainWindow inherits Window {
                         HeroSubject {
                             x: 24px;
                             y: parent.height - self.height - (root.compact ? 16px : 22px);
-                            width: parent.width - 48px - hero-actions.width - 20px;
+                            width: parent.width - 48px;
                             height: root.compact ? 56px : 96px;
                             compact: root.compact;
                             info: root.net-hero;
-                        }
-                        hero-actions := HorizontalLayout {
-                            x: parent.width - self.width - 22px;
-                            y: parent.height - self.height - 26px;
-                            width: self.preferred-width;
-                            height: 34px;
-                            spacing: 8px;
-                            for a in root.net-hero-actions: Button {
-                                focus-key: "hero:" + a.id;
-                                label: a.label;
-                                kind: a.kind;
-                                enabled: a.enabled;
-                                min-width: self.preferred-width;
-                                clicked => { root.hero-action(a.id); keys.focus(); }
-                            }
                         }
                         net-tools := HorizontalLayout {
                             x: parent.width - self.width - 18px;
@@ -551,6 +535,7 @@ export component MainWindow inherits Window {
                                 details: root.details;
                                 action(id) => { root.action(id); }
                                 toggle(id) => { root.toggle(id); }
+                                metered-chosen(i) => { root.metered-chosen(i); }
                             }
                         }
                         if root.placeholder != "" && root.network-page: Card {
@@ -586,7 +571,7 @@ export component MainWindow inherits Window {
                                         HorizontalLayout {
                                             spacing: 10px;
                                             TextField { text <=> root.hotspot-password; mono: true; label: "Password"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
-                                            Button { label: "New"; button-height: 36px; horizontal-stretch: 0; enabled: !root.hotspot-on; clicked => { root.hotspot-new-password(); } }
+                                            Button { label: "Generate"; button-height: 36px; horizontal-stretch: 0; enabled: !root.hotspot-on; clicked => { root.hotspot-new-password(); } }
                                         }
                                     }
                                     FormRow {
@@ -633,8 +618,16 @@ export component MainWindow inherits Window {
                                         border-radius: 12px;
                                         background: white;
                                         Image { source: root.hotspot-qr; width: 200px; height: 200px; image-rendering: pixelated; }
+                                        // Nothing answers it while the hotspot is off: dimmed, under
+                                        // a veil rather than an opacity layer.
+                                        Rectangle { border-radius: parent.border-radius; background: Theme.surface.with-alpha(0.82); visible: !root.hotspot-on; }
                                     }
-                                    Text { text: "Scan with a phone camera to join"; color: Theme.muted; font-size: 12px; horizontal-alignment: center; }
+                                    Text {
+                                        text: root.hotspot-on ? "Scan with a phone camera to join" : "Turn the hotspot on to share";
+                                        color: Theme.muted;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                    }
                                 }
                             }
                         }
@@ -1078,13 +1071,11 @@ export component MainWindow inherits Window {
     }
     if root.bt-adapter-open: BtAdapterDialog {
         adapter: root.bt-adapter-label;
-        pairable: root.bt-pairable;
+        pairable <=> root.bt-pairable;
         name <=> root.bt-adapter-name;
         visible-choice <=> root.bt-visible-choice;
-        name-saved => { root.bt-act("adapter-name", ""); }
-        visible-chosen(i) => { root.bt-act("adapter-visible", "" + i); }
-        pairable-toggled => { root.bt-act("pairable", ""); }
-        closed => { root.bt-act("adapter-close", ""); keys.focus(); }
+        saved => { root.bt-act("adapter-save", ""); keys.focus(); }
+        cancelled => { root.bt-act("adapter-close", ""); keys.focus(); }
     }
     if root.bt-rename-open: BtRenameDialog {
         title: root.bt-rename-title;

@@ -255,6 +255,13 @@ fn s(text: impl AsRef<str>) -> SharedString {
     SharedString::from(text.as_ref())
 }
 
+/// The quick popup's volume: the output in use's (1.0 is 100 %), whether it's muted, and the
+/// highest the slider goes (as on the page). `None` without an output.
+pub fn quick(state: &State) -> Option<(f32, bool, f32)> {
+    let d = state.snapshot.as_ref()?.default_sink()?;
+    Some((d.volume.percent() as f32 / 100.0, d.muted, if state.overamplify { 1.5 } else { 1.0 }))
+}
+
 /// The sidebar's status: the volume of the output in use.
 pub fn status(state: &State) -> String {
     match state.snapshot.as_ref().and_then(|s| s.default_sink()) {
@@ -466,6 +473,16 @@ mod tests {
             }],
             cards: Vec::new(),
         }
+    }
+
+    #[test]
+    fn the_quick_popup_has_the_outputs_volume() {
+        let mut state = State { snapshot: Some(snapshot()), ..State::default() };
+        let (volume, muted, max) = quick(&state).unwrap();
+        assert!((volume - 0.45).abs() < 0.001 && !muted && max == 1.0);
+        state.overamplify = true;
+        assert_eq!(quick(&state).map(|q| q.2), Some(1.5));
+        assert_eq!(quick(&State::default()), None);
     }
 
     #[test]
