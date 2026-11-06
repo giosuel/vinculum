@@ -261,6 +261,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     window.set_version(env!("APP_VERSION").into());
     connect_callbacks(&window);
+    connect_focus(&window);
     apply_theme(&window);
     render(&window);
     let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -551,6 +552,31 @@ fn render_quick(app: &mut App, airplane: bool) {
     });
     app.quick = q;
     app.quick_bt = bt;
+}
+
+/// A dialog's FocusTrap asks for Tab (or Shift+Tab) to be pressed again once it has moved the
+/// focus to its other end, which sends it round to the first (or last) control. Slint can't press
+/// keys itself, and it's done after the key that got there, not inside its handling.
+fn connect_focus(window: &MainWindow) {
+    use slint::platform::{Key, WindowEvent};
+    use std::{cell::Cell, rc::Rc};
+    let weak = window.as_weak();
+    let stepping = Rc::new(Cell::new(false));
+    window.global::<Focus>().on_step(move |forward| {
+        // A card with nothing to focus would send it round for ever.
+        if stepping.get() {
+            return;
+        }
+        let (weak, stepping) = (weak.clone(), stepping.clone());
+        slint::Timer::single_shot(Duration::ZERO, move || {
+            let Some(window) = weak.upgrade() else { return };
+            let key = slint::SharedString::from(if forward { Key::Tab } else { Key::Backtab });
+            stepping.set(true);
+            window.window().dispatch_event(WindowEvent::KeyPressed { text: key.clone() });
+            window.window().dispatch_event(WindowEvent::KeyReleased { text: key });
+            stepping.set(false);
+        });
+    });
 }
 
 fn connect_callbacks(window: &MainWindow) {
@@ -2509,10 +2535,294 @@ mod tests {
     use std::rc::Rc;
 
     use i_slint_backend_testing::{AccessibleRole, ElementHandle, mock_elapsed_time};
-    use slint::platform::{PointerEventButton, WindowEvent};
-    use slint::{ComponentHandle, LogicalPosition, LogicalSize};
+    use slint::platform::{Key, PointerEventButton, WindowEvent};
+    use slint::{ComponentHandle, LogicalPosition, LogicalSize, Model, SharedString};
 
     use super::{BtPage, MainWindow};
+
+    fn press(window: &MainWindow, text: impl Into<SharedString>) {
+        let text = text.into();
+        window.window().dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window.window().dispatch_event(WindowEvent::KeyReleased { text });
+        // The Tab a dialog presses again to send the focus round (connect_focus).
+        mock_elapsed_time(Duration::ZERO);
+    }
+
+    /// The window with the sidebar filled in, as the app shows it.
+    fn window() -> MainWindow {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        super::connect_focus(&window);
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
+        window.set_hostname("thinkpad-x1".into());
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.show().unwrap();
+        window
+    }
+
+    /// Whether the focus ring is drawn, and around an element with this accessible label (a
+    /// text with the same words is one too).
+    fn ring_on(window: &MainWindow, label: &str) -> bool {
+        let Some(ring) = ElementHandle::find_by_element_id(window, "Focusable::ring").next() else { return false };
+        let (r, rs) = (ring.absolute_position(), ring.size());
+        ElementHandle::find_by_accessible_label(window, label).any(|e| {
+            let (p, s) = (e.absolute_position(), e.size());
+            let (cx, cy) = (p.x + s.width / 2.0, p.y + s.height / 2.0);
+            r.x <= cx && cx <= r.x + rs.width && r.y <= cy && cy <= r.y + rs.height && rs.height <= s.height + 8.0
+        })
+    }
+
+    /// Presses Tab until the ring is on `label`; how many presses that took.
+    fn tab_to(window: &MainWindow, label: &str) -> usize {
+        for n in 1..=120 {
+            press(window, Key::Tab);
+            if ring_on(window, label) {
+                return n;
+            }
+        }
+        panic!("Tab never reached {label}");
+    }
+
+    /// The sidebar's label for a page ("Bluetooth, 2 on"), as its button reads it out.
+    fn nav_label(window: &MainWindow, id: &str) -> String {
+        let groups = window.get_nav_groups();
+        let item = groups.iter().flat_map(|g| g.items.iter().collect::<Vec<_>>()).find(|i| i.id == id).unwrap();
+        if item.sub.is_empty() { item.label.to_string() } else { format!("{}, {}", item.label, item.sub) }
+    }
+
+    /// Tab goes down the sidebar, sub-items included, and on to the page; Shift+Tab comes back;
+    /// Space and Enter work the control with the ring, which is drawn only once the keyboard
+    /// moved the focus.
+    #[test]
+    fn the_keyboard_reaches_the_sidebar_and_works_its_controls() {
+        let window = window();
+        let navigated = Rc::new(RefCell::new(Vec::new()));
+        let n = navigated.clone();
+        window.on_navigate(move |id| n.borrow_mut().push(id.to_string()));
+        let airplane = Rc::new(RefCell::new(0));
+        let a = airplane.clone();
+        window.on_airplane_toggled(move || *a.borrow_mut() += 1);
+        window.set_net_hero_actions(super::model(vec![super::Action {
+            id: "disconnect".into(),
+            label: "Disconnect".into(),
+            kind: "secondary".into(),
+            enabled: true,
+        }]));
+        assert!(ElementHandle::find_by_element_id(&window, "Focusable::ring").next().is_none());
+
+        let wired = tab_to(&window, &nav_label(&window, "wired"));
+        let settings = tab_to(&window, "Settings") + wired;
+        let plane = tab_to(&window, "Airplane mode") + settings;
+        let hostname = tab_to(&window, "Change the hostname") + plane;
+        assert!(wired < settings && settings < plane && plane < hostname);
+        // After the sidebar, the page: the hero's button.
+        tab_to(&window, "Disconnect");
+
+        press(&window, Key::Backtab);
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Airplane mode"));
+        press(&window, " ");
+        assert_eq!(*airplane.borrow(), 1);
+        // The switch keeps the focus, so Tab carries on from it.
+        assert!(ring_on(&window, "Airplane mode"));
+        press(&window, Key::Backtab);
+        press(&window, Key::Return);
+        assert_eq!(*navigated.borrow(), ["settings"]);
+    }
+
+    /// Rust sends the sidebar again after every change, and Slint rebuilds its buttons: the
+    /// focus moves to the rebuilt one instead of getting lost.
+    #[test]
+    fn a_rebuilt_sidebar_keeps_the_focus() {
+        let window = window();
+        let label = nav_label(&window, "bluetooth");
+        tab_to(&window, &label);
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
+        assert!(ring_on(&window, &label));
+        // And keeps it: the window doesn't take it for a control that's gone.
+        for _ in 0..5 {
+            mock_elapsed_time(std::time::Duration::from_millis(100));
+        }
+        assert!(ring_on(&window, &label));
+    }
+
+    /// Network's chevron is a Tab stop after its label: Enter and Space fold, and the folded
+    /// sidebar, rebuilt, keeps the focus on it.
+    #[test]
+    fn the_keyboard_folds_network() {
+        let window = window();
+        let folds = Rc::new(RefCell::new(0));
+        let f = folds.clone();
+        window.on_nav_fold(move |id| {
+            assert_eq!(id, "network");
+            *f.borrow_mut() += 1;
+        });
+        let label = tab_to(&window, &nav_label(&window, "network"));
+        assert_eq!(tab_to(&window, "Network pages, expanded"), 1, "after {label} presses");
+        press(&window, Key::Return);
+        press(&window, " ");
+        assert_eq!(*folds.borrow(), 2);
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &["network".to_owned()])));
+        assert!(ring_on(&window, "Network pages, collapsed"));
+    }
+
+    #[test]
+    fn the_arrow_keys_move_a_segmented_control() {
+        let window = window();
+        window.set_page("hotspot".into());
+        window.set_hotspot_available(true);
+        tab_to(&window, "Band");
+        press(&window, Key::RightArrow);
+        assert_eq!(window.get_hotspot_band(), 1);
+        press(&window, Key::RightArrow);
+        press(&window, Key::RightArrow);
+        assert_eq!(window.get_hotspot_band(), 2);
+        press(&window, Key::LeftArrow);
+        assert_eq!(window.get_hotspot_band(), 1);
+    }
+
+    #[test]
+    fn a_select_opens_with_space_and_moves_with_the_arrows() {
+        let window = window();
+        window.set_join_mode("hidden".into());
+        window.set_join_securities(super::model(vec!["None".into(), "WPA2 Personal".into(), "WPA3 Personal".into()]));
+        window.set_join_password_hints(super::model(vec![SharedString::new(); 3]));
+        window.set_join_storage_hints(super::model(vec![SharedString::new(); 3]));
+        window.set_join_open(true);
+        tab_to(&window, "Security");
+        press(&window, " ");
+        press(&window, Key::DownArrow);
+        press(&window, Key::DownArrow);
+        press(&window, Key::Return);
+        assert_eq!(window.get_join_security(), 2);
+        // Esc closes the list and keeps the choice.
+        press(&window, Key::Return);
+        press(&window, Key::UpArrow);
+        press(&window, Key::Escape);
+        assert_eq!(window.get_join_security(), 2);
+        assert!(window.get_join_open());
+    }
+
+    /// The single-letter keys work wherever the focus is on the page, but not while typing.
+    #[test]
+    fn shortcuts_wait_while_a_text_field_has_the_focus() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        let keys = Rc::new(RefCell::new(Vec::new()));
+        let k = keys.clone();
+        window.on_bt_act(move |verb, arg| k.borrow_mut().push(format!("{verb} {arg}")));
+        press(&window, "s");
+        assert_eq!(*keys.borrow(), ["key s"]);
+        // On a control.
+        tab_to(&window, "Airplane mode");
+        press(&window, "p");
+        assert_eq!(*keys.borrow(), ["key s", "key p"]);
+        // Into the sidebar's search field: typed, not a shortcut.
+        for _ in 0..30 {
+            press(&window, Key::Backtab);
+            if ElementHandle::find_by_element_id(&window, "Focusable::ring").next().is_none() {
+                break;
+            }
+        }
+        press(&window, "s");
+        press(&window, "p");
+        assert_eq!(*keys.borrow(), ["key s", "key p"]);
+        press(&window, Key::Escape);
+        press(&window, "s");
+        assert_eq!(*keys.borrow(), ["key s", "key p", "key s"]);
+    }
+
+    /// A dialog's button closes the dialog and goes with it: the window takes the focus back,
+    /// so its keys work again.
+    #[test]
+    fn the_window_takes_the_focus_when_the_focused_control_goes() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        let keys = Rc::new(RefCell::new(Vec::new()));
+        let k = keys.clone();
+        window.on_bt_act(move |verb, arg| k.borrow_mut().push(format!("{verb} {arg}")));
+        let weak = window.as_weak();
+        window.on_confirm_cancelled(move || weak.unwrap().set_confirm_open(false));
+        window.set_confirm_title("Forget Aster Café?".into());
+        window.set_confirm_open(true);
+        tab_to(&window, "Cancel");
+        press(&window, " ");
+        assert!(!window.get_confirm_open());
+        // Drawing the window removes the dialog, as the next frame does.
+        assert!(ElementHandle::find_by_accessible_label(&window, "Forget Aster Café?").next().is_none());
+        for _ in 0..5 {
+            mock_elapsed_time(std::time::Duration::from_millis(100));
+        }
+        press(&window, "s");
+        assert_eq!(*keys.borrow(), ["key s"]);
+    }
+
+    /// The same in a `Modal` (#41's dialogs), which takes the focus when it opens: round its
+    /// field and buttons, and back to the control that opened it after Esc.
+    #[test]
+    fn tab_stays_in_a_modal_and_the_focus_comes_back() {
+        let window = window();
+        let weak = window.as_weak();
+        window.on_hostname_cancelled(move || weak.unwrap().set_hostname_open(false));
+        tab_to(&window, "Change the hostname");
+        window.set_hostname_input("thinkpad-x1".into());
+        window.set_hostname_open(true);
+        mock_elapsed_time(Duration::ZERO);
+        // The field has the focus; Tab goes to the buttons and round.
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Cancel"));
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Save"));
+        press(&window, Key::Tab);
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Cancel"));
+        // Back past the field, round to the last button.
+        press(&window, Key::Backtab);
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Save"));
+        press(&window, Key::Escape);
+        assert!(!window.get_hostname_open());
+        mock_elapsed_time(Duration::ZERO);
+        assert!(ring_on(&window, "Change the hostname"));
+    }
+
+    /// Tab and Shift+Tab go round a dialog's controls instead of on to the page behind it, and
+    /// when the dialog closes, the control that had the focus before gets it back.
+    #[test]
+    fn tab_stays_in_a_dialog_and_the_focus_comes_back() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        tab_to(&window, "Airplane mode");
+        window.set_confirm_title("Forget Aster Café?".into());
+        window.set_confirm_button("Forget".into());
+        window.set_confirm_open(true);
+        tab_to(&window, "Cancel");
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Forget"));
+        // Past the last button: round to the first, not to the sidebar.
+        press(&window, Key::Tab);
+        assert!(ring_on(&window, "Cancel"));
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Forget"));
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, "Cancel"));
+        for _ in 0..6 {
+            press(&window, Key::Tab);
+            assert!(ring_on(&window, "Cancel") || ring_on(&window, "Forget"));
+        }
+        window.set_confirm_open(false);
+        // The next turn of the event loop.
+        mock_elapsed_time(Duration::ZERO);
+        assert!(ring_on(&window, "Airplane mode"));
+        // And it stays there: the window doesn't take it for the button that went.
+        for _ in 0..5 {
+            mock_elapsed_time(Duration::from_millis(100));
+        }
+        assert!(ring_on(&window, "Airplane mode"));
+    }
 
     /// Widening the window must not show the closed editor in the new space, not even while
     /// the editor's slide animation would be running.
@@ -2540,6 +2850,47 @@ mod tests {
         assert!(0.0 < x && x < 1600.0, "{x}");
         mock_elapsed_time(Duration::from_millis(500));
         assert_eq!(editor(), Some(0.0));
+    }
+
+    /// A wide window's width goes to the list, also when it shows an empty state (Wi-Fi off) and
+    /// there are no details beside it.
+    #[test]
+    fn the_network_list_fills_a_wide_window_when_empty() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_empty_icon("wifi-off".into());
+        window.set_empty_title("Wi-Fi is off".into());
+        window.set_empty_text("Wired and VPN connections keep working.".into());
+        window.set_empty_action("Turn on Wi-Fi".into());
+        window.set_has_details(false);
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        window.show().unwrap();
+        let list =
+            ElementHandle::find_by_element_id(&window, "MainWindow::list-card").next().expect("the list is shown");
+        // The window less the sidebar (250) and the page's padding (44).
+        assert!(list.size().width > 1600.0, "{}", list.size().width);
+    }
+
+    /// With Network's sub-items open, the sidebar's pages scroll in the smallest window instead
+    /// of pushing Settings and Airplane mode out of it.
+    #[test]
+    fn the_sidebar_keeps_its_footer_in_a_short_window() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let entries = super::nav_entries(&super::App::default());
+        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
+        window.set_hostname("thinkpad-x1".into());
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        window.show().unwrap();
+        let bottom = |label: &str| {
+            let e = ElementHandle::find_by_accessible_label(&window, label).next().expect(label);
+            e.absolute_position().y + e.size().height
+        };
+        // The hint bar is 30 px; the footer ends above the window's bottom edge.
+        assert!(bottom("Airplane mode") < 590.0, "{}", bottom("Airplane mode"));
+        assert!(bottom("Settings") < bottom("Airplane mode"));
+        // The last page is still there, below the fold.
+        assert!(bottom("Appearance") > 0.0);
     }
 
     /// The Bluetooth hero has a Visible switch beside the Bluetooth one, with the time it has
@@ -2607,28 +2958,6 @@ mod tests {
         assert_eq!(switch("Bluetooth").and_then(|s| s.accessible_checked()), Some(false));
     }
 
-    /// With Network's sub-items open, the sidebar's pages scroll in the smallest window instead
-    /// of pushing Settings and Airplane mode out of it.
-    #[test]
-    fn the_sidebar_keeps_its_footer_in_a_short_window() {
-        i_slint_backend_testing::init_no_event_loop();
-        let window = MainWindow::new().unwrap();
-        let entries = super::nav_entries(&super::App::default());
-        window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
-        window.set_hostname("thinkpad-x1".into());
-        window.window().set_size(LogicalSize::new(1040.0, 600.0));
-        window.show().unwrap();
-        let bottom = |label: &str| {
-            let e = ElementHandle::find_by_accessible_label(&window, label).next().expect(label);
-            e.absolute_position().y + e.size().height
-        };
-        // The hint bar is 30 px; the footer ends above the window's bottom edge.
-        assert!(bottom("Airplane mode") < 590.0, "{}", bottom("Airplane mode"));
-        assert!(bottom("Settings") < bottom("Airplane mode"));
-        // The last page is still there, below the fold.
-        assert!(bottom("Appearance") > 0.0);
-    }
-
     /// In the smallest window with Network's sub-items shown, and more pages than fit, the wheel
     /// brings every page of the sidebar into view, between the search field and Settings, which
     /// stays where it is.
@@ -2691,6 +3020,43 @@ mod tests {
             assert!(in_view(label), "{label} never came into view");
             assert_eq!((bottom(&window, "Settings"), bottom(&window, "Airplane mode")), (settings, airplane));
         }
+    }
+
+    /// Tab down the sidebar scrolls its pages, so the control with the ring is in view.
+    #[test]
+    fn tab_scrolls_the_sidebar_to_the_ring() {
+        let window = window();
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        let entries = super::nav_entries(&super::App::default());
+        let mut groups = super::nav::groups(&entries, "", "wifi", &[]);
+        let item = |label: &str| super::NavItem {
+            id: label.into(),
+            label: label.into(),
+            icon: "settings".into(),
+            ..Default::default()
+        };
+        groups.push(super::NavGroup {
+            title: "MORE".into(),
+            items: super::model(["Input", "Keyboard", "Mouse", "Power", "Night light"].map(item).to_vec()),
+        });
+        window.set_nav_groups(super::model(groups));
+        mock_elapsed_time(Duration::from_millis(50));
+        let list = ElementHandle::find_by_element_id(&window, "Sidebar::page-list").next().expect("the pages");
+        let (top, end) = (list.absolute_position().y, list.absolute_position().y + list.size().height);
+        let in_view = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label).any(|e| {
+                let y = e.absolute_position().y;
+                y >= top - 0.5 && y + e.size().height <= end + 0.5
+            })
+        };
+        assert!(!in_view("Night light"));
+        tab_to(&window, "Night light");
+        mock_elapsed_time(Duration::from_millis(300));
+        assert!(in_view("Night light"));
+        // And round to the top again.
+        tab_to(&window, &nav_label(&window, "wifi"));
+        mock_elapsed_time(Duration::from_millis(300));
+        assert!(in_view(&nav_label(&window, "wifi")));
     }
 
     /// The bottom edge of the first element with this accessible label.
@@ -2833,7 +3199,6 @@ mod tests {
     /// page.
     #[test]
     fn the_network_chevron_folds_its_pages() {
-        use std::{cell::RefCell, rc::Rc};
         i_slint_backend_testing::init_no_event_loop();
         let window = MainWindow::new().unwrap();
         let entries = super::nav_entries(&super::App::default());
@@ -2860,24 +3225,5 @@ mod tests {
         assert_eq!(chevron.accessible_expanded(), Some(false));
         // The Hotspot item is gone.
         assert!(hotspots() < shown, "{} {shown}", hotspots());
-    }
-
-    /// A wide window's width goes to the list, also when it shows an empty state (Wi-Fi off) and
-    /// there are no details beside it.
-    #[test]
-    fn the_network_list_fills_a_wide_window_when_empty() {
-        i_slint_backend_testing::init_no_event_loop();
-        let window = MainWindow::new().unwrap();
-        window.set_empty_icon("wifi-off".into());
-        window.set_empty_title("Wi-Fi is off".into());
-        window.set_empty_text("Wired and VPN connections keep working.".into());
-        window.set_empty_action("Turn on Wi-Fi".into());
-        window.set_has_details(false);
-        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
-        window.show().unwrap();
-        let list =
-            ElementHandle::find_by_element_id(&window, "MainWindow::list-card").next().expect("the list is shown");
-        // The window less the sidebar (250) and the page's padding (44).
-        assert!(list.size().width > 1600.0, "{}", list.size().width);
     }
 }

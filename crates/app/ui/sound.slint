@@ -3,7 +3,7 @@
 // (src/sound.rs); everything the user does goes back through `act(verb, id, value)`.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Scroll } from "controls.slint";
+import { Button, IconButton, Switch, SectionLabel, Scroll, Focusable, Focus } from "controls.slint";
 import { Segmented, Select } from "dialogs.slint";
 import { Hero, HeroInfo, Card } from "shell.slint";
 
@@ -44,13 +44,12 @@ export struct SoundView {
 
 /// A volume slider: drags and arrow keys move it; while it's dragged it shows its own value
 /// rather than the server's, which lags behind.
-export component Slider inherits Rectangle {
+export component Slider inherits Focusable {
     in property <float> value;
     in property <float> minimum: 0;
     in property <float> maximum: 1;
     in property <bool> big;
     in property <string> label;
-    in property <bool> enabled: true;
     /// A mark across the track, such as 100 % when it goes higher, or the centre of a balance.
     in property <float> mark: -1;
     callback moved(float);
@@ -61,7 +60,10 @@ export component Slider inherits Rectangle {
     property <float> fraction: (clamp(shown, minimum, maximum) - minimum) / (maximum - minimum);
     height: big ? 28px : 20px;
     min-width: 80px;
-    opacity: enabled ? 1 : 0.5;
+    opacity: root.enabled ? 1 : 0.5;
+    // Round, for the focus ring.
+    border-radius: self.height / 2;
+    clickable: false;
     accessible-role: slider;
     accessible-label: label;
     accessible-value: round(shown * 100) + " %";
@@ -69,7 +71,11 @@ export component Slider inherits Rectangle {
     accessible-value-maximum: maximum * 100;
     accessible-action-increment => { root.moved(min(root.maximum, root.value + 0.05)); }
     accessible-action-decrement => { root.moved(max(root.minimum, root.value - 0.05)); }
-    forward-focus: focus;
+    key(event) => {
+        if event.text == Key.RightArrow || event.text == Key.UpArrow { root.moved(min(root.maximum, root.value + 0.05)); return accept; }
+        if event.text == Key.LeftArrow || event.text == Key.DownArrow { root.moved(max(root.minimum, root.value - 0.05)); return accept; }
+        reject
+    }
     track := Rectangle {
         x: root.knob / 2;
         width: parent.width - root.knob;
@@ -99,21 +105,15 @@ export component Slider inherits Rectangle {
         border-width: 3px;
         border-color: Theme.surface;
     }
-    // Under the touch area, which would otherwise not get the presses.
-    focus := FocusScope {
-        key-pressed(event) => {
-            if event.text == Key.RightArrow || event.text == Key.UpArrow { root.moved(min(root.maximum, root.value + 0.05)); return accept; }
-            if event.text == Key.LeftArrow || event.text == Key.DownArrow { root.moved(max(root.minimum, root.value - 0.05)); return accept; }
-            reject
-        }
-    }
     touch := TouchArea {
         enabled: root.enabled;
         mouse-cursor: pointer;
         pointer-event(event) => {
             // A press moves the knob there at once; a drag carries on from it (moved below).
             if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
-                focus.focus();
+                // Then the arrow keys move it too; the ring is only for the keyboard.
+                Focus.keyboard = false;
+                root.focus();
                 root.local = root.minimum + clamp((self.mouse-x - track.x) / track.width, 0, 1) * (root.maximum - root.minimum);
                 root.moved(root.local);
             }
@@ -160,6 +160,7 @@ component DeviceRow inherits Rectangle {
         if root.device.in-use: Text { text: "In use"; color: Theme.accent; font-size: 12px; vertical-alignment: center; }
         if !root.device.in-use: Button {
             label: "Use";
+            focus-key: "use:" + root.device.id;
             button-height: 28px;
             min-width: self.preferred-width;
             y: (parent.height - self.height) / 2;
@@ -369,12 +370,14 @@ export component SoundPage inherits VerticalLayout {
                     IconButton {
                         icon: a.muted ? "volume-off" : "volume";
                         label: a.muted ? "Unmute " + a.name : "Mute " + a.name;
+                        focus-key: "app-mute:" + a.id;
                         y: (parent.height - self.height) / 2;
                         clicked => { root.act("app-mute", a.id, 0); }
                     }
                     Slider {
                         horizontal-stretch: 1;
                         label: a.name + " volume";
+                        focus-key: "app-volume:" + a.id;
                         value: a.volume;
                         maximum: root.page.max;
                         mark: root.page.max > 1 ? 1 : -1;
@@ -386,6 +389,7 @@ export component SoundPage inherits VerticalLayout {
                         width: 190px;
                         select-height: 32px;
                         label: "Output for " + a.name;
+                        focus-key: "app-output:" + a.id;
                         options: root.page.outputs-names;
                         selected: a.output;
                         y: (parent.height - self.height) / 2;
@@ -411,6 +415,7 @@ export component SoundPage inherits VerticalLayout {
                         width: 300px;
                         select-height: 32px;
                         label: "Profile for " + c.name;
+                        focus-key: "profile:" + c.id;
                         options: c.profiles;
                         selected: c.selected;
                         y: (parent.height - self.height) / 2;

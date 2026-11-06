@@ -1,7 +1,7 @@
 // The details pane next to a list (Wi-Fi, Wired, VPN, Saved, Bluetooth) and the data it shows.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, Switch, Scroll } from "controls.slint";
+import { Button, Switch, Scroll, Focusable } from "controls.slint";
 
 /// kind: "primary", "secondary", "danger".
 export struct Action { id: string, label: string, kind: string, enabled: bool }
@@ -61,17 +61,17 @@ export component DetailsPane inherits Rectangle {
                     spacing: 8px;
                     alignment: start;
                     Text { text: root.details.title; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; }
-                    if root.details.renamable: Rectangle {
+                    if root.details.renamable: Focusable {
                         width: 24px;
                         height: 24px;
                         y: (parent.height - self.height) / 2;
                         border-radius: 6px;
-                        background: pencil.has-hover ? Theme.sel-bg : transparent;
+                        background: self.has-hover ? Theme.sel-bg : transparent;
                         accessible-role: button;
                         accessible-label: "Rename";
                         accessible-action-default => { root.rename(); }
+                        activated => { root.rename(); }
                         Icon { name: "pencil"; tint: Theme.muted; size: 14px; }
-                        pencil := TouchArea { mouse-cursor: pointer; clicked => { root.rename(); } }
                     }
                 }
                 HorizontalLayout {
@@ -86,6 +86,7 @@ export component DetailsPane inherits Rectangle {
                 spacing: 8px;
                 alignment: start;
                 for a in root.details.actions: Button {
+                    focus-key: "action:" + a.id;
                     label: a.label;
                     kind: a.kind;
                     enabled: a.enabled;
@@ -118,7 +119,7 @@ export component DetailsPane inherits Rectangle {
                             }
                             VerticalLayout {
                                 alignment: center;
-                                Switch { on: t.on; label: t.label; toggled => { root.toggle(t.id); } }
+                                Switch { on: t.on; label: t.label; focus-key: "toggle:" + t.id; toggled => { root.toggle(t.id); } }
                             }
                         }
                     }

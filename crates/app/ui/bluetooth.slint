@@ -3,7 +3,7 @@
 // user does goes back through one callback, `act(verb, argument)`.
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Battery, Spinner } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Scroll } from "controls.slint";
+import { Button, IconButton, Switch, SectionLabel, Scroll, Focusable, Focus } from "controls.slint";
 import { TextField, Segmented, CheckBox, Modal } from "dialogs.slint";
 import { Details, DetailsPane } from "details.slint";
 import { HeroInfo } from "shell.slint";
@@ -62,7 +62,9 @@ export struct BtPair {
     always: string,
 }
 
-component BtListRow inherits Rectangle {
+// Space selects it, Enter selects it and connects (the window's Enter, for the selection), and
+// the arrow keys move the selection, taking the focus along.
+component BtListRow inherits Focusable {
     in property <BtRow> entry;
     /// Whether the selected row scrolls into view (after a move with the keyboard).
     in property <bool> follow;
@@ -72,12 +74,21 @@ component BtListRow inherits Rectangle {
     callback reveal(length, length);
     height: 52px;
     border-radius: 8px;
-    background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
+    // The list would cut off a ring outside it.
+    ring-gap: -2px;
+    focus-key: "row:" + entry.id;
+    selected-key: entry.selected ? "list:selected" : "";
+    background: entry.selected ? Theme.accent-soft-bg : self.has-hover ? Theme.sel-bg : transparent;
     accessible-role: list-item;
     accessible-label: entry.name + ", " + entry.meta;
     accessible-item-selected: entry.selected;
     accessible-action-default => { clicked(); }
-    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    activated => { root.clicked(); }
+    key(event) => {
+        if event.text == Key.Return { root.clicked(); root.focus(); return reject; }
+        if event.text == Key.UpArrow || event.text == Key.DownArrow { Focus.key = "list:selected"; }
+        reject
+    }
     HorizontalLayout {
         padding-left: 10px;
         padding-right: 10px;
@@ -101,6 +112,7 @@ component BtListRow inherits Rectangle {
         if root.entry.bars >= 0: SignalBars { bars: root.entry.bars; y: (parent.height - 14px) / 2; }
         if root.entry.button != "": Button {
             label: root.entry.button;
+            focus-key: "row-button:" + root.entry.id;
             button-height: 28px;
             horizontal-stretch: 0;
             min-width: self.preferred-width;
@@ -165,16 +177,16 @@ export component BluetoothPage inherits HorizontalLayout {
                         y: (parent.height - self.height) / 2;
                         clicked => { root.act("message-action", ""); }
                     }
-                    Rectangle {
+                    Focusable {
                         width: 24px;
                         height: 24px;
                         border-radius: 6px;
-                        background: dismiss.has-hover ? Theme.sel-bg : transparent;
+                        background: self.has-hover ? Theme.sel-bg : transparent;
                         accessible-role: button;
                         accessible-label: "Dismiss";
                         accessible-action-default => { root.act("dismiss", ""); }
+                        activated => { root.act("dismiss", ""); }
                         Icon { name: "close"; tint: Theme.faint; size: 12px; }
-                        dismiss := TouchArea { mouse-cursor: pointer; clicked => { root.act("dismiss", ""); } }
                     }
                 }
             }
@@ -275,13 +287,21 @@ export component BluetoothPage inherits HorizontalLayout {
                 Text { text: "Audio"; color: Theme.text; font-weight: 600; vertical-alignment: center; }
                 Text { text: "through PipeWire"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
             }
-            Rectangle {
+            // Drawn like a segmented control, and the arrow keys move it as they move one.
+            Focusable {
                 height: 52px;
                 border-radius: 9px;
                 border-width: 1px;
                 border-color: Theme.border2;
+                clickable: false;
                 accessible-role: tab-list;
                 accessible-label: "Audio";
+                key(event) => {
+                    if event.text == Key.LeftArrow && root.page.audio-selected > 0 { root.act("audio", "" + (root.page.audio-selected - 1)); return accept; }
+                    if event.text == Key.RightArrow && root.page.audio-selected < root.page.audio.length - 1 { root.act("audio", "" + (root.page.audio-selected + 1)); return accept; }
+                    if event.text == Key.LeftArrow || event.text == Key.RightArrow { return accept; }
+                    reject
+                }
                 HorizontalLayout {
                     padding: 3px;
                     spacing: 3px;
