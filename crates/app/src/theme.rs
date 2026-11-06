@@ -190,13 +190,19 @@ impl Palette {
         // Warnings keep their amber, a dark or a light one to suit the surface.
         let dark = role("surface")?.luminance() < 0.2;
         let amber = if dark { AMBER_DARK } else { AMBER_LIGHT };
+        let backgrounds = [
+            role("surface")?,
+            role("surface_container_low")?,
+            role("surface_container")?,
+            role("surface_container_lowest")?,
+        ];
         let palette = Self {
             bg: role("surface")?,
             panel: role("surface_container_low")?,
             surface: role("surface_container")?,
             border: role("surface_container_high")?,
             border2: role("surface_container_highest")?,
-            ctrl_border: role("outline_variant")?,
+            ctrl_border: control_edge(role("outline_variant")?, role("outline")?, &backgrounds),
             ctrl_bg: role("surface_container_high")?,
             input_bg: role("surface_container_lowest")?,
             text: role("on_surface")?,
@@ -224,6 +230,16 @@ impl Palette {
         [self.bg, self.panel, self.surface].iter().all(|&bg| self.text.contrast(bg) >= 4.5)
             && self.on_accent.contrast(self.accent) >= 4.5
     }
+}
+
+/// The edge of a control (fields, buttons, an off switch): `variant` moved towards `outline` until
+/// it stands out 3:1 from every background a control sits on (WCAG 1.4.11), or `outline` itself.
+/// `outline_variant` alone was 1.5–1.75:1, and `outline` all the way is heavier than needed.
+fn control_edge(variant: Rgb, outline: Rgb, backgrounds: &[Rgb]) -> Rgb {
+    (0..=20)
+        .map(|i| mix(variant, outline, f64::from(i) / 20.0))
+        .find(|edge| backgrounds.iter().all(|&bg| edge.contrast(bg) >= 3.0))
+        .unwrap_or(outline)
 }
 
 /// `a` moved towards `b` by `f` (0–1).
@@ -355,6 +371,22 @@ mod tests {
         }
         // Blue in the dark is the owner's own palette.
         assert_eq!(Palette::builtin(Builtin::Blue, true), Palette::from_material(&blue()).unwrap());
+    }
+
+    #[test]
+    fn control_edges_stand_out_3_to_1_in_every_built_in_theme() {
+        for builtin in Builtin::ALL {
+            for dark in [true, false] {
+                let p = Palette::builtin(builtin, dark);
+                for bg in [p.bg, p.panel, p.surface, p.input_bg] {
+                    let ratio = p.ctrl_border.contrast(bg);
+                    assert!(ratio >= 3.0, "{builtin:?} dark={dark}: {ratio:.2}");
+                }
+            }
+        }
+        // Not more than needed: it stays nearer the variant than the outline in the owner's.
+        let p = Palette::from_material(&blue()).unwrap();
+        assert!(p.ctrl_border.contrast(p.surface) < p.faint.contrast(p.surface));
     }
 
     #[test]

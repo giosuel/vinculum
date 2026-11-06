@@ -5,9 +5,9 @@ use lituus_nm::{
     ActiveState, Band, ConnectionKind, Device, DeviceKind, KeyMgmt, Network, SavedConnection, Security, Snapshot,
     WifiJoin, bars, channel,
 };
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{Model, ModelRc, SharedString, VecModel};
 
-use crate::{Action, DetailItem, Details, Row, Section, Toggle};
+use crate::{Action, DetailItem, Details, Hint, Row, Section, Toggle};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
@@ -19,6 +19,8 @@ pub enum Page {
     Bluetooth,
     Displays,
     Sound,
+    Keyboard,
+    Mouse,
     Settings,
 }
 
@@ -32,17 +34,20 @@ impl Page {
             "bluetooth" => Self::Bluetooth,
             "displays" => Self::Displays,
             "sound" => Self::Sound,
+            "keyboard" => Self::Keyboard,
+            "mouse" => Self::Mouse,
             // Lituus's own look moved to Settings.
             "settings" | "appearance" => Self::Settings,
             _ => return None,
         })
     }
 
-    /// The page a sidebar item opens: Network opens its sub-page used last.
+    /// The page a sidebar item opens: Network opens its sub-page used last, Input its first.
     pub fn open(id: &str, last_network: Self) -> Option<Self> {
         match id {
             "network" if last_network.is_network() => Some(last_network),
             "network" => Some(Self::Wifi),
+            "input" => Some(Self::Keyboard),
             _ => Self::from_id(id),
         }
     }
@@ -61,6 +66,8 @@ impl Page {
             Self::Bluetooth => "bluetooth",
             Self::Displays => "displays",
             Self::Sound => "sound",
+            Self::Keyboard => "keyboard",
+            Self::Mouse => "mouse",
             Self::Settings => "settings",
         }
     }
@@ -76,6 +83,8 @@ pub struct UiState {
     pub failed: Option<(String, String)>,
     /// The connections (by UUID) whose sign-in window is open.
     pub signing_in: Vec<String>,
+    /// Airplane mode is on (it turned Wi-Fi off, so the Wi-Fi page says so).
+    pub airplane: bool,
 }
 
 /// Goes to the page of a sidebar item (or the tray's, or the search's), with nothing selected.
@@ -89,14 +98,22 @@ pub fn navigate(state: &mut UiState, last_network: &mut Page, id: &str) -> Optio
     Some(page)
 }
 
-/// An empty state shown instead of the list.
+/// An empty state shown instead of the list. No icon: still reading, with a spinner.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Empty {
     pub icon: &'static str,
     pub title: String,
     pub text: String,
+    /// A command that fixes it, shown with a Copy button.
+    pub command: String,
     pub action: String,
+    /// The page has nothing else to show (Wi-Fi off, no VPN yet), so the hero is only its title
+    /// and line; not for a search that finds nothing or a list that's empty for now.
+    pub page: bool,
 }
+
+/// The command that starts NetworkManager, for its empty state.
+pub const NOT_RUNNING_COMMAND: &str = "systemctl enable --now NetworkManager";
 
 /// The short statuses of Network's sub-items in the sidebar.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -137,13 +154,13 @@ pub struct View {
     pub details: Option<Details>,
     pub empty: Option<Empty>,
     pub banner: String,
-    pub placeholder: String,
     pub hostname: String,
     pub hotspot: Option<HotspotView>,
 }
 
 /// A Network page's hero: the line under its title, and what the page is about (the Wi-Fi
-/// network, the cable, the VPN that's on, the hotspot).
+/// network, the cable, the VPN that's on, the hotspot). Its actions are the details pane's, so
+/// it has no buttons of its own.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NetHero {
     pub sub: String,
@@ -153,10 +170,6 @@ pub struct NetHero {
     pub tone: &'static str,
     /// The interface and its address, in monospace.
     pub detail: String,
-    /// The row the buttons act on, as on a selected row.
-    pub row: Option<String>,
-    /// (id, label, kind)
-    pub actions: Vec<(&'static str, String, &'static str)>,
 }
 
 /// The hotspot page.
@@ -215,8 +228,19 @@ struct DetailsData {
     status_extra: String,
     actions: Vec<Action>,
     toggles: Vec<Toggle>,
+    /// A saved connection's Metered choice, as the editor has it: 0 Automatic, 1 Yes, 2 No.
+    metered: Option<i32>,
     items: Vec<DetailItem>,
     note: String,
+}
+
+/// The Metered choice of a saved connection (0 Automatic, 1 Yes, 2 No: NetworkManager's numbers).
+fn metered_choice(c: &SavedConnection) -> i32 {
+    match c.metered {
+        None => 0,
+        Some(true) => 1,
+        Some(false) => 2,
+    }
 }
 
 impl From<DetailsData> for Details {
@@ -228,6 +252,8 @@ impl From<DetailsData> for Details {
             status_extra: s(d.status_extra),
             actions: model(d.actions),
             toggles: model(d.toggles),
+            has_metered: d.metered.is_some(),
+            metered: d.metered.unwrap_or_default(),
             items: model(d.items),
             note: s(d.note),
             ..Details::default()
@@ -317,19 +343,16 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
             Some(e) => format!("{e}. Lituus needs it to manage connections."),
             None => String::new(),
         };
-        view.empty = Some(Empty {
-            icon: "warning",
-            title: if error.is_some() {
-                "NetworkManager isn't running".into()
-            } else {
-                "Reading NetworkManager…".into()
+        view.empty = Some(match error {
+            Some(_) => Empty {
+                icon: "warning",
+                title: "NetworkManager isn't running".into(),
+                text: "Lituus manages connections through NetworkManager. Start it with:".into(),
+                command: NOT_RUNNING_COMMAND.into(),
+                page: true,
+                ..Empty::default()
             },
-            text: if error.is_some() {
-                "Start it with: systemctl enable --now NetworkManager".into()
-            } else {
-                String::new()
-            },
-            action: String::new(),
+            None => Empty { title: "Reading NetworkManager…".into(), ..Empty::default() },
         });
         return view;
     };
@@ -347,7 +370,7 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
             Vec::new()
         }
         // Bluetooth has a page of its own (bluetooth.rs).
-        Page::Bluetooth | Page::Displays | Page::Sound | Page::Settings => Vec::new(),
+        Page::Bluetooth | Page::Displays | Page::Sound | Page::Keyboard | Page::Mouse | Page::Settings => Vec::new(),
     };
     // Rows grouped by section title, the selection resolved, and the selected row's details.
     view.row_ids = rows.iter().flat_map(|(_, r)| r.iter().map(|r| r.id.clone())).collect();
@@ -378,11 +401,33 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
     if let Some(id) = &selected {
         view.details = details(snapshot, state, id).map(Details::from);
     }
-    if view.empty.is_none() && view.row_ids.is_empty() && state.page.is_network() && view.placeholder.is_empty() {
+    if view.empty.is_none() && view.row_ids.is_empty() && state.page.is_network() {
         view.empty = Some(nothing_here(state.page, !state.search.is_empty()));
     }
     view.selected = selected;
     view
+}
+
+/// The keys that work on a Network page now, for the bar at the bottom: the search, the list,
+/// and what Enter and e do to the selected row (the details pane's Connect and Edit).
+pub fn keys(view: &View) -> Vec<Hint> {
+    let mut keys = Vec::new();
+    if view.show_search {
+        keys.push(Hint::new("/", "Search"));
+    }
+    if !view.row_ids.is_empty() {
+        keys.push(Hint::new("↑↓", "Select"));
+    }
+    if let Some(d) = &view.details {
+        let action = |id: &str| d.actions.iter().find(|a| a.id == id && a.enabled);
+        if let Some(connect) = action("connect") {
+            keys.push(Hint::new("↵", &connect.label));
+        }
+        if action("edit").is_some() {
+            keys.push(Hint::new("e", "Edit"));
+        }
+    }
+    keys
 }
 
 fn page_title(page: Page) -> &'static str {
@@ -394,6 +439,8 @@ fn page_title(page: Page) -> &'static str {
         Page::Bluetooth => "Bluetooth",
         Page::Displays => "Displays",
         Page::Sound => "Sound",
+        Page::Keyboard => "Keyboard",
+        Page::Mouse => "Mouse & touchpad",
         Page::Settings => "Settings",
     }
 }
@@ -418,7 +465,7 @@ fn nothing_here(page: Page, searching: bool) -> Empty {
             icon: "search",
             title: "Nothing found".into(),
             text: "No name matches the search.".into(),
-            action: String::new(),
+            ..Empty::default()
         };
     }
     match page {
@@ -426,19 +473,22 @@ fn nothing_here(page: Page, searching: bool) -> Empty {
             icon: "wired",
             title: "No wired network card".into(),
             text: "Plug in a USB network adapter to see it here.".into(),
-            action: String::new(),
+            page: true,
+            ..Empty::default()
         },
         Page::Vpn => Empty {
             icon: "vpn",
             title: "No VPN connections".into(),
             text: "Add a WireGuard, OpenVPN or AnyConnect connection with +, or bring one in from a .conf or .ovpn file, or from openconnect-saml.".into(),
             action: "Import a file…".into(),
+            page: true,
+            ..Empty::default()
         },
         _ => Empty {
             icon: "wifi-off",
             title: "No networks in range".into(),
             text: "Try rescanning.".into(),
-            action: String::new(),
+            ..Empty::default()
         },
     }
 }
@@ -653,16 +703,6 @@ fn wifi_hero(snap: &Snapshot, device: &Device, networks: &[Network], out_of_rang
         meta: meta.join(" · "),
         tone: "accent",
         detail: device_line(Some(device)),
-        row: network.map(network_id),
-        // The buttons act on the network's row, so a hidden one has none.
-        actions: match network {
-            Some(_) => vec![
-                ("share", "Share".into(), "secondary"),
-                ("edit", "Edit".into(), "secondary"),
-                ("disconnect", "Disconnect".into(), "secondary"),
-            ],
-            None => Vec::new(),
-        },
     }
 }
 
@@ -683,8 +723,6 @@ fn wired_hero(snap: &Snapshot) -> NetHero {
             meta: format!("{}{}", if connected { "Connected" } else { "Connecting…" }, speed(device)),
             tone: "accent",
             detail: device_line(Some(device)),
-            row: Some(format!("conn:{}", active.uuid)),
-            actions: vec![("edit", "Edit".into(), "secondary"), ("disconnect", "Disconnect".into(), "secondary")],
         };
     }
     let Some(device) = devices.first() else {
@@ -708,13 +746,12 @@ fn wired_hero(snap: &Snapshot) -> NetHero {
         icon: "wired",
         name: name.into(),
         meta: meta.into(),
-        tone: "accent",
+        tone: "muted",
         detail: [device.interface.as_str(), device.hw_address.as_str()]
             .into_iter()
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join("   "),
-        ..NetHero::default()
     }
 }
 
@@ -740,12 +777,8 @@ fn vpn_hero(snap: &Snapshot) -> NetHero {
             meta: meta.join(" · "),
             tone: "accent",
             detail: device_line(a.devices.first().and_then(|d| snap.device(d))),
-            row: connection.map(|c| format!("conn:{}", c.uuid)),
-            actions: vec![("edit", "Edit".into(), "secondary"), ("disconnect", "Disconnect".into(), "secondary")],
         };
     }
-    // The one used last; the first if none was ever used.
-    let last = vpns.iter().rev().max_by_key(|c| c.timestamp);
     NetHero {
         sub: if vpns.is_empty() { "Off".into() } else { format!("Off · {saved}") },
         icon: "vpn",
@@ -754,9 +787,7 @@ fn vpn_hero(snap: &Snapshot) -> NetHero {
             0 => "Add one with +".into(),
             n => count(n, "VPN saved", "VPNs saved"),
         },
-        tone: "accent",
-        row: last.map(|c| format!("conn:{}", c.uuid)),
-        actions: last.map(|c| ("connect", format!("Connect {}", c.id), "secondary")).into_iter().collect(),
+        tone: "muted",
         ..NetHero::default()
     }
 }
@@ -771,9 +802,12 @@ fn hotspot_hero(h: &HotspotView) -> NetHero {
             tone: "muted",
             ..hero
         },
-        (Some(_), None) => {
-            NetHero { name: "Hotspot off".into(), meta: "Share this computer's connection over Wi-Fi".into(), ..hero }
-        }
+        (Some(_), None) => NetHero {
+            name: "Hotspot off".into(),
+            meta: "Share this computer's connection over Wi-Fi".into(),
+            tone: "muted",
+            ..hero
+        },
         (Some(_), Some(_)) => NetHero {
             name: if h.status.starts_with("On") { "Hotspot on".into() } else { "Starting the hotspot…".into() },
             meta: format!("Others join “{}” with the password or the QR code below", h.ssid),
@@ -802,7 +836,7 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
         icon: "wifi",
         name: name.into(),
         meta: saved_line.clone(),
-        tone: "accent",
+        tone: "muted",
         ..NetHero::default()
     };
     let Some(device) = wifi_device(snap) else {
@@ -814,7 +848,8 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
             icon: "wifi-off",
             title: "No Wi-Fi card".into(),
             text: "Lituus didn't find a Wi-Fi device. Wired and VPN connections are on their own pages.".into(),
-            action: String::new(),
+            page: true,
+            ..Empty::default()
         });
         return Vec::new();
     };
@@ -825,23 +860,36 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
             icon: "wifi-off",
             title: "Wi-Fi is blocked".into(),
             text: "A hardware switch or airplane mode turned the radio off.".into(),
-            action: String::new(),
+            page: true,
+            ..Empty::default()
         });
         return Vec::new();
     }
     if !snap.wireless_enabled {
         view.show_search = false;
-        view.net_hero = off("Off", "Wi-Fi is off");
         let kept = match saved {
             0 => String::new(),
             1 => " Your saved network is kept.".into(),
             n => format!(" Your {n} saved networks are kept."),
         };
+        // Turning Wi-Fi on would leave airplane mode on for the rest, so the way back is to end it.
+        let (sub, text, action) = if state.airplane {
+            (
+                "Off · airplane mode",
+                format!("Wi-Fi is off because airplane mode is on.{kept}"),
+                "Turn off airplane mode",
+            )
+        } else {
+            ("Off", format!("Turn it on to see networks nearby.{kept}"), "Turn on Wi-Fi")
+        };
+        view.net_hero = off(sub, "Wi-Fi is off");
         view.empty = Some(Empty {
             icon: "wifi",
             title: "Wi-Fi is off".into(),
-            text: format!("Turn it on to see networks nearby.{kept}"),
-            action: "Turn on Wi-Fi".into(),
+            text,
+            action: action.into(),
+            page: true,
+            ..Empty::default()
         });
         return Vec::new();
     }
@@ -949,42 +997,8 @@ fn wired_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
     if devices > 0 {
         view.count = count(devices, "wired device", "wired devices");
     }
+    // Each wired device with its profiles first; bridges, bonds and VLANs after them.
     let mut sections = Vec::new();
-    // Bridges and bonds, each with its ports under it.
-    let mut virtual_rows = Vec::new();
-    for c in snap
-        .connections
-        .iter()
-        .filter(|c| matches!(c.kind, ConnectionKind::Bridge { .. } | ConnectionKind::Bond { .. }))
-    {
-        let ports = ports_of(snap, c);
-        virtual_rows.push(virtual_row(snap, c, ports.len()));
-        for p in ports {
-            let interface = p.interface.clone().unwrap_or_else(|| p.id.clone());
-            let device = snap.devices.iter().find(|d| d.interface == interface);
-            let carrier = device.and_then(|d| d.wired.as_ref()).map(|w| w.carrier);
-            let up = active_uuid_state(snap, &p.uuid).is_some_and(|a| a.state == ActiveState::Activated);
-            let (meta, tone) = match (device, carrier) {
-                (None, _) => (format!("Port of {} · not plugged in", controller_name(c)), "faint"),
-                (_, Some(false)) => (format!("Port of {} · cable unplugged", controller_name(c)), "faint"),
-                (Some(d), _) => {
-                    (format!("Port of {}{}", controller_name(c), speed(d)), if up { "muted" } else { "faint" })
-                }
-            };
-            virtual_rows.push(RowData {
-                id: format!("conn:{}", p.uuid),
-                name: interface,
-                meta,
-                tone,
-                icon: "port",
-                indent: true,
-                ..RowData::default()
-            });
-        }
-    }
-    if !virtual_rows.is_empty() {
-        sections.push(("Bridges and bonds".to_owned(), virtual_rows));
-    }
     let mut shown_vlans = Vec::new();
     for device in snap.devices.iter().filter(|d| d.kind == DeviceKind::Ethernet) {
         let carrier = device.wired.as_ref().is_some_and(|w| w.carrier);
@@ -1042,6 +1056,41 @@ fn wired_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
             rows.push(RowData { indent: true, ..virtual_row(snap, v, 0) });
         }
         sections.push((device_title(device), rows));
+    }
+    // Then bridges and bonds, each with its ports under it.
+    let mut virtual_rows = Vec::new();
+    for c in snap
+        .connections
+        .iter()
+        .filter(|c| matches!(c.kind, ConnectionKind::Bridge { .. } | ConnectionKind::Bond { .. }))
+    {
+        let ports = ports_of(snap, c);
+        virtual_rows.push(virtual_row(snap, c, ports.len()));
+        for p in ports {
+            let interface = p.interface.clone().unwrap_or_else(|| p.id.clone());
+            let device = snap.devices.iter().find(|d| d.interface == interface);
+            let carrier = device.and_then(|d| d.wired.as_ref()).map(|w| w.carrier);
+            let up = active_uuid_state(snap, &p.uuid).is_some_and(|a| a.state == ActiveState::Activated);
+            let (meta, tone) = match (device, carrier) {
+                (None, _) => (format!("Port of {} · not plugged in", controller_name(c)), "faint"),
+                (_, Some(false)) => (format!("Port of {} · cable unplugged", controller_name(c)), "faint"),
+                (Some(d), _) => {
+                    (format!("Port of {}{}", controller_name(c), speed(d)), if up { "muted" } else { "faint" })
+                }
+            };
+            virtual_rows.push(RowData {
+                id: format!("conn:{}", p.uuid),
+                name: interface,
+                meta,
+                tone,
+                icon: "port",
+                indent: true,
+                ..RowData::default()
+            });
+        }
+    }
+    if !virtual_rows.is_empty() {
+        sections.push(("Bridges and bonds".to_owned(), virtual_rows));
     }
     // VLANs on a bond or bridge, or on a device that isn't there.
     let others: Vec<RowData> = snap
@@ -1237,6 +1286,7 @@ fn details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsData> {
             status_extra: String::new(),
             actions: vec![action("add-wired", "Add a connection", "secondary")],
             toggles: Vec::new(),
+            metered: None,
             items: vec![
                 item("Interface", device.interface.as_str(), true),
                 item("MAC address", device.hw_address.as_str(), true),
@@ -1291,10 +1341,7 @@ fn wifi_details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsDat
         actions.push(action("forget", "Forget", "danger"));
     }
     let toggles = match saved {
-        Some(c) => vec![
-            toggle("autoconnect", "Connect automatically", "", c.autoconnect),
-            toggle("metered", "Metered connection", "Apps may limit background data", c.metered == Some(true)),
-        ],
+        Some(c) => vec![toggle("autoconnect", "Connect automatically", "", c.autoconnect)],
         None => Vec::new(),
     };
     let mut items = vec![
@@ -1322,6 +1369,7 @@ fn wifi_details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsDat
         status_extra: extra,
         actions,
         toggles,
+        metered: saved.map(metered_choice),
         items,
         note: String::new(),
     })
@@ -1363,10 +1411,8 @@ fn connection_details(snap: &Snapshot, state: &UiState, uuid: &str) -> Option<De
     if !signing_in {
         actions.push(action("forget", "Forget", "danger"));
     }
-    let mut toggles = vec![toggle("autoconnect", "Connect automatically", "", c.autoconnect)];
-    if page != Page::Vpn {
-        toggles.push(toggle("metered", "Metered connection", "", c.metered == Some(true)));
-    }
+    let toggles = vec![toggle("autoconnect", "Connect automatically", "", c.autoconnect)];
+    let metered = (page != Page::Vpn).then(|| metered_choice(c));
     let mut items = Vec::new();
     if let ConnectionKind::Vpn { gateway, .. } = &c.kind
         && !gateway.is_empty()
@@ -1427,6 +1473,7 @@ fn connection_details(snap: &Snapshot, state: &UiState, uuid: &str) -> Option<De
         status_extra: if extra.is_empty() { String::new() } else { format!("· {extra}") },
         actions,
         toggles,
+        metered,
         items,
         note,
     })
@@ -1703,16 +1750,22 @@ pub fn saved_connection<'a>(snap: &'a Snapshot, id: &str) -> Option<&'a SavedCon
     snap.connections.iter().find(|c| c.uuid == uuid)
 }
 
-/// The switches in the details pane ("autoconnect", "metered") as a command.
+/// The switches in the details pane ("autoconnect") as a command.
 pub fn toggle_command(snap: &Snapshot, selected: &str, id: &str) -> Option<Command> {
     let c = saved_connection(snap, selected)?;
     let (key, value) = match id {
         "autoconnect" => ("autoconnect", SettingValue::Bool(!c.autoconnect)),
-        // NMMetered: 1 yes, 2 no.
-        "metered" => ("metered", SettingValue::I32(if c.metered == Some(true) { 2 } else { 1 })),
         _ => return None,
     };
     Some(Command::SetSetting { connection: c.path.clone(), setting: "connection", key, value })
+}
+
+/// The details pane's Metered choice as a command: 0 Automatic, 1 Yes, 2 No, which are
+/// NetworkManager's own numbers (NMMetered).
+pub fn metered_command(snap: &Snapshot, selected: &str, choice: i32) -> Option<Command> {
+    let c = saved_connection(snap, selected)?;
+    let value = SettingValue::I32(choice.clamp(0, 2));
+    Some(Command::SetSetting { connection: c.path.clone(), setting: "connection", key: "metered", value })
 }
 
 /// The name a row shows, for messages about it.
@@ -1885,9 +1938,10 @@ pub(crate) mod tests {
         assert_eq!(view.net_hero.name, "Lumen Home");
         assert_eq!(view.net_hero.meta, "Connected · 5 GHz · 866 Mb/s");
         assert_eq!(view.net_hero.detail, "wlp2s0   192.168.1.42");
-        assert_eq!(view.net_hero.row.as_deref(), Some(view.row_ids[0].as_str()));
-        let hero_actions: Vec<&str> = view.net_hero.actions.iter().map(|a| a.1.as_str()).collect();
-        assert_eq!(hero_actions, ["Share", "Edit", "Disconnect"]);
+        // The hero has no buttons: Share, Edit and Disconnect are the pane's, once each.
+        let d = view.details.as_ref().unwrap();
+        let actions: Vec<String> = d.actions.iter().map(|a| a.label.to_string()).collect();
+        assert_eq!(actions, ["Disconnect", "Edit", "Share", "Forget"]);
         assert_eq!(view.hostname, "thinkpad-x1");
     }
 
@@ -1998,19 +2052,47 @@ pub(crate) mod tests {
         ));
         let state = UiState { page: Page::Wired, ..UiState::default() };
         let view = build(Some(&snap), None, &state);
+        // The wired device first (the owner, 2026-11-06: "lets put the wire connections above the
+        // bridges and bonds").
         assert_eq!(
             rows(&view),
             [
-                ("BRIDGES AND BONDS".into(), vec!["br0".into(), "enp4s0".into()]),
                 ("ENP3S0 · E1000E".into(), vec!["Cable unplugged".into(), "VLAN 20 · Lab".into()]),
+                ("BRIDGES AND BONDS".into(), vec!["br0".into(), "enp4s0".into()]),
             ]
         );
-        let bridge = &view.sections[0].rows;
+        let bridge = &view.sections[1].rows;
         assert_eq!(bridge.row_data(0).unwrap().meta, "Saved · bridge · 1 port");
         let port = bridge.row_data(1).unwrap();
         assert!(port.indent);
         assert_eq!((port.meta.as_str(), port.icon.as_str()), ("Port of br0 · not plugged in", "port"));
-        assert!(view.sections[1].rows.row_data(1).unwrap().indent);
+        assert!(view.sections[0].rows.row_data(1).unwrap().indent);
+        // The first row is selected: the wired profile, not the bridge.
+        snap.connections.push(saved("u-eth", "Wired connection 1", ConnectionKind::Ethernet, "enp3s0", None));
+        snap.connections.push(saved(
+            "u-bond",
+            "bond0",
+            ConnectionKind::Bond { mode: "active-backup".into() },
+            "bond0",
+            None,
+        ));
+        snap.connections.push(saved(
+            "u-v30",
+            "VLAN 30",
+            ConnectionKind::Vlan { parent: "br0".into(), id: 30 },
+            "br0.30",
+            None,
+        ));
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(
+            rows(&view),
+            [
+                ("ENP3S0 · E1000E".into(), vec!["Wired connection 1".into(), "VLAN 20 · Lab".into()]),
+                ("BRIDGES AND BONDS".into(), vec!["br0".into(), "enp4s0".into(), "bond0".into()]),
+                ("VLANS".into(), vec!["VLAN 30".into()]),
+            ]
+        );
+        assert!(view.sections[0].rows.row_data(0).unwrap().selected);
         let state = UiState { page: Page::Wired, selected: Some("conn:u-br".into()), ..UiState::default() };
         let view = build(Some(&snap), None, &state);
         assert_eq!(detail(&view, "Ports").as_deref(), Some("enp4s0"));
@@ -2037,7 +2119,8 @@ pub(crate) mod tests {
         assert_eq!(view.row_ids.len(), 1);
         let state = UiState { search: "zzz".into(), ..UiState::default() };
         let view = build(Some(&home()), None, &state);
-        assert_eq!(view.empty.map(|e| e.title), Some("Nothing found".into()));
+        // The page is still there: the hero keeps its height while typing.
+        assert_eq!(view.empty.map(|e| (e.title, e.page)), Some(("Nothing found".into(), false)));
     }
 
     #[test]
@@ -2048,10 +2131,17 @@ pub(crate) mod tests {
         let empty = view.empty.as_ref().unwrap();
         assert_eq!(empty.action, "Turn on Wi-Fi");
         assert_eq!(empty.text, "Turn it on to see networks nearby. Your saved network is kept.");
+        assert!(empty.page);
         assert_eq!((view.net_hero.sub.as_str(), view.net_hero.name.as_str()), ("Off", "Wi-Fi is off"));
         assert_eq!(view.net_hero.meta, "1 saved network");
         assert_eq!(view.net_items.wifi, "off");
         assert!(!view.show_search);
+        // Off because of airplane mode: it says so, and the way back is to end airplane mode.
+        let view = build(Some(&snap), None, &UiState { airplane: true, ..UiState::default() });
+        let empty = view.empty.as_ref().unwrap();
+        assert_eq!(empty.action, "Turn off airplane mode");
+        assert_eq!(empty.text, "Wi-Fi is off because airplane mode is on. Your saved network is kept.");
+        assert_eq!(view.net_hero.sub, "Off · airplane mode");
         snap.wireless_hardware_enabled = false;
         let view = build(Some(&snap), None, &UiState::default());
         assert_eq!(view.empty.as_ref().map(|e| e.title.as_str()), Some("Wi-Fi is blocked"));
@@ -2076,8 +2166,32 @@ pub(crate) mod tests {
     fn network_manager_missing() {
         let view = build(None, Some("NetworkManager isn't running"), &UiState::default());
         assert!(view.banner.starts_with("NetworkManager isn't running"));
-        assert_eq!(view.empty.map(|e| e.title), Some("NetworkManager isn't running".into()));
+        let empty = view.empty.unwrap();
+        assert_eq!(empty.title, "NetworkManager isn't running");
+        // The command, for its Copy button.
+        assert_eq!((empty.command.as_str(), empty.page), (NOT_RUNNING_COMMAND, true));
         assert!(view.sections.is_empty());
+        // Still reading: a spinner (no icon), and the hero as it will be.
+        let view = build(None, None, &UiState::default());
+        assert_eq!(view.empty.map(|e| (e.icon, e.page)), Some(("", false)));
+    }
+
+    /// The bar lists only the keys that work: Enter says what it does to the selected row, and
+    /// e is there when the row can be edited.
+    #[test]
+    fn the_bar_lists_the_keys_that_work() {
+        let shown =
+            |view: &View| -> Vec<String> { keys(view).iter().map(|h| format!("{} {}", h.key, h.label)).collect() };
+        let mut state = UiState::default();
+        let view = build(Some(&home()), None, &state);
+        // The connected network: Enter would only connect it again.
+        assert_eq!(shown(&view), ["/ Search", "↑↓ Select", "e Edit"]);
+        state.selected = Some(view.row_ids[1].clone());
+        assert_eq!(shown(&build(Some(&home()), None, &state)), ["/ Search", "↑↓ Select", "↵ Connect"]);
+        // Wi-Fi off: no list to move in or search.
+        let mut snap = home();
+        snap.wireless_enabled = false;
+        assert!(shown(&build(Some(&snap), None, &UiState::default())).is_empty());
     }
 
     #[test]
@@ -2133,6 +2247,10 @@ pub(crate) mod tests {
         let actions: Vec<String> = d.actions.iter().map(|a| a.label.to_string()).collect();
         assert_eq!(actions, ["Connect", "Edit", "Forget"]);
         assert_eq!(d.toggles.row_data(0).unwrap().label, "Connect automatically");
+        // Metered is the editor's three-way choice, under the switch; NetworkManager decides here.
+        assert_eq!(d.toggles.row_count(), 1);
+        assert!(d.has_metered);
+        assert_eq!(d.metered, 0);
         // The search finds it too.
         let state = UiState { search: "off".into(), ..UiState::default() };
         assert_eq!(rows(&build(Some(&snap), None, &state)), [("SAVED, NOT IN RANGE".into(), vec!["Office".into()])]);
@@ -2165,7 +2283,8 @@ pub(crate) mod tests {
         let hero = &view.net_hero;
         assert_eq!((hero.sub.as_str(), hero.name.as_str()), ("Cable unplugged · 2 saved profiles", "Cable unplugged"));
         assert_eq!(hero.detail, "enp3s0   54:E1:AD:7C:20:9B");
-        assert!(hero.actions.is_empty());
+        // What to do is a hint, not a state, so it isn't in the accent.
+        assert_eq!((hero.meta.as_str(), hero.tone), ("Plug in a cable to connect", "muted"));
         // Plugged in and connected: the hero is the connection, with its speed.
         let eth = &mut snap.devices[1];
         eth.wired = Some(WiredDevice { carrier: true, speed: 1000 });
@@ -2186,11 +2305,11 @@ pub(crate) mod tests {
             (view.net_hero.name.as_str(), view.net_hero.meta.as_str()),
             ("Static (lab)", "Connected · 1000 Mb/s")
         );
-        assert_eq!(view.net_hero.row.as_deref(), Some("conn:u-lab"));
+        assert_eq!(view.net_hero.tone, "accent");
     }
 
     #[test]
-    fn the_vpn_hero_offers_the_vpn_used_last() {
+    fn the_vpn_hero_shows_the_vpn_that_is_on() {
         let mut snap = home();
         with_saved(&mut snap, "u-wg", "Home (WireGuard)", ConnectionKind::WireGuard, 100);
         let openconnect = ConnectionKind::Vpn {
@@ -2209,8 +2328,7 @@ pub(crate) mod tests {
             (hero.sub.as_str(), hero.name.as_str(), hero.meta.as_str()),
             ("Off · 3 saved", "No VPN on", "3 VPNs saved")
         );
-        assert_eq!(hero.actions, [("connect", "Connect UZH VPN".to_owned(), "secondary")]);
-        assert_eq!(hero.row.as_deref(), Some("conn:u-uzh"));
+        assert_eq!(hero.tone, "muted");
         assert_eq!((view.count.as_str(), view.search_placeholder.as_str()), ("3 VPNs", "Search VPNs"));
         assert!(view.show_search);
         state.search = "uzh".into();
@@ -2229,9 +2347,7 @@ pub(crate) mod tests {
         let view = build(Some(&snap), None, &UiState { page: Page::Vpn, ..UiState::default() });
         assert_eq!(view.net_items.vpn, "Home (WireGuard)");
         assert_eq!(view.net_hero.sub, "On · 3 saved");
-        assert_eq!(view.net_hero.meta, "Connected · WireGuard");
-        let labels: Vec<&str> = view.net_hero.actions.iter().map(|a| a.1.as_str()).collect();
-        assert_eq!(labels, ["Edit", "Disconnect"]);
+        assert_eq!((view.net_hero.meta.as_str(), view.net_hero.tone), ("Connected · WireGuard", "accent"));
     }
 
     #[test]
@@ -2240,6 +2356,7 @@ pub(crate) mod tests {
         let view = build(Some(&home()), None, &state);
         let hero = &view.net_hero;
         assert_eq!((hero.sub.as_str(), hero.name.as_str()), ("Off", "Hotspot off"));
+        assert_eq!(hero.tone, "muted");
         assert!(view.count.is_empty() && view.sections.is_empty());
         assert_eq!(view.net_items.hotspot, "off");
     }
@@ -2327,10 +2444,27 @@ pub(crate) mod tests {
                 value: SettingValue::Bool(false)
             })
         );
-        assert!(matches!(
-            toggle_command(&snap, &ids[0], "metered"),
-            Some(Command::SetSetting { key: "metered", value: SettingValue::I32(1), .. })
-        ));
+        assert_eq!(toggle_command(&snap, &ids[0], "metered"), None);
+        // Metered: the choice is NetworkManager's number, so Automatic is 0 again.
+        for (choice, value) in [(0, 0), (1, 1), (2, 2), (7, 2)] {
+            assert_eq!(
+                metered_command(&snap, &ids[0], choice),
+                Some(Command::SetSetting {
+                    connection: "/c/1".into(),
+                    setting: "connection",
+                    key: "metered",
+                    value: SettingValue::I32(value)
+                })
+            );
+        }
+        // The unsaved café network has none.
+        assert_eq!(metered_command(&snap, &ids[1], 1), None);
+        let state = UiState { selected: Some(ids[1].clone()), ..UiState::default() };
+        assert!(!build(Some(&snap), None, &state).details.unwrap().has_metered);
+        // A saved network shows its own choice.
+        let mut metered = snap.clone();
+        metered.connections[0].metered = Some(false);
+        assert_eq!(build(Some(&metered), None, &UiState::default()).details.unwrap().metered, 2);
     }
 
     #[test]

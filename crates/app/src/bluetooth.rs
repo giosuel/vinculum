@@ -11,8 +11,8 @@ use slint::{ComponentHandle, SharedString};
 
 use crate::audio;
 use crate::{
-    APP, Action, App, BtAudio, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, Confirm, Confirmed, DetailItem,
-    Details, HeroInfo, MainWindow, NavItem, Toggle, model, update,
+    APP, Action, App, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, Confirm, Confirmed, DetailItem, Details,
+    HeroInfo, Hint, MainWindow, NavItem, Toggle, model, update,
 };
 
 /// How long "Look for devices" looks before it stops by itself (discovery costs battery).
@@ -303,8 +303,10 @@ fn pairing_method(device: &Device) -> (&'static str, &'static str) {
 /// The sidebar's entry.
 pub fn nav(state: &State, current: bool) -> NavItem {
     // Short: it's the status on the right of the sidebar item.
-    let sub = if state.not_running || state.error.is_some() {
-        "—".to_owned()
+    let sub = if state.not_running {
+        "Not running".to_owned()
+    } else if state.error.is_some() {
+        "Error".to_owned()
     } else {
         match (state.snapshot.as_ref(), state.adapter()) {
             (None, _) => String::new(),
@@ -327,27 +329,50 @@ pub fn nav(state: &State, current: bool) -> NavItem {
     }
 }
 
-/// The paired devices for the tray's popup (three at most), connected first: (id "bt:path", name, meta, connected).
-pub fn quick(state: &State) -> Vec<(String, String, String, bool)> {
-    let (Some(snap), Some(adapter)) = (state.snapshot.as_ref(), state.adapter()) else { return Vec::new() };
+/// A paired device in the quick popup.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuickDevice {
+    /// "bt:" and its path.
+    pub id: String,
+    pub name: String,
+    /// "Connected · Headphones · battery 82 %", "Keyboard".
+    pub meta: String,
+    pub icon: &'static str,
+    pub connected: bool,
+}
+
+/// The quick popup's Bluetooth: whether it's on (`None` without an adapter, or without BlueZ),
+/// and the paired devices while it's on (three at most), connected first.
+pub fn quick(state: &State) -> (Option<bool>, Vec<QuickDevice>) {
+    if state.not_running {
+        return (None, Vec::new());
+    }
+    let (Some(snap), Some(adapter)) = (state.snapshot.as_ref(), state.adapter()) else { return (None, Vec::new()) };
     if !adapter.powered {
-        return Vec::new();
+        return (Some(false), Vec::new());
     }
     let mut devices: Vec<&Device> = snap.devices_of(&adapter.path).filter(|d| d.paired && !d.blocked).collect();
     devices.sort_by_key(|d| (!d.connected, d.alias.to_lowercase()));
-    devices
+    let devices = devices
         .into_iter()
         .take(3)
         .map(|d| {
             let kind = capitalised(kind_label(d.kind()));
             let meta = match (d.connected, d.battery) {
-                (true, Some(b)) => format!("Bluetooth · {kind} · battery {b} %"),
-                (true, None) => format!("Bluetooth · {kind}"),
-                (false, _) => format!("Bluetooth · {kind} · not connected"),
+                (true, Some(b)) => format!("Connected · {kind} · battery {b} %"),
+                (true, None) => format!("Connected · {kind}"),
+                (false, _) => kind,
             };
-            (format!("bt:{}", d.path), d.alias.clone(), meta, d.connected)
+            QuickDevice {
+                id: format!("bt:{}", d.path),
+                name: d.alias.clone(),
+                meta,
+                icon: icon(d.kind()),
+                connected: d.connected,
+            }
         })
-        .collect()
+        .collect();
+    (Some(true), devices)
 }
 
 /// The empty state for a page that has no list: (state, icon, title, text, command, action).
@@ -355,7 +380,7 @@ fn empty(state: &State) -> Option<(&'static str, &'static str, String, String, &
     if state.not_running {
         return Some((
             "no-service",
-            "monitor",
+            "bluetooth-off",
             "The Bluetooth service isn't running".into(),
             "Lituus talks to BlueZ, which isn't running. Install the bluez package if needed, then start it:".into(),
             NOT_RUNNING_COMMAND,
@@ -655,11 +680,10 @@ pub fn page(state: &State, now: Instant) -> (BtPage, Vec<String>, Option<String>
         0 => format!("On · {visibility}"),
         n => format!("On · {n} connected · {visibility}"),
     });
-    // The hero: a connected device, audio first (it's what one most often comes here for).
-    let shown =
-        connected.iter().min_by_key(|d| (!matches!(icon(d.kind()), "headphones" | "speaker"), d.alias.to_lowercase()));
-    page.hero = match shown {
-        Some(d) => HeroInfo {
+    // The hero: the connected device, or how many are connected and which (the list and the pane
+    // are for the one selected). It's the page's state, as the Wi-Fi hero is the network in use.
+    page.hero = match connected.as_slice() {
+        [d] => HeroInfo {
             icon: s(icon(d.kind())),
             name: s(&d.alias),
             meta: s(match d.battery {
@@ -669,13 +693,24 @@ pub fn page(state: &State, now: Instant) -> (BtPage, Vec<String>, Option<String>
             tone: s("accent"),
             detail: s(&d.address),
         },
-        None => HeroInfo {
+        [] => HeroInfo {
             icon: s("bluetooth"),
             name: s(&adapter.alias),
             meta: s("No device connected"),
             tone: s("muted"),
             detail: s(&adapter.address),
         },
+        several => {
+            let mut names: Vec<&str> = several.iter().map(|d| d.alias.as_str()).collect();
+            names.sort_by_key(|n| n.to_lowercase());
+            HeroInfo {
+                icon: s("bluetooth"),
+                name: s(format!("{} devices connected", several.len())),
+                meta: s(names.join(" · ")),
+                tone: s("accent"),
+                detail: s(&adapter.alias),
+            }
+        }
     };
 
     let mut mine: Vec<&Device> = snap.devices_of(&adapter.path).filter(|d| d.paired).collect();
@@ -724,7 +759,8 @@ pub fn page(state: &State, now: Instant) -> (BtPage, Vec<String>, Option<String>
         page.has_details = true;
         page.details = details(device, adapter, state);
         if let Some((choices, chosen)) = audio_choice(device, state) {
-            page.audio = model(choices.into_iter().map(|c| BtAudio { label: s(c.label), sub: s(c.sub) }).collect());
+            page.audio_labels = model(choices.iter().map(|c| s(c.label)).collect());
+            page.audio_details = model(choices.iter().map(|c| s(c.sub.as_str())).collect());
             page.audio_selected = chosen.map_or(-1, |i| i as i32);
         }
     }
@@ -824,10 +860,9 @@ pub fn render(window: &MainWindow, app: &mut App) {
         }
     }
     window.set_bt_adapter_open(state.adapter_open);
+    // The dialog's choices are set when it opens (see `act`), and are its own until Save.
     if let Some(a) = state.adapter() {
         window.set_bt_adapter_label(format!("{} · {}", a.name, a.address).into());
-        window.set_bt_pairable(a.pairable);
-        window.set_bt_visible_choice(visible_choice(a));
     }
     window.set_bt_rename_open(state.rename.is_some());
     if let Some(device) = state.rename.as_deref().and_then(|d| state.device(d)) {
@@ -837,6 +872,32 @@ pub fn render(window: &MainWindow, app: &mut App) {
             format!("Only this computer uses the name. Leave it empty for the device's own, {own}.").into(),
         );
     }
+}
+
+/// The keys that work on the page now, for the bar at the bottom: the list's, what Enter does to
+/// the selected device, and s. (p pairs too, but only where Enter says Pair already.)
+pub fn keys(state: &State) -> Vec<Hint> {
+    if empty(state).is_some() {
+        return Vec::new();
+    }
+    let mut keys = Vec::new();
+    if !state.row_ids.is_empty() {
+        keys.push(Hint::new("↑↓", "Select"));
+    }
+    let selected = state.selected.as_deref().and_then(|id| state.device(id)).filter(|d| !state.busy.contains(&d.path));
+    // As `activate`.
+    let enter = selected.and_then(|d| match (d.paired, d.connected) {
+        (true, true) => Some("Disconnect"),
+        (true, false) if !d.blocked => Some("Connect"),
+        (false, _) => Some("Pair"),
+        _ => None,
+    });
+    if let Some(enter) = enter {
+        keys.push(Hint::new("↵", enter));
+    }
+    // With a list, the adapter is on.
+    keys.push(Hint::new("s", "Look for devices"));
+    keys
 }
 
 /// The selection moved with the arrow keys.
@@ -1065,9 +1126,14 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
         window.get_bt_adapter_name().trim().to_owned(),
         window.get_bt_rename_name().trim().to_owned(),
     );
+    let (visible_for, pairable) = (window.get_bt_visible_choice(), window.get_bt_pairable());
     if verb == "adapter" {
-        let alias = APP.with(|app| app.borrow().bt.adapter().map(|a| a.alias.clone()).unwrap_or_default());
-        window.set_bt_adapter_name(alias.into());
+        let adapter = APP.with(|app| {
+            app.borrow().bt.adapter().map(|a| (a.alias.clone(), visible_choice(a), a.pairable)).unwrap_or_default()
+        });
+        window.set_bt_adapter_name(adapter.0.into());
+        window.set_bt_visible_choice(adapter.1);
+        window.set_bt_pairable(adapter.2);
     }
     if verb == "rename" {
         let alias = APP.with(|app| {
@@ -1107,20 +1173,21 @@ pub fn act(window: &MainWindow, verb: &str, argument: &str) {
                 }
             }
             "visible" => switch_visible(state, Instant::now()),
-            "adapter-visible" => choose_visible_time(state, argument.parse().unwrap_or(0), Instant::now()),
-            "pairable" => {
-                if let Some((adapter, _, pairable, _)) = adapter {
-                    state.send(Command::Pairable { adapter, on: !pairable });
-                }
-            }
             "adapter" => state.adapter_open = true,
             "adapter-close" => state.adapter_open = false,
-            "adapter-name" => {
-                if let Some((adapter, .., alias)) = adapter
-                    && !adapter_name.is_empty()
-                    && adapter_name != alias
-                {
-                    state.send(Command::AdapterAlias { adapter, alias: adapter_name });
+            // Save: what differs from the adapter now.
+            "adapter-save" => {
+                state.adapter_open = false;
+                if let Some((adapter, _, was_pairable, alias)) = adapter {
+                    if !adapter_name.is_empty() && adapter_name != alias {
+                        state.send(Command::AdapterAlias { adapter: adapter.clone(), alias: adapter_name });
+                    }
+                    if pairable != was_pairable {
+                        state.send(Command::Pairable { adapter, on: pairable });
+                    }
+                }
+                if state.adapter().is_some_and(|a| visible_choice(a) != visible_for) {
+                    choose_visible_time(state, visible_for, Instant::now());
                 }
             }
             "detail" => {
@@ -1221,6 +1288,7 @@ fn forget(adapter: String, device: &Device) -> Confirm {
         title: format!("Forget {}?", device.alias),
         text: "You'll need to pair it again to use it with this computer.".into(),
         button: "Forget".into(),
+        destructive: true,
         then: Confirmed::Bluetooth(Command::Forget { adapter, device: device.path.clone() }),
     }
 }
@@ -1493,13 +1561,49 @@ mod tests {
         }
     }
 
+    /// The hero is the page's state, whatever is selected: the one device connected, how many
+    /// and which, or the adapter.
+    #[test]
+    fn the_hero_shows_what_is_connected() {
+        let mut state = state();
+        let hero = |state: &State| {
+            let h = page(state, Instant::now()).0.hero;
+            (h.icon.to_string(), h.name.to_string(), h.meta.to_string())
+        };
+        let pixel =
+            state.snapshot.as_ref().unwrap().devices.iter().find(|d| d.alias == "Pixel 8").unwrap().path.clone();
+        state.selected = Some(pixel.clone());
+        assert_eq!(
+            hero(&state),
+            ("headphones".into(), "Sony WH-1000XM5".into(), "Connected · headphones · battery 82 %".into())
+        );
+        let devices = &mut state.snapshot.as_mut().unwrap().devices;
+        devices.iter_mut().find(|d| d.path == pixel).unwrap().connected = true;
+        assert_eq!(
+            hero(&state),
+            ("bluetooth".into(), "2 devices connected".into(), "Pixel 8 · Sony WH-1000XM5".into())
+        );
+        for d in &mut state.snapshot.as_mut().unwrap().devices {
+            d.connected = false;
+        }
+        assert_eq!(hero(&state), ("bluetooth".into(), "thinkpad-x1".into(), "No device connected".into()));
+    }
+
     #[test]
     fn the_tray_lists_paired_devices_connected_first() {
-        let q = quick(&state());
-        let names: Vec<(&str, bool)> = q.iter().map(|(_, n, _, on)| (n.as_str(), *on)).collect();
+        let (on, q) = quick(&state());
+        assert_eq!(on, Some(true));
+        let names: Vec<(&str, bool)> = q.iter().map(|d| (d.name.as_str(), d.connected)).collect();
         assert_eq!(names, [("Sony WH-1000XM5", true), ("Pixel 8", false)]);
-        assert_eq!(q[0].2, "Bluetooth · Headphones · battery 82 %");
-        assert!(q[0].0.starts_with("bt:"));
+        assert_eq!(q[0].meta, "Connected · Headphones · battery 82 %");
+        assert_eq!((q[1].meta.as_str(), q[1].icon), ("Phone", "phone"));
+        assert!(q[0].id.starts_with("bt:"));
+        // Off: the switch, and no devices; no adapter: no Bluetooth at all.
+        let mut off = state();
+        off.snapshot.as_mut().unwrap().adapters[0].powered = false;
+        assert_eq!(quick(&off), (Some(false), Vec::new()));
+        off.snapshot.as_mut().unwrap().adapters.clear();
+        assert_eq!(quick(&off), (None, Vec::new()));
     }
 
     #[test]
@@ -1628,6 +1732,22 @@ mod tests {
         assert!(app.bt.message.is_none() && app.bt.failed.is_none());
     }
 
+    /// The bar says what Enter does to the selected device.
+    #[test]
+    fn the_bar_lists_the_keys_that_work() {
+        let shown =
+            |state: &State| -> Vec<String> { keys(state).iter().map(|h| format!("{} {}", h.key, h.label)).collect() };
+        let mut state = state();
+        let (_, ids, _) = page(&state, Instant::now());
+        state.row_ids = ids;
+        assert_eq!(shown(&state), ["↑↓ Select", "s Look for devices"]);
+        for (name, enter) in [("Sony WH-1000XM5", "Disconnect"), ("Pixel 8", "Connect"), ("MX Keys S", "Pair")] {
+            let device = state.snapshot.as_ref().unwrap().devices.iter().find(|d| d.alias == name).unwrap();
+            state.selected = Some(device.path.clone());
+            assert_eq!(shown(&state), ["↑↓ Select", format!("↵ {enter}").as_str(), "s Look for devices"], "{name}");
+        }
+    }
+
     #[test]
     fn the_states_without_a_list() {
         let state_of = |state: &State| page(state, Instant::now()).0;
@@ -1648,7 +1768,11 @@ mod tests {
             State { not_running: true, error: Some("Bluetooth isn't running".into()), ..State::default() };
         let page = state_of(&not_running);
         assert_eq!((page.state.as_str(), page.empty_command.as_str()), ("no-service", NOT_RUNNING_COMMAND));
-        assert_eq!(nav(&not_running, false).sub, "—");
+        assert_eq!(page.empty_icon, "bluetooth-off");
+        // Said, not a dash; and no keys for a list that isn't there.
+        assert_eq!(nav(&not_running, false).sub, "Not running");
+        assert_eq!(nav(&State { error: Some("Timed out".into()), ..State::default() }, false).sub, "Error");
+        assert!(keys(&not_running).is_empty());
 
         assert_eq!(state_of(&State::default()).state, "loading");
         assert_eq!(nav(&super::tests::state(), false).sub, "1 on");
@@ -1775,15 +1899,16 @@ mod tests {
             active: Some("headset-head-unit".into()),
         };
         // No card for it (no PipeWire): no choice.
-        assert_eq!(page(&state, Instant::now()).0.audio.row_count(), 0);
+        assert_eq!(page(&state, Instant::now()).0.audio_labels.row_count(), 0);
         state.audio = vec![card("aa:bb:cc:00:00:01")];
         let page = page(&state, Instant::now()).0;
-        let options: Vec<String> = page.audio.iter().map(|o| format!("{} {}", o.label, o.sub)).collect();
+        let options: Vec<String> =
+            page.audio_labels.iter().zip(page.audio_details.iter()).map(|(l, d)| format!("{l} {d}")).collect();
         assert_eq!(options, ["High quality A2DP · LDAC", "Headset HFP · microphone on", "Off Controls only"]);
         assert_eq!(page.audio_selected, 1);
         // Not for the phone, which isn't connected.
         state.selected = Some("/org/bluez/hci0/dev_2".into());
-        assert_eq!(super::page(&state, Instant::now()).0.audio.row_count(), 0);
+        assert_eq!(super::page(&state, Instant::now()).0.audio_labels.row_count(), 0);
     }
 
     #[test]
