@@ -2658,6 +2658,7 @@ mod dialog_tests {
                     "add-cancelled" => w.set_add_open(false),
                     "share-closed" => w.set_share_open(false),
                     "join-cancelled" | "join-accepted" => w.set_join_open(false),
+                    "confirm-cancelled" => w.set_confirm_open(false),
                     _ => {}
                 }
             }
@@ -2668,6 +2669,7 @@ mod dialog_tests {
         window.on_share_closed(note("share-closed"));
         window.on_join_cancelled(note("join-cancelled"));
         window.on_join_accepted(note("join-accepted"));
+        window.on_confirm_cancelled(note("confirm-cancelled"));
         window.on_join_check(|_, _, _, password| !password.is_empty());
         let w = window.as_weak();
         let l = log.clone();
@@ -2754,6 +2756,7 @@ mod dialog_tests {
             "bt rename-cancel",
         );
         esc(&|| window.set_add_open(true), "add-cancelled");
+        esc(&|| window.set_confirm_open(true), "confirm-cancelled");
         esc(&|| window.set_share_open(true), "share-closed");
         esc(
             &|| {
@@ -2780,6 +2783,9 @@ mod dialog_tests {
         window.set_share_open(true);
         click_beside(&window);
         assert_eq!(taken(), ["share-closed"]);
+        window.set_confirm_open(true);
+        click_beside(&window);
+        assert_eq!(taken(), ["confirm-cancelled"]);
         window.set_page("displays".into());
         window.set_displays(DisplaysView { config_open: true, ..Default::default() });
         click_beside(&window);
@@ -3345,10 +3351,10 @@ mod tests {
         acts.borrow_mut().clear();
         window.set_bt_adapter_open(true);
         let choices: Vec<String> = ElementHandle::find_by_accessible_label(&window, "Visible switch")
-            .find(|e| e.accessible_role() == Some(AccessibleRole::TabList))
+            .find(|e| e.accessible_role() == Some(AccessibleRole::RadioGroup))
             .expect("the Visible switch's time")
             .query_descendants()
-            .match_accessible_role(AccessibleRole::Tab)
+            .match_accessible_role(AccessibleRole::RadioButton)
             .find_all()
             .iter()
             .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
@@ -3603,6 +3609,144 @@ mod tests {
 
     /// Network's chevron says whether its pages are shown, and folds them without going to a
     /// page.
+    /// A press and release at a point of the window.
+    fn click(window: &MainWindow, x: f32, y: f32) {
+        let position = LogicalPosition::new(x, y);
+        window.window().dispatch_event(WindowEvent::PointerMoved { position });
+        window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+    }
+
+    /// The Wi-Fi and Hotspot switches are pills like Bluetooth's, switched by a click anywhere
+    /// on them; the hotspot's fields are a form with its labels in their own column.
+    #[test]
+    fn the_network_switches_are_pills() {
+        let window = window();
+        let switched = Rc::new(RefCell::new(Vec::new()));
+        let s = switched.clone();
+        window.on_wifi_switched(move || s.borrow_mut().push("wifi"));
+        let s = switched.clone();
+        window.on_hotspot_toggled(move || s.borrow_mut().push("hotspot"));
+        window.set_wifi_available(true);
+        window.set_hotspot_available(true);
+        for (page, label) in [("wifi", "Wi-Fi"), ("hotspot", "Hotspot")] {
+            window.set_page(page.into());
+            let switch = ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Switch))
+                .expect(label);
+            // On the label, beside the switch itself.
+            let (at, size) = (switch.absolute_position(), switch.size());
+            click(&window, at.x - 20.0, at.y + size.height / 2.0);
+        }
+        assert_eq!(*switched.borrow(), ["wifi", "hotspot"]);
+
+        let x = |role: AccessibleRole| {
+            ElementHandle::find_by_accessible_label(&window, "Network name")
+                .find(|e| e.accessible_role() == Some(role))
+                .map(|e| e.absolute_position().x)
+                .expect("the network name")
+        };
+        // The label's column is 168 px; the text starts 12 px into its field.
+        assert_eq!(x(AccessibleRole::TextInput) - x(AccessibleRole::Text), 168.0 + 12.0);
+    }
+
+    /// The views of a page are tabs, top right in its hero, and a card's views are tabs too; a
+    /// value chosen from a few (Rotation, Mode) is a radio group.
+    #[test]
+    fn views_are_tabs_and_values_are_radio_groups() {
+        let window = window();
+        let roles = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .filter_map(|e| e.accessible_role())
+                .collect::<Vec<_>>()
+        };
+        let tabs = |label: &str| -> Vec<String> {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::TabList))
+                .expect(label)
+                .query_descendants()
+                .match_accessible_role(AccessibleRole::Tab)
+                .find_all()
+                .iter()
+                .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
+                .collect()
+        };
+        window.set_page("displays".into());
+        window.set_displays(super::DisplaysView { state: "list".into(), ..Default::default() });
+        assert_eq!(tabs("Displays"), ["Monitor", "Workspaces", "Profiles"]);
+        assert_eq!(tabs("Monitor settings"), ["Display", "Colour and HDR", "Advanced"]);
+        assert!(roles("Rotation").contains(&AccessibleRole::RadioGroup));
+        assert!(!roles("Rotation").contains(&AccessibleRole::TabList));
+
+        window.set_page("sound".into());
+        window.set_sound(super::SoundView { state: "list".into(), max: 1.0, ..Default::default() });
+        assert_eq!(tabs("Sound"), ["Devices", "Apps"]);
+        let views = ElementHandle::find_by_accessible_label(&window, "Sound")
+            .find(|e| e.accessible_role() == Some(AccessibleRole::TabList))
+            .unwrap();
+        let volume = ElementHandle::find_by_accessible_label(&window, "Output volume").next().unwrap();
+        // Above the hero's slider, at the right.
+        assert!(views.absolute_position().y < volume.absolute_position().y);
+        assert!(views.absolute_position().x > 1200.0 - 260.0, "{:?}", views.absolute_position());
+
+        window.set_page("settings".into());
+        assert!(roles("Mode").contains(&AccessibleRole::RadioGroup));
+    }
+
+    /// The audio choice of a connected headset is a segmented control with a line under each
+    /// option, and a choice goes to Rust.
+    #[test]
+    fn the_bluetooth_audio_choice_is_segmented() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        let acts = Rc::new(RefCell::new(Vec::new()));
+        let seen = acts.clone();
+        window.on_bt_act(move |verb, argument| seen.borrow_mut().push(format!("{verb} {argument}")));
+        let strings = |v: &[&str]| super::model(v.iter().map(|&t| SharedString::from(t)).collect());
+        window.set_bt(BtPage {
+            state: "list".into(),
+            powered: true,
+            has_details: true,
+            audio_labels: strings(&["High quality", "Headset", "Off"]),
+            audio_details: strings(&["A2DP · LDAC", "HFP · microphone on", "Controls only"]),
+            audio_selected: 1,
+            ..BtPage::default()
+        });
+        let options = ElementHandle::find_by_accessible_label(&window, "Audio")
+            .find(|e| e.accessible_role() == Some(AccessibleRole::RadioGroup))
+            .expect("the audio choice")
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::RadioButton)
+            .find_all();
+        let labels: Vec<_> = options.iter().filter_map(|e| e.accessible_label()).collect();
+        assert_eq!(labels, ["High quality", "Headset", "Off"]);
+        assert_eq!(options[1].accessible_checked(), Some(true));
+        assert!(ElementHandle::find_by_accessible_label(&window, "HFP · microphone on").next().is_some());
+        options[2].invoke_accessible_default_action();
+        assert_eq!(*acts.borrow(), ["audio 2"]);
+    }
+
+    /// The message above a list is one banner: its title and text read together, and its
+    /// button and Dismiss work.
+    #[test]
+    fn the_message_banner_has_its_button_and_dismiss() {
+        let window = window();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let l = log.clone();
+        window.on_message_action_clicked(move || l.borrow_mut().push("action"));
+        let l = log.clone();
+        window.on_dismiss_message(move || l.borrow_mut().push("dismiss"));
+        window.set_message_tone("danger".into());
+        window.set_message_title("Couldn't connect to Aster Café".into());
+        window.set_message("The network rejected the password.".into());
+        window.set_message_action("Try again".into());
+        let found = |label: &str| ElementHandle::find_by_accessible_label(&window, label).next().expect(label);
+        found("Couldn't connect to Aster Café The network rejected the password.");
+        found("Try again").invoke_accessible_default_action();
+        found("Dismiss").invoke_accessible_default_action();
+        assert_eq!(*log.borrow(), ["action", "dismiss"]);
+    }
+
     #[test]
     fn the_network_chevron_folds_its_pages() {
         i_slint_backend_testing::init_no_event_loop();

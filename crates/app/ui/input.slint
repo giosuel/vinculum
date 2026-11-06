@@ -5,9 +5,9 @@
 // they show comes from Rust (src/input.rs); everything done goes back through `act`.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, Switch, SectionLabel, Scroll, Focusable, Focus } from "controls.slint";
+import { Button, IconButton, Switch, CardTitle, SectionLabel, Scroll, Focusable, Focus } from "controls.slint";
 import { Segmented, Select, TextField, Modal } from "dialogs.slint";
-import { Hero, HeroSubject, HeroInfo, Card, LoadBanner } from "shell.slint";
+import { Hero, HeroSubject, HeroInfo, Card, SettingRow, LoadBanner } from "shell.slint";
 import { Slider } from "sound.slint";
 
 /// A row of the Mouse & touchpad list. id: "mouse", "touchpad", or "dev:" and the device's name.
@@ -70,53 +70,6 @@ export struct MouseView {
     bar: InputBar,
 }
 
-component CardTitle inherits Text {
-    color: Theme.text;
-    font-size: 15px;
-    font-weight: 600;
-    vertical-alignment: center;
-}
-
-/// "● Changed from 600 ms": a mark beside what differs from the default.
-component Differs inherits HorizontalLayout {
-    in property <string> text;
-    spacing: 6px;
-    VerticalLayout { alignment: center; Rectangle { width: 6px; height: 6px; border-radius: 3px; background: Theme.accent; } }
-    // No width of its own: showing it mustn't move the control beside it (a slider being dragged).
-    Text { text: root.text; color: Theme.muted; font-size: 12px; overflow: elide; preferred-width: 0; horizontal-stretch: 1; }
-}
-
-/// A setting's row: its name and a line under it on the left, the control on the right, and a
-/// line above it unless it's the first.
-component Line inherits Rectangle {
-    in property <string> label;
-    in property <string> sub;
-    in property <string> differs;
-    in property <bool> first;
-    min-height: 46px;
-    Rectangle { y: 0; height: 1px; background: root.first ? transparent : Theme.border; }
-    HorizontalLayout {
-        spacing: 14px;
-        padding-top: 5px;
-        padding-bottom: 5px;
-        VerticalLayout {
-            alignment: center;
-            spacing: 2px;
-            horizontal-stretch: 1;
-            // The slider gives way before the name does.
-            min-width: 112px;
-            Text { text: root.label; color: Theme.text; font-size: 13px; overflow: elide; }
-            if root.differs != "": Differs { text: root.differs; }
-            if root.differs == "" && root.sub != "": Text { text: root.sub; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
-        }
-        // Centred by a layout: a `y` on the control put it at the top of the row.
-        VerticalLayout {
-            alignment: center;
-            @children
-        }
-    }
-}
-
 /// A slider with its value written beside it.
 component ValueSlider inherits HorizontalLayout {
     in property <float> value;
@@ -143,11 +96,11 @@ component ValueSlider inherits HorizontalLayout {
     Text { text: root.text; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; horizontal-alignment: right; vertical-alignment: center; width: 50px; }
 }
 
-component SettingLine inherits Line {
+component SettingLine inherits SettingRow {
     in property <PointerSetting> setting;
     callback act(string, float);
     label: setting.label;
-    sub: setting.sub;
+    description: setting.sub;
     differs: setting.differs;
     if root.setting.kind == "slider": ValueSlider {
         label: root.setting.label;
@@ -271,18 +224,14 @@ component LayoutItem inherits Focusable {
             Text { text: root.entry.meta; color: root.entry.active ? Theme.accent : Theme.muted; font-size: 12px; overflow: elide; }
         }
         // A plain icon, as in the mockup: a bordered button on every row was too heavy.
-        if root.count > 1: Focusable {
-            width: 30px;
-            height: 30px;
-            y: (parent.height - self.height) / 2;
-            border-radius: 8px;
+        if root.count > 1: IconButton {
+            icon: "trash";
+            label: "Remove " + root.entry.name;
+            flat: true;
+            size: 30px;
             focus-key: "layout-remove:" + root.entry.code;
-            background: self.has-hover ? Theme.hover : transparent;
-            accessible-role: button;
-            accessible-label: "Remove " + root.entry.name;
-            accessible-action-default => { root.remove(); }
-            activated => { root.remove(); }
-            Icon { name: "trash"; tint: parent.has-hover ? Theme.text : Theme.icon-soft; }
+            y: (parent.height - self.height) / 2;
+            clicked => { root.remove(); }
         }
     }
 }
@@ -348,9 +297,9 @@ component LayoutsCard inherits Card {
             }
         }
         if root.view.add-note != "": Text { text: root.view.add-note; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
-        Line {
+        SettingRow {
             label: "Switch layouts with";
-            sub: "Pressed together, they go to the next layout";
+            description: "Pressed together, they go to the next layout";
             first: true;
             Select {
                 width: 190px;
@@ -374,7 +323,7 @@ component TypingCard inherits Card {
         spacing: 0;
         alignment: start;
         CardTitle { text: "Typing"; height: 34px; }
-        Line {
+        SettingRow {
             label: "Repeat delay";
             differs: root.view.delay-differs;
             first: true;
@@ -389,7 +338,7 @@ component TypingCard inherits Card {
                 moved(v) => { root.act("repeat-delay", "", v); }
             }
         }
-        Line {
+        SettingRow {
             label: "Repeat rate";
             differs: root.view.rate-differs;
             ValueSlider {
@@ -419,7 +368,7 @@ component KeysCard inherits Card {
         spacing: 0;
         alignment: start;
         CardTitle { text: "Keys"; height: 34px; }
-        Line {
+        SettingRow {
             label: "Caps Lock acts as";
             first: true;
             Select {
@@ -432,9 +381,9 @@ component KeysCard inherits Card {
                 chosen(i) => { root.act("caps", "" + i, 0); }
             }
         }
-        Line {
+        SettingRow {
             label: "Compose key";
-            sub: root.view.compose-sub;
+            description: root.view.compose-sub;
             Select {
                 width: 190px;
                 select-height: 34px;
@@ -445,7 +394,7 @@ component KeysCard inherits Card {
                 chosen(i) => { root.act("compose", "" + i, 0); }
             }
         }
-        Line {
+        SettingRow {
             label: "Num Lock on at login";
             Switch { label: "Num Lock on at login"; focus-key: "numlock"; on: root.view.numlock; toggled => { root.act("numlock", "", 0); } }
         }

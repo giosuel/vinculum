@@ -9,8 +9,8 @@ import "fonts/JetBrainsMono-Medium.ttf";
 import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
-import { Button, IconButton, Switch, PillSwitch, SectionLabel, Kbd, Scroll, Focusable, Focus, FocusTrap } from "controls.slint";
-import { JoinDialog, TextField, Segmented, Modal } from "dialogs.slint";
+import { Button, IconButton, Switch, PillSwitch, SectionLabel, Banner, Kbd, Scroll, Focusable, Focus } from "controls.slint";
+import { JoinDialog, TextField, Segmented, FormRow, Modal } from "dialogs.slint";
 import { QuickWindow, QuickRow, QuickToggle } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
 import { Sidebar, Hero, HeroSubject, Card, SettingRow, NavItem, NavGroup, HeroInfo } from "shell.slint";
@@ -19,10 +19,10 @@ import { SendFilesDialog, IncomingFileDialog, FilesView, FileRow } from "files.s
 import { DisplaysPage, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeepDialog, ConfigDialog } from "displays.slint";
 import { SoundPage, SoundView, SoundApp, SoundCard } from "sound.slint";
 import { KeyboardPage, MousePage, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, AddLayoutDialog, OwnSettingsDialog } from "input.slint";
-import { BluetoothPage, BtAudio, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
+import { BluetoothPage, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, Focus, FilesView, FileRow, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, Focus, FilesView, FileRow, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -423,49 +423,9 @@ export component MainWindow inherits Window {
                             width: self.preferred-width;
                             height: 34px;
                             spacing: 8px;
-                            if root.page == "wifi" && root.wifi-available: Rectangle {
-                                width: wifi-pill.preferred-width;
-                                border-radius: 8px;
-                                border-width: 1px;
-                                border-color: Theme.ctrl-border;
-                                background: Theme.input-bg;
-                                TouchArea { mouse-cursor: pointer; clicked => { root.wifi-switched(); } }
-                                wifi-pill := HorizontalLayout {
-                                    padding-left: 12px;
-                                    padding-right: 6px;
-                                    spacing: 10px;
-                                    Text { text: "Wi-Fi"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
-                                    Switch {
-                                        on: root.wifi-on;
-                                        label: "Wi-Fi";
-                                        switch-width: 40px;
-                                        y: (parent.height - self.height) / 2;
-                                        toggled => { root.wifi-switched(); }
-                                    }
-                                }
-                            }
-                            if root.page == "hotspot" && root.hotspot-available: Rectangle {
-                                width: hotspot-pill.preferred-width;
-                                border-radius: 8px;
-                                border-width: 1px;
-                                border-color: Theme.ctrl-border;
-                                background: Theme.input-bg;
-                                TouchArea { mouse-cursor: pointer; clicked => { root.hotspot-toggled(); } }
-                                hotspot-pill := HorizontalLayout {
-                                    padding-left: 12px;
-                                    padding-right: 6px;
-                                    spacing: 10px;
-                                    Text { text: "Hotspot"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
-                                    Switch {
-                                        on: root.hotspot-on;
-                                        label: "Hotspot";
-                                        switch-width: 40px;
-                                        y: (parent.height - self.height) / 2;
-                                        toggled => { root.hotspot-toggled(); }
-                                    }
-                                }
-                            }
-                            if root.page != "hotspot": IconButton { icon: "plus"; label: "Add a connection"; width: 34px; height: 34px; clicked => { root.add-clicked(); } }
+                            if root.page == "wifi" && root.wifi-available: PillSwitch { label: "Wi-Fi"; on: root.wifi-on; toggled => { root.wifi-switched(); } }
+                            if root.page == "hotspot" && root.hotspot-available: PillSwitch { label: "Hotspot"; on: root.hotspot-on; toggled => { root.hotspot-toggled(); } }
+                            if root.page != "hotspot": IconButton { icon: "plus"; label: "Add a connection"; size: 34px; clicked => { root.add-clicked(); } }
                         }
                     }
                     // Below the hero, the page scrolls when the window is too short for the list
@@ -520,7 +480,7 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            if root.show-rescan && root.wifi-on: IconButton { icon: "rescan"; label: "Rescan"; width: 34px; height: 34px; clicked => { root.rescan(); } }
+                            if root.show-rescan && root.wifi-on: IconButton { icon: "rescan"; label: "Rescan"; size: 34px; clicked => { root.rescan(); } }
                         }
                         if root.network-page && root.page != "hotspot" && root.placeholder == "": HorizontalLayout {
                             vertical-stretch: 1;
@@ -532,66 +492,13 @@ export component MainWindow inherits Window {
                                 VerticalLayout {
                                     padding: 10px;
                                     spacing: 10px;
-                            if root.message != "": Rectangle {
-                                border-radius: 8px;
-                                border-width: 1px;
-                                border-color: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-border : Theme.ctrl-border;
-                                background: root.message-tone == "warn" ? Theme.warn-bg : transparent;
-                                accessible-role: text;
-                                accessible-label: root.message;
-                                HorizontalLayout {
-                                    padding: 10px;
-                                    padding-right: 6px;
-                                    spacing: 10px;
-                                    // On the first line of the text.
-                                    VerticalLayout {
-                                        alignment: start;
-                                        Icon {
-                                            name: root.message-tone == "info" ? "error" : root.message-tone == "warn" ? "warning" : "error";
-                                            tint: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-text : Theme.muted;
-                                        }
-                                    }
-                                    VerticalLayout {
-                                        spacing: 2px;
-                                        horizontal-stretch: 1;
-                                        if root.message-title != "": Text {
-                                            text: root.message-title;
-                                            color: root.message-tone == "danger" ? Theme.danger : Theme.text;
-                                            font-size: 13px;
-                                            font-weight: 600;
-                                            wrap: word-wrap;
-                                        }
-                                        Text {
-                                            text: root.message;
-                                            color: root.message-tone == "warn" ? Theme.warn-text : root.message-title != "" ? Theme.muted : Theme.text;
-                                            font-size: 13px;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-                                    if root.message-action != "": Button {
-                                        label: root.message-action;
-                                        button-height: 28px;
-                                        min-width: self.preferred-width;
-                                        y: (parent.height - self.height) / 2;
-                                        clicked => { root.message-action-clicked(); }
-                                    }
-                                    Focusable {
-                                        width: 24px;
-                                        height: 24px;
-                                        border-radius: 6px;
-                                        background: self.has-hover ? Theme.hover : transparent;
-                                        accessible-role: button;
-                                        accessible-label: "Dismiss";
-                                        accessible-action-default => { root.dismiss-message(); }
-                                        activated => { root.dismiss-message(); }
-                                        Path {
-                                            width: 12px; height: 12px;
-                                            viewbox-width: 16; viewbox-height: 16;
-                                            stroke: Theme.faint; stroke-width: 1.6px; fill: transparent;
-                                            commands: "M4 4l8 8M12 4l-8 8";
-                                        }
-                                    }
-                                }
+                            if root.message != "": Banner {
+                                tone: root.message-tone;
+                                title: root.message-title;
+                                text: root.message;
+                                action: root.message-action;
+                                action-clicked => { root.message-action-clicked(); }
+                                dismissed => { root.dismiss-message(); }
                             }
                             // At least three rows before the page itself scrolls.
                             if root.empty-title == "": list := Scroll {
@@ -670,40 +577,31 @@ export component MainWindow inherits Window {
                                     spacing: 16px;
                                     alignment: start;
                                     horizontal-stretch: 1;
-                                    for field[i] in ["Network name", "Password"]: HorizontalLayout {
-                                        spacing: 10px;
-                                        Text { text: field; color: Theme.text; font-size: 13px; width: 168px; vertical-alignment: center; }
-                                        if i == 0: TextField { text <=> root.hotspot-ssid; mono: true; label: "Network name"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
-                                        if i == 1: TextField { text <=> root.hotspot-password; mono: true; label: "Password"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
-                                        if i == 1: Button { label: "New"; button-height: 36px; horizontal-stretch: 0; enabled: !root.hotspot-on; clicked => { root.hotspot-new-password(); } }
+                                    FormRow {
+                                        label: "Network name";
+                                        TextField { text <=> root.hotspot-ssid; mono: true; label: "Network name"; enabled: !root.hotspot-on; edited => { root.hotspot-edited(); } }
                                     }
-                                    HorizontalLayout {
-                                        spacing: 10px;
-                                        Text { text: "Security"; color: Theme.text; font-size: 13px; width: 168px; }
+                                    FormRow {
+                                        label: "Password";
+                                        HorizontalLayout {
+                                            spacing: 10px;
+                                            TextField { text <=> root.hotspot-password; mono: true; label: "Password"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
+                                            Button { label: "New"; button-height: 36px; horizontal-stretch: 0; enabled: !root.hotspot-on; clicked => { root.hotspot-new-password(); } }
+                                        }
+                                    }
+                                    FormRow {
+                                        label: "Security";
+                                        label-top: 0;
                                         Text { text: "WPA2 Personal"; color: Theme.text; font-size: 13px; }
                                     }
-                                    HorizontalLayout {
-                                        spacing: 10px;
-                                        Text { text: "Band"; color: Theme.text; font-size: 13px; width: 168px; vertical-alignment: center; }
+                                    FormRow {
+                                        label: "Band";
                                         HorizontalLayout {
                                             alignment: start;
-                                            Segmented { options: ["Automatic", "2.4 GHz", "5 GHz"]; selected <=> root.hotspot-band; label: "Band"; }
+                                            Segmented { options: ["Automatic", "2.4 GHz", "5 GHz"]; selected <=> root.hotspot-band; label: "Band"; height: 34px; }
                                         }
                                     }
-                                    if root.hotspot-warning != "": Rectangle {
-                                        border-radius: 8px;
-                                        border-width: 1px;
-                                        border-color: Theme.warn-border;
-                                        background: Theme.warn-bg;
-                                        height: warn.preferred-height;
-                                        warn := HorizontalLayout {
-                                            padding: 10px;
-                                            spacing: 10px;
-                                            // On the first line of the text.
-                                            VerticalLayout { alignment: start; Icon { name: "warning"; tint: Theme.warn-text; } }
-                                            Text { text: root.hotspot-warning; color: Theme.warn-text; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
-                                        }
-                                    }
+                                    if root.hotspot-warning != "": Banner { tone: "warn"; text: root.hotspot-warning; dismissible: false; }
                                     if root.hotspot-on: VerticalLayout {
                                         spacing: 8px;
                                         SectionLabel { text: root.hotspot-clients.length == 0 ? "NO DEVICES YET" : "CONNECTED DEVICES · " + root.hotspot-clients.length; }
@@ -761,8 +659,8 @@ export component MainWindow inherits Window {
                             width: self.preferred-width;
                             height: 34px;
                             spacing: 8px;
-                            if root.bt.state == "list": IconButton { icon: "rescan"; label: "Look for devices again"; width: 34px; height: 34px; clicked => { root.bt-act("rescan", ""); keys.focus(); } }
-                            if root.bt.state == "list": IconButton { icon: "gear"; label: "Adapter settings"; width: 34px; height: 34px; clicked => { root.bt-act("adapter", ""); } }
+                            if root.bt.state == "list": IconButton { icon: "rescan"; label: "Look for devices again"; size: 34px; clicked => { root.bt-act("rescan", ""); keys.focus(); } }
+                            if root.bt.state == "list": IconButton { icon: "gear"; label: "Adapter settings"; size: 34px; clicked => { root.bt-act("adapter", ""); } }
                             if root.bt.state == "list": PillSwitch {
                                 label: "Visible";
                                 on: root.bt.visible;
@@ -860,21 +758,18 @@ export component MainWindow inherits Window {
                                         gradient-toggled => { root.ap-act("gradient", 0); keys.focus(); }
                                     }
                                     if !settings-scroll.two-columns: VerticalLayout {
-                                        Rectangle { height: 1px; background: Theme.border; }
                                         SettingRow { label: "Colour files"; description: "Read in order; the first usable one wins"; }
                                         ColourFiles { sources: root.sources; config-path: root.config-path; }
                                     }
                                     SectionLabel { text: "GENERAL"; height: 46px; vertical-alignment: bottom; }
-                                    for o[i] in root.options: VerticalLayout {
-                                        if i > 0: Rectangle { height: 1px; background: Theme.border; }
-                                        SettingRow {
-                                            label: o.label;
-                                            description: o.sub;
-                                            Switch { on: o.on; label: o.label; focus-key: "option:" + o.id; y: (parent.height - self.height) / 2; toggled => { root.option-toggled(o.id); } }
-                                        }
+                                    for o[i] in root.options: SettingRow {
+                                        label: o.label;
+                                        description: o.sub;
+                                        first: i == 0;
+                                        Switch { on: o.on; label: o.label; focus-key: "option:" + o.id; toggled => { root.option-toggled(o.id); } }
                                     }
                                     SectionLabel { text: "PASSWORDS"; height: 46px; vertical-alignment: bottom; }
-                                    SettingRow { label: "Passwords \"for me only\""; description: root.keyring-label; }
+                                    SettingRow { label: "Passwords \"for me only\""; description: root.keyring-label; first: true; }
                                 }
                                 if settings-scroll.two-columns: VerticalLayout {
                                     preferred-width: 720px;
@@ -940,37 +835,21 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The confirmation dialog, over everything.
-    if root.confirm-open: Rectangle {
-        background: #05060799;
-        TouchArea { clicked => { root.confirm-cancelled(); } }
-        FocusTrap {
-            width: 420px;
-            height: dialog.preferred-height;
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            border-radius: 14px;
-            border-width: 1px;
-            border-color: Theme.ctrl-border;
-            background: Theme.surface;
-            drop-shadow-blur: 40px;
-            drop-shadow-color: #00000080;
-            accessible-role: groupbox;
-            accessible-label: root.confirm-title;
-            TouchArea {}
-            dialog := VerticalLayout {
-                padding: 24px;
-                spacing: 14px;
-                Text { text: root.confirm-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
-                Text { text: root.confirm-text; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-                HorizontalLayout {
-                    padding-top: 6px;
-                    spacing: 8px;
-                    alignment: end;
-                    Button { label: "Cancel"; button-height: 36px; clicked => { root.confirm-cancelled(); keys.focus(); } }
-                    Button { label: root.confirm-button; kind: root.confirm-destructive ? "destructive" : "primary"; button-height: 36px; clicked => { root.confirm-accepted(); keys.focus(); } }
-                }
-            }
+    // The confirmation dialog, over everything. Nothing is typed in it, so a click beside it
+    // cancels it.
+    if root.confirm-open: Modal {
+        card-width: 420px;
+        label: root.confirm-title;
+        backdrop-dismisses: true;
+        dismissed => { root.confirm-cancelled(); keys.focus(); }
+        Text { text: root.confirm-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+        Text { text: root.confirm-text; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+        HorizontalLayout {
+            padding-top: 6px;
+            spacing: 8px;
+            alignment: end;
+            Button { label: "Cancel"; button-height: 36px; clicked => { root.confirm-cancelled(); keys.focus(); } }
+            Button { label: root.confirm-button; kind: root.confirm-destructive ? "destructive" : "primary"; button-height: 36px; clicked => { root.confirm-accepted(); keys.focus(); } }
         }
     }
 

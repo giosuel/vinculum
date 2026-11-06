@@ -3,8 +3,8 @@
 // (src/quick.rs). Wayland doesn't let apps place windows, so a window rule floats it (see
 // extras/hyprland.lua).
 import { Theme } from "theme.slint";
-import { Icon, SignalBars } from "icons.slint";
-import { Button, IconButton, Switch, Focusable, Focus } from "controls.slint";
+import { SignalBars } from "icons.slint";
+import { Button, IconButton, Switch, Focus } from "controls.slint";
 
 export struct QuickRow { id: string, name: string, meta: string, bars: int, active: bool, connecting: bool }
 export struct QuickToggle { id: string, name: string, meta: string, on: bool }
@@ -140,19 +140,7 @@ export component QuickWindow inherits Window {
             HorizontalLayout {
                 spacing: 8px;
                 Button { label: "Open Lituus"; button-height: 36px; horizontal-stretch: 1; clicked => { root.open-main(); } }
-                Focusable {
-                    width: 36px;
-                    height: 36px;
-                    border-radius: 8px;
-                    border-width: 1px;
-                    border-color: Theme.ctrl-border;
-                    background: self.has-hover ? Theme.hovered(Theme.ctrl-bg) : Theme.ctrl-bg;
-                    accessible-role: button;
-                    accessible-label: "Settings";
-                    accessible-action-default => { root.open-settings(); }
-                    activated => { root.open-settings(); }
-                    Icon { name: "settings"; tint: Theme.icon-soft; }
-                }
+                IconButton { icon: "settings"; label: "Settings"; size: 36px; clicked => { root.open-settings(); } }
             }
         }
     }

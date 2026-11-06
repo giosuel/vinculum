@@ -11,8 +11,8 @@ use slint::{ComponentHandle, SharedString};
 
 use crate::audio;
 use crate::{
-    APP, Action, App, BtAudio, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, Confirm, Confirmed, DetailItem,
-    Details, HeroInfo, MainWindow, NavItem, Toggle, model, update,
+    APP, Action, App, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, Confirm, Confirmed, DetailItem, Details,
+    HeroInfo, MainWindow, NavItem, Toggle, model, update,
 };
 
 /// How long "Look for devices" looks before it stops by itself (discovery costs battery).
@@ -724,7 +724,8 @@ pub fn page(state: &State, now: Instant) -> (BtPage, Vec<String>, Option<String>
         page.has_details = true;
         page.details = details(device, adapter, state);
         if let Some((choices, chosen)) = audio_choice(device, state) {
-            page.audio = model(choices.into_iter().map(|c| BtAudio { label: s(c.label), sub: s(c.sub) }).collect());
+            page.audio_labels = model(choices.iter().map(|c| s(c.label)).collect());
+            page.audio_details = model(choices.iter().map(|c| s(c.sub.as_str())).collect());
             page.audio_selected = chosen.map_or(-1, |i| i as i32);
         }
     }
@@ -1776,15 +1777,16 @@ mod tests {
             active: Some("headset-head-unit".into()),
         };
         // No card for it (no PipeWire): no choice.
-        assert_eq!(page(&state, Instant::now()).0.audio.row_count(), 0);
+        assert_eq!(page(&state, Instant::now()).0.audio_labels.row_count(), 0);
         state.audio = vec![card("aa:bb:cc:00:00:01")];
         let page = page(&state, Instant::now()).0;
-        let options: Vec<String> = page.audio.iter().map(|o| format!("{} {}", o.label, o.sub)).collect();
+        let options: Vec<String> =
+            page.audio_labels.iter().zip(page.audio_details.iter()).map(|(l, d)| format!("{l} {d}")).collect();
         assert_eq!(options, ["High quality A2DP · LDAC", "Headset HFP · microphone on", "Off Controls only"]);
         assert_eq!(page.audio_selected, 1);
         // Not for the phone, which isn't connected.
         state.selected = Some("/org/bluez/hci0/dev_2".into());
-        assert_eq!(super::page(&state, Instant::now()).0.audio.row_count(), 0);
+        assert_eq!(super::page(&state, Instant::now()).0.audio_labels.row_count(), 0);
     }
 
     #[test]
