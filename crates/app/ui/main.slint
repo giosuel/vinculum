@@ -29,6 +29,8 @@ export { Theme, Focus, Hint, FilesView, FileRow, DisplaysView, DragSnap, LayoutM
 export struct Row { id: string, name: string, meta: string, tone: string, icon: string, bars: int, secure: bool, selected: bool, indent: bool }
 export struct Section { title: string, rows: [Row] }
 export struct HostRow { name: string, address: string, since: string }
+/// A part of the window, in its coordinates.
+struct Area { x: length, y: length, width: length, height: length }
 
 // Space selects it, Enter selects it and connects (the window's Enter, for the selection), and
 // the arrow keys move the selection, taking the focus along.
@@ -351,8 +353,8 @@ export component MainWindow inherits Window {
             if event.text == Key.Escape && root.add-open { root.add-cancelled(); return accept; }
             if event.text == Key.Escape && root.share-open { root.share-closed(); return accept; }
             if event.text == Key.Escape && root.hostname-open { root.hostname-cancelled(); return accept; }
-            if event.text == "e" && root.has-details && !root.join-open { root.action("edit"); return accept; }
-            if event.text == Key.Return && !root.join-open { root.activate-selected(); return accept; }
+            if event.text == "e" && root.has-details && !root.join-open { root.editor-from-details = true; root.action("edit"); return accept; }
+            if event.text == Key.Return && !root.join-open { root.editor-from-details = false; root.activate-selected(); return accept; }
             if event.text == Key.Escape && root.join-open { root.join-cancelled(); return accept; }
             reject
         }
@@ -396,7 +398,7 @@ export component MainWindow inherits Window {
                         Text { text: root.banner; color: Theme.warn-text; font-size: 13px; vertical-alignment: center; }
                     }
                 }
-                VerticalLayout {
+                page-body := VerticalLayout {
                     vertical-stretch: 1;
                     padding: 18px;
                     padding-left: 22px;
@@ -428,12 +430,16 @@ export component MainWindow inherits Window {
                             spacing: 8px;
                             if root.page == "wifi" && root.wifi-available: PillSwitch { label: "Wi-Fi"; on: root.wifi-on; toggled => { root.wifi-switched(); } }
                             if root.page == "hotspot" && root.hotspot-available: PillSwitch { label: "Hotspot"; on: root.hotspot-on; toggled => { root.hotspot-toggled(); } }
-                            if root.page != "hotspot": IconButton { icon: "plus"; label: "Add a connection"; size: 34px; clicked => { root.add-clicked(); } }
+                            if root.page != "hotspot": IconButton { icon: "plus"; label: "Add a connection"; size: 34px; clicked => { root.editor-from-details = false; root.add-clicked(); } }
                         }
                     }
                     // Below the hero, the page scrolls when the window is too short for the list
                     // and details at their smallest.
-                    if root.network-page: Scroll {
+                    if root.network-page: page-scroll := Scroll {
+                        // For the editor (see editor-area).
+                        property <Area> area: { x: self.absolute-position.x, y: self.absolute-position.y, width: self.width, height: self.height };
+                        init => { root.page-area = self.area; }
+                        changed area => { root.page-area = self.area; }
                         vertical-stretch: 1;
                         fill: true;
                         spacing: 14px;
@@ -533,19 +539,22 @@ export component MainWindow inherits Window {
                                 text: root.empty-text;
                                 command: root.empty-command;
                                 action: root.empty-action;
-                                action-clicked => { root.empty-action-clicked(); }
+                                action-clicked => { root.editor-from-details = false; root.empty-action-clicked(); }
                             }
                             // As wide as its label: a button across the list was 800 px wide.
                             if root.bottom-label != "" && root.empty-title == "": HorizontalLayout {
                                 alignment: start;
-                                AddButton { label: root.bottom-label; clicked => { root.bottom-clicked(); } }
+                                AddButton { label: root.bottom-label; clicked => { root.editor-from-details = false; root.bottom-clicked(); } }
                             }
                                 }
                             }
                             if root.has-details: DetailsPane {
+                                property <Area> area: { x: self.absolute-position.x, y: self.absolute-position.y, width: self.width, height: self.height };
+                                init => { root.details-area = self.area; }
+                                changed area => { root.details-area = self.area; }
                                 horizontal-stretch: 1;
                                 details: root.details;
-                                action(id) => { root.action(id); }
+                                action(id) => { root.editor-from-details = true; root.action(id); }
                                 toggle(id) => { root.toggle(id); }
                                 metered-chosen(i) => { root.metered-chosen(i); }
                             }
@@ -838,7 +847,7 @@ export component MainWindow inherits Window {
             if Focus.answer != Focus.probe {
                 Focus.on-control = false;
                 Focus.key = "";
-                keys.focus();
+                if root.editor-open { editor.take-focus(); } else { keys.focus(); }
             }
             Focus.probe += 1;
         }
@@ -880,16 +889,52 @@ export component MainWindow inherits Window {
         cancelled => { root.join-cancelled(); keys.focus(); }
     }
 
-    // The editor sweeps in from the right, over everything but the dialogs above. The slide
-    // is a fraction of the width, not a position: an animated x would trail behind a resize
-    // and show the closed editor in the window's new space.
+    // The editor covers the card it was opened from (the owner, 2026-11-06: "lets just make it
+    // cover the card it was called from"): the details card for Edit and the pane's other
+    // buttons, while the card is as wide as the editor's form needs (24 px padding on each
+    // side, the 168 px labels and the 520 px port list, its widest control: 736 px). Otherwise,
+    // and when opened from the hero or the list, it covers the page under the hero. The sidebar
+    // and the hero stay in sight but take no clicks, as when the editor covered them.
+    property <Area> page-area;
+    property <Area> details-area;
+    // Set by the details pane's buttons, cleared by the other ways in, and noted when it opens.
+    property <bool> editor-from-details;
+    property <bool> editor-opened-from-details;
+    property <bool> editor-in-details: root.editor-opened-from-details && root.has-details && root.details-area.width >= 736px;
+    // The page scrolls: only the part of the details card in sight.
+    property <length> details-top: max(root.details-area.y, root.page-area.y);
+    property <Area> editor-area: !root.network-page
+        ? { x: page-body.absolute-position.x + 22px, y: page-body.absolute-position.y + 18px, width: page-body.width - 44px, height: page-body.height - 36px }
+        : !root.editor-in-details ? root.page-area
+        : { x: root.details-area.x, y: root.details-top, width: root.details-area.width,
+            height: min(root.details-area.y + root.details-area.height, root.page-area.y + root.page-area.height) - root.details-top };
+    changed editor-open => {
+        if self.editor-open {
+            root.editor-opened-from-details = root.editor-from-details;
+            root.editor-from-details = false;
+            // As a dialog does (FocusTrap), so the control that opened it gets the focus back.
+            Focus.opener = Focus.on-control ? Focus.serial : 0;
+            Focus.opener-key = Focus.on-control ? Focus.key : "";
+            editor.take-focus();
+        } else {
+            keys.focus();
+            Focus.give-back();
+        }
+    }
+    // It sweeps in from the right of its card. The slide is a fraction of the card's width, not
+    // a position: an animated x would trail behind a resize and show the closed editor in the
+    // window's new space.
     property <float> editor-slide: root.editor-open ? 0 : 1;
     animate editor-slide { duration: 220ms; easing: ease-out; }
     editor := Editor {
-        x: root.width * root.editor-slide;
         width: root.width;
         height: root.height;
         visible: root.editor-slide < 1;
+        slide: root.editor-slide;
+        card-x: root.editor-area.x;
+        card-y: root.editor-area.y;
+        card-width: root.editor-area.width;
+        card-height: root.editor-area.height;
         title: root.editor-title;
         subtitle: root.editor-subtitle;
         tabs: root.editor-tabs;
@@ -906,7 +951,7 @@ export component MainWindow inherits Window {
         routes-open: root.editor-routes;
         ports-open: root.editor-ports-open;
         port-chosen(interface) => { root.editor-port-chosen(interface); }
-        back => { root.editor-back(); keys.focus(); }
+        back => { root.editor-back(); }
         apply => { root.editor-apply(); }
         revert => { root.editor-revert(); }
         form-edited => { root.editor-edited(); }

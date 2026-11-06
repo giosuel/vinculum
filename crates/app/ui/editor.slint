@@ -4,7 +4,7 @@
 // whenever it changes (see src/editor.rs) and sends back the errors.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, IconButton, AddButton, SectionLabel, FieldLabel, Banner, Scroll, Focusable, Focus } from "controls.slint";
+import { Button, IconButton, AddButton, SectionLabel, FieldLabel, Banner, Scroll, Focusable, Focus, FocusTrap } from "controls.slint";
 import { TextField, Segmented, CheckBox, Select, FormRow, Modal } from "dialogs.slint";
 
 export struct AddressRow { address: string, prefix: string }
@@ -257,11 +257,12 @@ component PortList inherits VerticalLayout {
     spacing: 8px;
     alignment: start;
     if root.ports.length == 0: Hint { text: "No ports yet: add the devices it's made of."; }
-    if root.ports.length > 0: Rectangle {
+    // 520 px, and narrower in the smallest windows.
+    if root.ports.length > 0: HorizontalLayout { alignment: start; Rectangle {
         border-width: 1px;
         border-color: Theme.border2;
         border-radius: 10px;
-        width: 520px;
+        preferred-width: 520px;
         VerticalLayout {
             for p[i] in root.ports: Rectangle {
                 height: 49px;
@@ -282,7 +283,7 @@ component PortList inherits VerticalLayout {
                 }
             }
         }
-    }
+    } }
     HorizontalLayout { alignment: start; AddButton { label: "Add port…"; clicked => { root.add(); } } }
 }
 
@@ -477,10 +478,10 @@ component IpPage inherits VerticalLayout {
     property <bool> manual: root.ip.method == (root.v6 ? 2 : 1);
     property <bool> off: root.v6 ? root.ip.method >= 4 : root.ip.method == 4;
     spacing: 18px;
+    // Five or six methods: a list, which also fits an editor as narrow as the smallest window's.
     FormRow {
         label: "Method";
-        label-top: 12px;
-        HorizontalLayout { alignment: start; Segmented { options: root.methods; selected <=> root.ip.method; label: "Method"; height: 40px; } }
+        HorizontalLayout { alignment: start; Select { options: root.methods; selected <=> root.ip.method; label: "Method"; width: 240px; } }
     }
     if root.v6 && root.current.length > 0: FormRow {
         label: "Current addresses";
@@ -621,15 +622,38 @@ export component Editor inherits Rectangle {
     callback wg-export();
     callback add-allowed(int);
 
+    /// Where its card is, over the card it was opened from; the rest of it is a cover.
+    in property <length> card-x;
+    in property <length> card-y;
+    in property <length> card-width;
+    in property <length> card-height;
+    /// 0 in place, 1 just out of its card to the right: it sweeps in from there.
+    in property <float> slide;
+    /// The keyboard goes to it, and Tab stays in it until it closes.
+    public function take-focus() { keys.focus(); }
+
     changed form => { root.form-edited(); }
 
-    background: Theme.surface;
-    // Clicks don't fall through to the window underneath.
+    // A click on the page beside it does nothing: it would lose the unapplied edits.
     TouchArea {}
     // Esc from any field closes the editor. Its dialogs take the keyboard while open and give
     // it back here when they close.
     changed routes-open => { if root.routes-open == "" { keys.focus(); Focus.give-back(); } }
     changed ports-open => { if !root.ports-open { keys.focus(); Focus.give-back(); } }
+    card := Rectangle {
+        x: root.card-x;
+        y: root.card-y;
+        width: root.card-width;
+        height: root.card-height;
+        border-radius: 16px;
+        clip: true;
+    // Looks like the card under it.
+    sheet := FocusTrap {
+        x: parent.width * root.slide;
+        border-radius: 16px;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: Theme.surface;
     keys := FocusScope {
         key-pressed(event) => {
             if event.text == Key.Escape { root.back(); return accept; }
@@ -907,7 +931,9 @@ export component Editor inherits Rectangle {
                                 text <=> root.form.wg.private-key;
                                 password: root.options.wg-shown-key == "";
                                 mono: true;
-                                width: 400px;
+                                // Narrower beside both buttons in a narrow editor.
+                                preferred-width: 400px;
+                                min-width: 200px;
                                 label: "Private key";
                                 placeholder: root.options.wg-shown-key != "" ? root.options.wg-shown-key : root.new ? "" : "Saved; generate or paste to change it";
                                 invalid: root.errors.wg-key != "";
@@ -991,8 +1017,7 @@ export component Editor inherits Rectangle {
                     }
                     FormRow {
                         label: "Authentication";
-                        label-top: 12px;
-                        HorizontalLayout { alignment: start; Segmented { options: root.options.ovpn-auth; selected <=> root.form.ovpn.auth; label: "Authentication"; } }
+                        HorizontalLayout { alignment: start; Select { options: root.options.ovpn-auth; selected <=> root.form.ovpn.auth; label: "Authentication"; width: 240px; } }
                     }
                     if root.form.ovpn.auth == 0 || root.form.ovpn.auth == 2: FormRow {
                         label: "Username";
@@ -1034,11 +1059,11 @@ export component Editor inherits Rectangle {
                     FormRow {
                         label: "TLS key";
                         FileRow { path <=> root.form.ovpn.tls-key; label: "TLS key"; choose => { root.choose-file("ovpn.tls-key"); } }
-                        if root.form.ovpn.tls-key != "": HorizontalLayout {
-                            spacing: 10px;
-                            alignment: start;
-                            Segmented { options: root.options.ovpn-tls-modes; selected <=> root.form.ovpn.tls-key-mode; label: "How the TLS key is used"; }
-                            if root.form.ovpn.tls-key-mode == 0: Segmented { options: ["No direction", "0", "1"]; selected <=> root.form.ovpn.tls-key-direction; label: "Key direction"; }
+                        // One under the other: side by side, they're wider than a narrow editor.
+                        if root.form.ovpn.tls-key != "": VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout { alignment: start; Segmented { options: root.options.ovpn-tls-modes; selected <=> root.form.ovpn.tls-key-mode; label: "How the TLS key is used"; } }
+                            if root.form.ovpn.tls-key-mode == 0: HorizontalLayout { alignment: start; Segmented { options: ["No direction", "0", "1"]; selected <=> root.form.ovpn.tls-key-direction; label: "Key direction"; } }
                         }
                     }
                     FormRow {
@@ -1364,6 +1389,8 @@ export component Editor inherits Rectangle {
         }
     }
 
+    }
+    }
     }
 
     // Add-port dialog

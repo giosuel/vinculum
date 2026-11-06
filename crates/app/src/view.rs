@@ -997,42 +997,8 @@ fn wired_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
     if devices > 0 {
         view.count = count(devices, "wired device", "wired devices");
     }
+    // Each wired device with its profiles first; bridges, bonds and VLANs after them.
     let mut sections = Vec::new();
-    // Bridges and bonds, each with its ports under it.
-    let mut virtual_rows = Vec::new();
-    for c in snap
-        .connections
-        .iter()
-        .filter(|c| matches!(c.kind, ConnectionKind::Bridge { .. } | ConnectionKind::Bond { .. }))
-    {
-        let ports = ports_of(snap, c);
-        virtual_rows.push(virtual_row(snap, c, ports.len()));
-        for p in ports {
-            let interface = p.interface.clone().unwrap_or_else(|| p.id.clone());
-            let device = snap.devices.iter().find(|d| d.interface == interface);
-            let carrier = device.and_then(|d| d.wired.as_ref()).map(|w| w.carrier);
-            let up = active_uuid_state(snap, &p.uuid).is_some_and(|a| a.state == ActiveState::Activated);
-            let (meta, tone) = match (device, carrier) {
-                (None, _) => (format!("Port of {} · not plugged in", controller_name(c)), "faint"),
-                (_, Some(false)) => (format!("Port of {} · cable unplugged", controller_name(c)), "faint"),
-                (Some(d), _) => {
-                    (format!("Port of {}{}", controller_name(c), speed(d)), if up { "muted" } else { "faint" })
-                }
-            };
-            virtual_rows.push(RowData {
-                id: format!("conn:{}", p.uuid),
-                name: interface,
-                meta,
-                tone,
-                icon: "port",
-                indent: true,
-                ..RowData::default()
-            });
-        }
-    }
-    if !virtual_rows.is_empty() {
-        sections.push(("Bridges and bonds".to_owned(), virtual_rows));
-    }
     let mut shown_vlans = Vec::new();
     for device in snap.devices.iter().filter(|d| d.kind == DeviceKind::Ethernet) {
         let carrier = device.wired.as_ref().is_some_and(|w| w.carrier);
@@ -1090,6 +1056,41 @@ fn wired_page(snap: &Snapshot, view: &mut View) -> Vec<(String, Vec<RowData>)> {
             rows.push(RowData { indent: true, ..virtual_row(snap, v, 0) });
         }
         sections.push((device_title(device), rows));
+    }
+    // Then bridges and bonds, each with its ports under it.
+    let mut virtual_rows = Vec::new();
+    for c in snap
+        .connections
+        .iter()
+        .filter(|c| matches!(c.kind, ConnectionKind::Bridge { .. } | ConnectionKind::Bond { .. }))
+    {
+        let ports = ports_of(snap, c);
+        virtual_rows.push(virtual_row(snap, c, ports.len()));
+        for p in ports {
+            let interface = p.interface.clone().unwrap_or_else(|| p.id.clone());
+            let device = snap.devices.iter().find(|d| d.interface == interface);
+            let carrier = device.and_then(|d| d.wired.as_ref()).map(|w| w.carrier);
+            let up = active_uuid_state(snap, &p.uuid).is_some_and(|a| a.state == ActiveState::Activated);
+            let (meta, tone) = match (device, carrier) {
+                (None, _) => (format!("Port of {} · not plugged in", controller_name(c)), "faint"),
+                (_, Some(false)) => (format!("Port of {} · cable unplugged", controller_name(c)), "faint"),
+                (Some(d), _) => {
+                    (format!("Port of {}{}", controller_name(c), speed(d)), if up { "muted" } else { "faint" })
+                }
+            };
+            virtual_rows.push(RowData {
+                id: format!("conn:{}", p.uuid),
+                name: interface,
+                meta,
+                tone,
+                icon: "port",
+                indent: true,
+                ..RowData::default()
+            });
+        }
+    }
+    if !virtual_rows.is_empty() {
+        sections.push(("Bridges and bonds".to_owned(), virtual_rows));
     }
     // VLANs on a bond or bridge, or on a device that isn't there.
     let others: Vec<RowData> = snap
@@ -2051,19 +2052,47 @@ pub(crate) mod tests {
         ));
         let state = UiState { page: Page::Wired, ..UiState::default() };
         let view = build(Some(&snap), None, &state);
+        // The wired device first (the owner, 2026-11-06: "lets put the wire connections above the
+        // bridges and bonds").
         assert_eq!(
             rows(&view),
             [
-                ("BRIDGES AND BONDS".into(), vec!["br0".into(), "enp4s0".into()]),
                 ("ENP3S0 · E1000E".into(), vec!["Cable unplugged".into(), "VLAN 20 · Lab".into()]),
+                ("BRIDGES AND BONDS".into(), vec!["br0".into(), "enp4s0".into()]),
             ]
         );
-        let bridge = &view.sections[0].rows;
+        let bridge = &view.sections[1].rows;
         assert_eq!(bridge.row_data(0).unwrap().meta, "Saved · bridge · 1 port");
         let port = bridge.row_data(1).unwrap();
         assert!(port.indent);
         assert_eq!((port.meta.as_str(), port.icon.as_str()), ("Port of br0 · not plugged in", "port"));
-        assert!(view.sections[1].rows.row_data(1).unwrap().indent);
+        assert!(view.sections[0].rows.row_data(1).unwrap().indent);
+        // The first row is selected: the wired profile, not the bridge.
+        snap.connections.push(saved("u-eth", "Wired connection 1", ConnectionKind::Ethernet, "enp3s0", None));
+        snap.connections.push(saved(
+            "u-bond",
+            "bond0",
+            ConnectionKind::Bond { mode: "active-backup".into() },
+            "bond0",
+            None,
+        ));
+        snap.connections.push(saved(
+            "u-v30",
+            "VLAN 30",
+            ConnectionKind::Vlan { parent: "br0".into(), id: 30 },
+            "br0.30",
+            None,
+        ));
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(
+            rows(&view),
+            [
+                ("ENP3S0 · E1000E".into(), vec!["Wired connection 1".into(), "VLAN 20 · Lab".into()]),
+                ("BRIDGES AND BONDS".into(), vec!["br0".into(), "enp4s0".into(), "bond0".into()]),
+                ("VLANS".into(), vec!["VLAN 30".into()]),
+            ]
+        );
+        assert!(view.sections[0].rows.row_data(0).unwrap().selected);
         let state = UiState { page: Page::Wired, selected: Some("conn:u-br".into()), ..UiState::default() };
         let view = build(Some(&snap), None, &state);
         assert_eq!(detail(&view, "Ports").as_deref(), Some("enp4s0"));

@@ -3348,7 +3348,7 @@ mod tests {
         window.show().unwrap();
         // Where the editor is, if it's drawn at all (a hidden element isn't found).
         let editor =
-            || ElementHandle::find_by_element_id(&window, "MainWindow::editor").next().map(|e| e.absolute_position().x);
+            || ElementHandle::find_by_element_id(&window, "Editor::sheet").next().map(|e| e.absolute_position().x);
         assert_eq!(editor(), None);
 
         window.window().set_size(LogicalSize::new(1600.0, 700.0));
@@ -3357,13 +3357,98 @@ mod tests {
             mock_elapsed_time(Duration::from_millis(50));
         }
 
-        // Opening it still slides it in.
+        // Opening it still slides it in, to the page under the hero.
         window.set_editor_open(true);
         mock_elapsed_time(Duration::from_millis(50));
+        let page = ElementHandle::find_by_element_id(&window, "MainWindow::page-scroll").next().expect("the page");
         let x = editor().expect("the editor is shown");
-        assert!(0.0 < x && x < 1600.0, "{x}");
+        assert!(page.absolute_position().x < x && x < 1600.0, "{x}");
         mock_elapsed_time(Duration::from_millis(500));
-        assert_eq!(editor(), Some(0.0));
+        assert_eq!(editor(), Some(page.absolute_position().x));
+    }
+
+    /// The editor covers the card it was opened from: the details card for Edit, if the editor
+    /// fits in it, and otherwise (or from the hero) the page under the hero. Clicks beside it
+    /// go nowhere.
+    #[test]
+    fn the_editor_covers_the_card_it_was_opened_from() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        let selected = Rc::new(RefCell::new(Vec::new()));
+        let s = selected.clone();
+        window.on_select(move |id| s.borrow_mut().push(id.to_string()));
+        window.set_sections(super::model(vec![super::Section {
+            title: "ENP3S0".into(),
+            rows: super::model(wifi_rows(3, 0)),
+        }]));
+        window.set_has_details(true);
+        let edit = super::Action { id: "edit".into(), label: "Edit".into(), kind: "secondary".into(), enabled: true };
+        window.set_details(super::Details {
+            title: "Wired connection 1".into(),
+            actions: super::model(vec![edit]),
+            ..Default::default()
+        });
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        window.show().unwrap();
+        mock_elapsed_time(Duration::ZERO);
+        let bounds = |e: ElementHandle| {
+            let (at, size) = (e.absolute_position(), e.size());
+            [at.x, at.y, size.width, size.height].map(f32::round)
+        };
+        let find = |id: &str| ElementHandle::find_by_element_id(&window, id).next();
+        let sheet = || find("Editor::sheet").map(bounds);
+        let page = || find("MainWindow::page-scroll").map(bounds).expect("the page");
+        let details = || ElementHandle::find_by_element_type_name(&window, "DetailsPane").next().map(bounds);
+        let press = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                .expect(label)
+                .invoke_accessible_default_action()
+        };
+        let open = |open: bool| {
+            window.set_editor_open(open);
+            mock_elapsed_time(Duration::from_millis(500));
+        };
+
+        // Edit in the owner's window: over the details card, with the list beside it.
+        press("Edit");
+        open(true);
+        assert_eq!(sheet(), details());
+        let list = find("MainWindow::list-card").map(bounds).expect("the list");
+        assert!(list[0] + list[2] < sheet().unwrap()[0], "{list:?} {:?}", sheet());
+        // A click on the list beside it selects nothing.
+        let position = LogicalPosition::new(list[0] + 60.0, list[1] + 40.0);
+        window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+        assert!(selected.borrow().is_empty(), "{:?}", selected.borrow());
+
+        // A smaller window: the details card is narrower than the editor's form, so the editor
+        // covers the list and the details.
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        mock_elapsed_time(Duration::from_millis(50));
+        assert!(details().unwrap()[2] < 736.0);
+        assert_eq!(sheet(), Some(page()));
+        open(false);
+        assert_eq!(sheet(), None);
+
+        // From the hero, even in a wide window: the page under the hero.
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        press("Add a connection");
+        open(true);
+        assert_eq!(sheet(), Some(page()));
+        assert!(page()[1] > 0.0 && page()[2] > details().unwrap()[2]);
+        open(false);
+
+        // It takes the keyboard as it opens, before it has slid in: Esc closes it.
+        let backs = Rc::new(RefCell::new(0));
+        let b = backs.clone();
+        window.on_editor_back(move || *b.borrow_mut() += 1);
+        window.set_editor_open(true);
+        mock_elapsed_time(Duration::ZERO);
+        mock_elapsed_time(Duration::from_millis(300));
+        window.window().dispatch_event(WindowEvent::KeyPressed { text: Key::Escape.into() });
+        window.window().dispatch_event(WindowEvent::KeyReleased { text: Key::Escape.into() });
+        assert_eq!(*backs.borrow(), 1);
     }
 
     /// A wide window's width goes to the list, also when it shows an empty state (Wi-Fi off) and
