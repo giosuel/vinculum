@@ -4,7 +4,7 @@
 // whenever it changes (see src/editor.rs) and sends back the errors.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, Switch, Focusable, Focus } from "controls.slint";
+import { Button, Switch, SectionLabel, Focusable, Focus } from "controls.slint";
 import { TextField, Segmented, CheckBox, Select, Modal } from "dialogs.slint";
 
 export struct AddressRow { address: string, prefix: string }
@@ -77,6 +77,20 @@ export struct OvpnFormUi {
     reneg: string,
     tap: bool,
 }
+export struct OcFormUi {
+    gateway: string,
+    protocol: int,
+    cert: string,
+    key: string,
+    ca: string,
+    user-agent: string,
+    system: int,
+    csd: string,
+    udp: bool,
+    proxy: string,
+    mtu: string,
+    refuse-unknown: bool,
+}
 export struct VirtFormUi {
     interface: string,
     parent: int,
@@ -135,6 +149,7 @@ export struct EditorForm {
     eap: EapFormUi,
     wg: WgFormUi,
     ovpn: OvpnFormUi,
+    oc: OcFormUi,
     virt: VirtFormUi,
 }
 export struct EditorErrors {
@@ -162,6 +177,8 @@ export struct EditorErrors {
     ovpn-user: string,
     ovpn-secret: string,
     ovpn-files: string,
+    oc-gateway: string,
+    oc-mtu: string,
     virt-interface: string,
     virt-settings: string,
     virt-monitor: string,
@@ -193,6 +210,8 @@ export struct EditorOptions {
     ovpn-auth: [string],
     ovpn-tls-modes: [string],
     ovpn-compression: [string],
+    oc-protocols: [string],
+    oc-systems: [string],
     /// A note at the top of the editor: what an import did.
     banner: string,
     /// Where passwords "for me only" go ("your keyring", "KWallet"), or "" without one.
@@ -1135,6 +1154,93 @@ export component Editor inherits Rectangle {
                         CheckBox { checked <=> root.form.ovpn.tap; text: "Use a TAP device (layer 2) instead of TUN"; }
                     }
                     Hint { text: "To send only the VPN's own network through it, see \"Use this connection only for resources on its network\" under IPv4 and IPv6 → Edit routes."; }
+                }
+                if root.tab == "openconnect": VerticalLayout {
+                    spacing: 18px;
+                    Row {
+                        label: "Gateway";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.oc.gateway; mono: true; width: 360px; label: "Gateway"; placeholder: "vpn.example.org"; invalid: root.errors.oc-gateway != ""; } }
+                        if root.errors.oc-gateway != "": Error { text: root.errors.oc-gateway; }
+                        Hint { text: "The address you'd type into the Cisco client, with a group after a slash if you use one: vpn.example.org/staff."; }
+                    }
+                    Row {
+                        label: "Protocol";
+                        HorizontalLayout { alignment: start; Select { options: root.options.oc-protocols; selected <=> root.form.oc.protocol; label: "Protocol"; width: 300px; } }
+                        Hint { text: "Also GlobalProtect, Pulse / Ivanti, Juniper, Fortinet, F5 and Array: the same plugin connects to all of them."; }
+                    }
+                    Row {
+                        label: "Sign-in";
+                        label-top: 2px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            alignment: start;
+                            Icon { name: "globe"; tint: Theme.accent; y: 2px; }
+                            Text {
+                                text: "When you connect, a sign-in window opens: the Microsoft 365 page if your organisation uses it, otherwise the server's own username, password and code. Nothing to set up here.";
+                                color: Theme.text;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                    }
+                    SectionLabel { text: "CERTIFICATES (ONLY IF YOUR ORGANISATION GAVE YOU ONE)"; wrap: word-wrap; }
+                    Row {
+                        label: "User certificate";
+                        FileRow { path <=> root.form.oc.cert; label: "User certificate"; choose => { root.choose-file("oc.cert"); } }
+                    }
+                    Row {
+                        label: "Private key";
+                        FileRow { path <=> root.form.oc.key; label: "Private key"; choose => { root.choose-file("oc.key"); } }
+                        Hint { text: "Leave it empty when the key is in the certificate file."; }
+                    }
+                    Row {
+                        label: "CA certificate";
+                        FileRow { path <=> root.form.oc.ca; label: "CA certificate"; choose => { root.choose-file("oc.ca"); } }
+                        Hint { text: "Leave it empty to use the system's certificates."; }
+                    }
+                    Hint { text: "These are NetworkManager-openconnect's own settings, so connections made with nmcli or nm-connection-editor show up here unchanged."; }
+                }
+                if root.tab == "openconnect-advanced": VerticalLayout {
+                    spacing: 18px;
+                    SectionLabel { text: "HOW THE CLIENT REPORTS ITSELF"; }
+                    Row {
+                        label: "Client name";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.oc.user-agent; mono: true; width: 300px; label: "Client name"; placeholder: "OpenConnect's own"; } }
+                        Hint { text: "Some Cisco servers only ask for the MFA code when the client calls itself AnyConnect. Leave it unless your IT says otherwise."; }
+                    }
+                    Row {
+                        label: "Operating system";
+                        HorizontalLayout { alignment: start; Select { options: root.options.oc-systems; selected <=> root.form.oc.system; label: "Operating system"; width: 300px; } }
+                        Hint { text: "What the server sees. Some servers only let Windows or macOS in."; }
+                    }
+                    Row {
+                        label: "Host scan script";
+                        FileRow { path <=> root.form.oc.csd; label: "Host scan script"; choose => { root.choose-file("oc.csd"); } }
+                        Hint { text: "For servers that check the computer first (Cisco Secure Desktop). Usually csd-post.sh from the openconnect package."; }
+                    }
+                    SectionLabel { text: "CONNECTION"; }
+                    Row {
+                        label: "Use UDP (DTLS)";
+                        label-top: 2px;
+                        HorizontalLayout { alignment: start; Switch { on: root.form.oc.udp; label: "Use UDP (DTLS)"; switch-width: 40px; toggled => { root.form.oc.udp = !root.form.oc.udp; } } }
+                        Hint { text: "Faster. Turn it off if the connection drops behind strict firewalls."; }
+                    }
+                    Row {
+                        label: "Proxy";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.oc.proxy; mono: true; width: 300px; label: "Proxy"; placeholder: "None"; } }
+                    }
+                    Row {
+                        label: "MTU";
+                        HorizontalLayout { alignment: start; TextField { text <=> root.form.oc.mtu; mono: true; width: 120px; label: "MTU"; placeholder: "Automatic"; invalid: root.errors.oc-mtu != ""; } }
+                        if root.errors.oc-mtu != "": Error { text: root.errors.oc-mtu; }
+                    }
+                    Row {
+                        label: "Unknown server certificate";
+                        label-top: 12px;
+                        HorizontalLayout { alignment: start; Segmented { options: ["Ask me", "Refuse"]; selected: root.form.oc.refuse-unknown ? 1 : 0; label: "Unknown server certificate"; changed(i) => { root.form.oc.refuse-unknown = i == 1; } } }
+                        Hint { text: root.form.oc.refuse-unknown ? "Refuse: only servers whose certificate the system trusts." : "Ask me: the sign-in window shows the certificate and you decide."; }
+                    }
                 }
                 if root.tab == "vlan": VerticalLayout {
                     spacing: 18px;

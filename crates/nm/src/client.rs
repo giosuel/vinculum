@@ -428,7 +428,17 @@ impl Client {
                     .unwrap_or_default(),
             },
             "wireguard" => ConnectionKind::WireGuard,
-            "vpn" => ConnectionKind::Vpn { service: string("vpn", "service-type").unwrap_or_default() },
+            "vpn" => {
+                let data = get("vpn", "data")
+                    .and_then(|v| <HashMap<String, String>>::try_from(v.clone()).ok())
+                    .unwrap_or_default();
+                let value = |key: &str| data.get(key).cloned().unwrap_or_default();
+                ConnectionKind::Vpn {
+                    service: string("vpn", "service-type").unwrap_or_default(),
+                    gateway: if data.contains_key("gateway") { value("gateway") } else { value("remote") },
+                    protocol: value("protocol"),
+                }
+            }
             // NetworkManager turns spanning tree on unless told otherwise.
             "bridge" => ConnectionKind::Bridge {
                 stp: get("bridge", "stp").and_then(|v| bool::try_from(&**v).ok()).unwrap_or(true),

@@ -76,6 +76,8 @@ pub struct UiState {
     pub search: String,
     /// The row whose last connection attempt failed, and why.
     pub failed: Option<(String, String)>,
+    /// The connections (by UUID) whose sign-in window is open.
+    pub signing_in: Vec<String>,
 }
 
 /// Goes to the page of a sidebar item (or the tray's, or the search's), with nothing selected.
@@ -432,7 +434,7 @@ fn nothing_here(page: Page, searching: bool) -> Empty {
         Page::Vpn => Empty {
             icon: "vpn",
             title: "No VPN connections".into(),
-            text: "Add a WireGuard or OpenVPN connection with +, or bring one in from a .conf or .ovpn file.".into(),
+            text: "Add a WireGuard, OpenVPN or AnyConnect connection with +, or bring one in from a .conf or .ovpn file, or from openconnect-saml.".into(),
             action: "Import a file…".into(),
         },
         _ => Empty {
@@ -903,7 +905,10 @@ fn connection_kind_label(c: &SavedConnection) -> String {
         ConnectionKind::Ethernet => "Wired".into(),
         ConnectionKind::Bluetooth { .. } => "Bluetooth".into(),
         ConnectionKind::WireGuard => "WireGuard".into(),
-        ConnectionKind::Vpn { service } => vpn_service_label(service),
+        ConnectionKind::Vpn { service, protocol, .. } if service == crate::openconnect::SERVICE => {
+            crate::openconnect::protocol_label(protocol)
+        }
+        ConnectionKind::Vpn { service, .. } => vpn_service_label(service),
         ConnectionKind::Bridge { .. } => "Bridge".into(),
         ConnectionKind::Bond { .. } => "Bond".into(),
         ConnectionKind::Vlan { id, .. } => format!("VLAN {id}"),
@@ -1187,7 +1192,7 @@ fn device_title(device: &Device) -> String {
 fn vpn_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, Vec<RowData>)> {
     view.show_add = true;
     view.search_placeholder = "Search VPNs".into();
-    view.bottom_label = "Import a file…".into();
+    view.bottom_label = "Import a VPN connection…".into();
     view.net_hero = vpn_hero(snap);
     let vpns: Vec<&SavedConnection> = snap
         .connections
@@ -1201,22 +1206,18 @@ fn vpn_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, V
     let (mut wireguard, mut others) = (Vec::new(), Vec::new());
     for c in vpns.into_iter().filter(|c| matches_search(&c.id, &state.search)) {
         let active = active_uuid_state(snap, &c.uuid);
+        let id = format!("conn:{}", c.uuid);
         let (meta, tone) = match active.map(|a| a.state) {
-            Some(ActiveState::Activated) => ("Connected".to_owned(), "accent"),
+            _ if state.signing_in.contains(&c.uuid) => ("Signing in…".to_owned(), "accent"),
+            Some(ActiveState::Activated) => (format!("Connected · {}", connection_kind_label(c)), "accent"),
             Some(ActiveState::Activating) => ("Connecting…".to_owned(), "accent"),
-            _ if matches!(c.kind, ConnectionKind::WireGuard) => ("Off".to_owned(), "muted"),
+            _ if state.failed.as_ref().is_some_and(|(f, why)| *f == id && why == crate::openconnect::CLOSED) => {
+                ("Couldn't sign in".to_owned(), "danger")
+            }
+            _ if state.failed.as_ref().is_some_and(|(f, _)| *f == id) => ("Couldn't connect".to_owned(), "danger"),
             _ => (format!("Off · {}", connection_kind_label(c)), "muted"),
         };
-        let row = RowData {
-            id: format!("conn:{}", c.uuid),
-            name: c.id.clone(),
-            meta,
-            tone,
-            icon: "vpn",
-            bars: 0,
-            secure: false,
-            indent: false,
-        };
+        let row = RowData { id, name: c.id.clone(), meta, tone, icon: "vpn", bars: 0, secure: false, indent: false };
         if c.kind == ConnectionKind::WireGuard { wireguard.push(row) } else { others.push(row) }
     }
     vec![("WireGuard".into(), wireguard), ("VPN".into(), others)]
@@ -1227,7 +1228,7 @@ fn details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsData> {
         return wifi_details(snap, state, rest);
     }
     if let Some(uuid) = id.strip_prefix("conn:") {
-        return connection_details(snap, state.page, uuid);
+        return connection_details(snap, state, uuid);
     }
     if let Some(path) = id.strip_prefix("dev:") {
         let device = snap.device(path)?;
@@ -1329,14 +1330,22 @@ fn wifi_details(snap: &Snapshot, state: &UiState, id: &str) -> Option<DetailsDat
     })
 }
 
-fn connection_details(snap: &Snapshot, page: Page, uuid: &str) -> Option<DetailsData> {
+fn connection_details(snap: &Snapshot, state: &UiState, uuid: &str) -> Option<DetailsData> {
+    let page = state.page;
     let c = snap.connections.iter().find(|c| c.uuid == uuid)?;
     let active = active_uuid_state(snap, uuid);
     let device = active.and_then(|a| a.devices.first()).and_then(|p| snap.device(p));
+    let signing_in = state.signing_in.iter().any(|u| u == uuid);
+    let failed = state.failed.as_ref().filter(|(f, _)| *f == format!("conn:{uuid}")).map(|(_, why)| why.as_str());
     let (status, tone) = match active.map(|a| a.state) {
+        _ if signing_in => ("Signing in · finish in the sign-in window", "accent"),
         Some(ActiveState::Activated) => ("Connected", "accent"),
         Some(ActiveState::Activating) => ("Connecting…", "accent"),
         Some(ActiveState::Deactivating) => ("Disconnecting…", "muted"),
+        _ if failed == Some(crate::openconnect::CLOSED) => {
+            ("Couldn't sign in: the sign-in window was closed", "danger")
+        }
+        _ if failed.is_some() => ("Couldn't connect", "danger"),
         _ => ("Not connected", "faint"),
     };
     let connected = active.is_some_and(|a| a.state == ActiveState::Activated);
@@ -1344,18 +1353,29 @@ fn connection_details(snap: &Snapshot, page: Page, uuid: &str) -> Option<Details
         Some(d) if connected && c.kind == ConnectionKind::Ethernet => speed(d).trim_start_matches(" · ").to_owned(),
         _ => String::new(),
     };
-    let mut actions = vec![if connected {
+    let mut actions = vec![if signing_in {
+        action("cancel-sign-in", "Cancel", "secondary")
+    } else if connected {
         action("disconnect", "Disconnect", "secondary")
+    } else if failed.is_some() {
+        action("connect", "Try again", "primary")
     } else {
         action("connect", "Connect", "primary")
     }];
     actions.push(action("edit", "Edit", "secondary"));
-    actions.push(action("forget", "Forget", "danger"));
+    if !signing_in {
+        actions.push(action("forget", "Forget", "danger"));
+    }
     let mut toggles = vec![toggle("autoconnect", "Connect automatically", "", c.autoconnect)];
     if page != Page::Vpn {
         toggles.push(toggle("metered", "Metered connection", "", c.metered == Some(true)));
     }
     let mut items = Vec::new();
+    if let ConnectionKind::Vpn { gateway, .. } = &c.kind
+        && !gateway.is_empty()
+    {
+        items.push(item("Gateway", gateway.as_str(), true));
+    }
     if let (Some(d), true) = (device, connected) {
         items.extend(ip_items(d));
         items.extend(traffic_item(d));
@@ -1507,6 +1527,10 @@ pub enum Command {
     Deactivate {
         active: String,
     },
+    /// Close an OpenConnect VPN's sign-in window, by its UUID.
+    CancelSignIn {
+        uuid: String,
+    },
     Forget {
         connection: String,
     },
@@ -1643,6 +1667,7 @@ pub fn intent(snap: &Snapshot, selected: &str, action: &str) -> Option<Intent> {
                 Some(Intent::Run(Command::Activate { connection: c.path.clone(), device, access_point: None }))
             }
             "disconnect" => Some(Intent::Run(Command::Deactivate { active: active?.path.clone() })),
+            "cancel-sign-in" => Some(Intent::Run(Command::CancelSignIn { uuid: c.uuid.clone() })),
             "forget" => Some(forget(c)),
             _ => None,
         };
@@ -1883,7 +1908,13 @@ pub(crate) mod tests {
         assert_eq!(d.toggles.row_count(), 0);
     }
 
-    fn saved(uuid: &str, id: &str, kind: ConnectionKind, interface: &str, port: Option<&str>) -> SavedConnection {
+    pub(crate) fn saved(
+        uuid: &str,
+        id: &str,
+        kind: ConnectionKind,
+        interface: &str,
+        port: Option<&str>,
+    ) -> SavedConnection {
         SavedConnection {
             path: format!("/c/{uuid}"),
             uuid: uuid.into(),
@@ -1897,6 +1928,63 @@ pub(crate) mod tests {
             port: port.map(|c| lituus_nm::Port { controller: c.into(), kind: "bridge".into() }),
             timestamp: 0,
         }
+    }
+
+    #[test]
+    fn an_anyconnect_vpn_signs_in_and_says_why_it_stopped() {
+        let mut snap = home();
+        let kind = ConnectionKind::Vpn {
+            service: crate::openconnect::SERVICE.into(),
+            gateway: "vpn.uzh.ch/staff".into(),
+            protocol: "anyconnect".into(),
+        };
+        snap.connections.push(saved("u-uzh", "UZH VPN", kind, "", None));
+        let mut state = UiState { page: Page::Vpn, selected: Some("conn:u-uzh".into()), ..UiState::default() };
+        let meta = |view: &View| {
+            view.sections.iter().find(|s| s.title == "VPN").unwrap().rows.row_data(0).unwrap().meta.to_string()
+        };
+        let actions = |view: &View| -> Vec<String> {
+            view.details.as_ref().unwrap().actions.iter().map(|a| a.label.to_string()).collect()
+        };
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(meta(&view), "Off · Cisco AnyConnect");
+        assert_eq!(detail(&view, "Gateway").as_deref(), Some("vpn.uzh.ch/staff"));
+        assert_eq!(detail(&view, "Type").as_deref(), Some("Cisco AnyConnect"));
+        assert_eq!(actions(&view), ["Connect", "Edit", "Forget"]);
+
+        state.signing_in = vec!["u-uzh".into()];
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(meta(&view), "Signing in…");
+        assert_eq!(view.details.as_ref().unwrap().status, "Signing in · finish in the sign-in window");
+        assert_eq!(actions(&view), ["Cancel", "Edit"]);
+        assert_eq!(
+            intent(&snap, "conn:u-uzh", "cancel-sign-in"),
+            Some(Intent::Run(Command::CancelSignIn { uuid: "u-uzh".into() }))
+        );
+
+        state.signing_in.clear();
+        state.failed = Some(("conn:u-uzh".into(), crate::openconnect::CLOSED.into()));
+        let view = build(Some(&snap), None, &state);
+        assert_eq!(meta(&view), "Couldn't sign in");
+        assert_eq!(view.details.as_ref().unwrap().status, "Couldn't sign in: the sign-in window was closed");
+        assert_eq!(actions(&view), ["Try again", "Edit", "Forget"]);
+
+        // Every VPN row says its type, and a protocol Lituus doesn't know is shown as it is.
+        state.failed = None;
+        snap.connections.push(saved("u-wg", "wg0", ConnectionKind::WireGuard, "wg0", None));
+        let kind = ConnectionKind::Vpn {
+            service: crate::openconnect::SERVICE.into(),
+            gateway: "vpn.example.org".into(),
+            protocol: "pulse-ng".into(),
+        };
+        snap.connections.push(saved("u-new", "New VPN", kind, "", None));
+        let view = build(Some(&snap), None, &state);
+        let metas = |title: &str| -> Vec<String> {
+            let rows = &view.sections.iter().find(|s| s.title == title).unwrap().rows;
+            (0..rows.row_count()).map(|i| rows.row_data(i).unwrap().meta.to_string()).collect()
+        };
+        assert_eq!(metas("WIREGUARD"), ["Off · WireGuard"]);
+        assert_eq!(metas("VPN"), ["Off · Cisco AnyConnect", "Off · pulse-ng"]);
     }
 
     #[test]
@@ -2101,9 +2189,15 @@ pub(crate) mod tests {
     fn the_vpn_hero_offers_the_vpn_used_last() {
         let mut snap = home();
         with_saved(&mut snap, "u-wg", "Home (WireGuard)", ConnectionKind::WireGuard, 100);
-        let openconnect = ConnectionKind::Vpn { service: "org.freedesktop.NetworkManager.openconnect".into() };
+        let openconnect = ConnectionKind::Vpn {
+            service: crate::openconnect::SERVICE.into(),
+            gateway: "vpn.uzh.ch".into(),
+            protocol: "anyconnect".into(),
+        };
         with_saved(&mut snap, "u-uzh", "UZH VPN", openconnect, 200);
-        with_saved(&mut snap, "u-ovpn", "Office", ConnectionKind::Vpn { service: "openvpn".into() }, 0);
+        let openvpn =
+            ConnectionKind::Vpn { service: "openvpn".into(), gateway: String::new(), protocol: String::new() };
+        with_saved(&mut snap, "u-ovpn", "Office", openvpn, 0);
         let mut state = UiState { page: Page::Vpn, ..UiState::default() };
         let view = build(Some(&snap), None, &state);
         let hero = &view.net_hero;

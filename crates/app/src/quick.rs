@@ -78,8 +78,9 @@ impl TrayIcon {
     }
 }
 
-/// The popup's and the tray's rows; `airplane` is whether airplane mode is on (see `airplane.rs`).
-pub fn build(snap: Option<&Snapshot>, airplane: bool) -> Quick {
+/// The popup's and the tray's rows; `airplane` is whether airplane mode is on (see `airplane.rs`),
+/// and `signing_in` are the connections (by UUID) whose sign-in window is open.
+pub fn build(snap: Option<&Snapshot>, airplane: bool, signing_in: &[String]) -> Quick {
     let Some(snap) = snap else {
         return Quick { status: "NetworkManager isn't running".into(), airplane, ..Quick::default() };
     };
@@ -111,8 +112,10 @@ pub fn build(snap: Option<&Snapshot>, airplane: bool) -> Quick {
         .filter(|c| matches!(c.kind, ConnectionKind::WireGuard | ConnectionKind::Vpn { .. }))
         .map(|c| {
             let state = active_state(&c.uuid);
+            let signing_in = signing_in.contains(&c.uuid);
             let kind = if c.kind == ConnectionKind::WireGuard { "WireGuard" } else { "VPN" };
             let meta = match state {
+                _ if signing_in => format!("{kind} · signing in…"),
                 Some(ActiveState::Activated) => format!("{kind} · connected"),
                 Some(ActiveState::Activating) => format!("{kind} · connecting…"),
                 _ => kind.to_owned(),
@@ -121,7 +124,7 @@ pub fn build(snap: Option<&Snapshot>, airplane: bool) -> Quick {
                 id: format!("conn:{}", c.uuid),
                 name: c.id.clone(),
                 meta,
-                on: matches!(state, Some(ActiveState::Activated | ActiveState::Activating)),
+                on: signing_in || matches!(state, Some(ActiveState::Activated | ActiveState::Activating)),
                 connected: state == Some(ActiveState::Activated),
             }
         })
@@ -170,7 +173,7 @@ mod tests {
 
     #[test]
     fn home_network_and_its_neighbours() {
-        let q = build(Some(&home()), false);
+        let q = build(Some(&home()), false, &[]);
         assert!(q.wifi_on);
         assert_eq!(q.status, "Wi-Fi: Lumen Home");
         let names: Vec<&str> = q.networks.iter().map(|n| n.name.as_str()).collect();
@@ -184,19 +187,35 @@ mod tests {
     }
 
     #[test]
+    fn a_vpn_signing_in_is_on() {
+        let mut snap = home();
+        let kind = ConnectionKind::Vpn {
+            service: crate::openconnect::SERVICE.into(),
+            gateway: "vpn.uzh.ch".into(),
+            protocol: "anyconnect".into(),
+        };
+        snap.connections.push(crate::view::tests::saved("u-uzh", "UZH VPN", kind, "", None));
+        let vpn = |q: &Quick| q.vpns.iter().find(|v| v.id == "conn:u-uzh").cloned().unwrap();
+        let off = vpn(&build(Some(&snap), false, &[]));
+        assert_eq!((off.meta.as_str(), off.on), ("VPN", false));
+        let signing_in = vpn(&build(Some(&snap), false, &["u-uzh".into()]));
+        assert_eq!((signing_in.meta.as_str(), signing_in.on, signing_in.connected), ("VPN · signing in…", true, false));
+    }
+
+    #[test]
     fn wifi_off_and_airplane_mode() {
         let mut snap = home();
         snap.wireless_enabled = false;
         snap.active.clear();
         snap.devices[0].active_connection = None;
         snap.wwan_enabled = false;
-        let q = build(Some(&snap), false);
+        let q = build(Some(&snap), false, &[]);
         assert_eq!(q.status, "Wi-Fi: off");
         assert!(q.networks.is_empty());
         // Wi-Fi off isn't airplane mode, even with mobile broadband off too.
         assert_eq!(q.icon, TrayIcon::WifiOff);
         assert!(!q.airplane);
-        assert_eq!(build(Some(&snap), true).icon, TrayIcon::Airplane);
-        assert_eq!(build(None, false).icon, TrayIcon::Offline);
+        assert_eq!(build(Some(&snap), true, &[]).icon, TrayIcon::Airplane);
+        assert_eq!(build(None, false, &[]).icon, TrayIcon::Offline);
     }
 }

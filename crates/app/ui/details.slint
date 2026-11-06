@@ -60,7 +60,7 @@ export component DetailsPane inherits Rectangle {
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
-                    Text { text: root.details.title; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; }
+                    Text { text: root.details.title; color: Theme.text; font-size: 22px; font-weight: 600; wrap: word-wrap; }
                     if root.details.renamable: Focusable {
                         width: 24px;
                         height: 24px;
@@ -77,9 +77,9 @@ export component DetailsPane inherits Rectangle {
                 HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
-                    Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Theme.tone(root.details.status-tone); y: (parent.height - 8px) / 2; }
-                    Text { text: root.details.status; color: Theme.tone(root.details.status-tone); font-size: 13px; overflow: elide; }
-                    Text { text: root.details.status-extra; color: Theme.muted; font-size: 13px; overflow: elide; }
+                    Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Theme.tone(root.details.status-tone); y: 5px; }
+                    Text { text: root.details.status; color: Theme.tone(root.details.status-tone); font-size: 13px; wrap: word-wrap; }
+                    if root.details.status-extra != "": Text { text: root.details.status-extra; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
                 }
             }
             if root.details.actions.length > 0: HorizontalLayout {
@@ -128,12 +128,18 @@ export component DetailsPane inherits Rectangle {
             GridLayout {
                 spacing-horizontal: 24px;
                 spacing-vertical: 14px;
+                // Two equal columns; long values (addresses, UUIDs) wrap instead of being cut off.
                 for item[i] in root.details.items: VerticalLayout {
                     col: mod(i, 2);
                     row: floor(i / 2);
                     spacing: 3px;
-                    Text { text: item.label; color: Theme.faint; font-size: 12px; }
-                    Text { text: item.value; color: Theme.text; font-size: 13px; font-family: item.mono ? "JetBrains Mono" : "Inter"; overflow: elide; }
+                    alignment: start;
+                    // Both columns start from nothing and share the width equally.
+                    min-width: 0px;
+                    preferred-width: 0px;
+                    horizontal-stretch: 1;
+                    Text { text: item.label; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
+                    Text { text: item.value; color: Theme.text; font-size: 13px; font-family: item.mono ? "JetBrains Mono" : "Inter"; wrap: item.mono ? char-wrap : word-wrap; }
                 }
             }
             if root.details.chips.length > 0: VerticalLayout {

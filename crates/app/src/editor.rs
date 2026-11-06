@@ -16,6 +16,8 @@ pub enum Kind {
     WireGuard,
     /// NetworkManager-openvpn.
     OpenVpn,
+    /// NetworkManager-openconnect: Cisco AnyConnect and the other protocols OpenConnect speaks.
+    OpenConnect,
     Vlan,
     Bridge,
     Bond,
@@ -31,6 +33,7 @@ impl Kind {
             Self::Ethernet => &[Tab::General, Tab::Ethernet, Tab::Enterprise, Tab::Ipv4, Tab::Ipv6],
             Self::WireGuard => &[Tab::General, Tab::WireGuard, Tab::Peers, Tab::Ipv4, Tab::Ipv6],
             Self::OpenVpn => &[Tab::General, Tab::OpenVpn, Tab::Advanced, Tab::Ipv4, Tab::Ipv6],
+            Self::OpenConnect => &[Tab::General, Tab::OpenConnect, Tab::OcAdvanced, Tab::Ipv4, Tab::Ipv6],
             Self::Vlan => &[Tab::General, Tab::Vlan, Tab::Ipv4, Tab::Ipv6],
             Self::Bridge => &[Tab::General, Tab::Bridge, Tab::Ipv4, Tab::Ipv6],
             Self::Bond => &[Tab::General, Tab::Bond, Tab::Ipv4, Tab::Ipv6],
@@ -53,6 +56,9 @@ pub enum Tab {
     Peers,
     OpenVpn,
     Advanced,
+    OpenConnect,
+    /// OpenConnect's Advanced tab.
+    OcAdvanced,
     Vlan,
     Bridge,
     Bond,
@@ -72,6 +78,8 @@ impl Tab {
             Self::Peers => "peers",
             Self::OpenVpn => "openvpn",
             Self::Advanced => "advanced",
+            Self::OpenConnect => "openconnect",
+            Self::OcAdvanced => "openconnect-advanced",
             Self::Vlan => "vlan",
             Self::Bridge => "bridge",
             Self::Bond => "bond",
@@ -90,7 +98,8 @@ impl Tab {
             Self::WireGuard => "WireGuard",
             Self::Peers => "Peers",
             Self::OpenVpn => "OpenVPN",
-            Self::Advanced => "Advanced",
+            Self::Advanced | Self::OcAdvanced => "Advanced",
+            Self::OpenConnect => "AnyConnect",
             Self::Vlan => "VLAN",
             Self::Bridge => "Bridge",
             Self::Bond => "Bond",
@@ -281,6 +290,7 @@ pub struct Form {
     pub eap: EapForm,
     pub wg: WgForm,
     pub ovpn: crate::openvpn::OvpnForm,
+    pub oc: crate::openconnect::OcForm,
     pub virt: crate::virt::VirtForm,
 }
 
@@ -418,6 +428,7 @@ pub fn read(s: &Settings) -> (Kind, Form) {
         Some("802-3-ethernet") => Kind::Ethernet,
         Some("wireguard") => Kind::WireGuard,
         Some("vpn") if crate::openvpn::is_openvpn(s) => Kind::OpenVpn,
+        Some("vpn") if crate::openconnect::is_openconnect(s) => Kind::OpenConnect,
         Some("vlan") => Kind::Vlan,
         Some("bridge") => Kind::Bridge,
         Some("bond") => Kind::Bond,
@@ -483,6 +494,7 @@ pub fn read(s: &Settings) -> (Kind, Form) {
         eap: read_eap(s),
         wg: read_wg(s),
         ovpn: if kind == Kind::OpenVpn { crate::openvpn::read(s) } else { Default::default() },
+        oc: if kind == Kind::OpenConnect { crate::openconnect::read(s) } else { Default::default() },
         virt: if kind.is_virtual() { crate::virt::read(s, |_| None) } else { Default::default() },
     };
     (kind, form)
@@ -493,7 +505,9 @@ fn hw_setting(kind: Kind) -> &'static str {
     match kind {
         Kind::Wifi => "802-11-wireless",
         Kind::WireGuard => "wireguard",
-        Kind::Ethernet | Kind::OpenVpn | Kind::Other | Kind::Vlan | Kind::Bridge | Kind::Bond => "802-3-ethernet",
+        Kind::Ethernet | Kind::OpenVpn | Kind::OpenConnect | Kind::Other | Kind::Vlan | Kind::Bridge | Kind::Bond => {
+            "802-3-ethernet"
+        }
     }
 }
 
@@ -577,7 +591,7 @@ fn read_wg(s: &Settings) -> WgForm {
 
 /// A form for a new connection of a kind.
 pub fn new_form(kind: Kind, name: &str) -> Form {
-    let vpn = matches!(kind, Kind::WireGuard | Kind::OpenVpn);
+    let vpn = matches!(kind, Kind::WireGuard | Kind::OpenVpn | Kind::OpenConnect);
     Form {
         name: name.to_owned(),
         priority: "0".into(),
@@ -607,6 +621,7 @@ pub fn new_form(kind: Kind, name: &str) -> Form {
             ..WgForm::default()
         },
         ovpn: crate::openvpn::OvpnForm { storage: 0, ..Default::default() },
+        oc: crate::openconnect::OcForm::new(),
         eap: EapForm { system_ca: true, ..EapForm::default() },
         ..Form::default()
     }
@@ -617,7 +632,7 @@ pub fn new_settings(kind: Kind, uuid: &str) -> Settings {
     let kind_name = match kind {
         Kind::Wifi => "802-11-wireless",
         Kind::WireGuard => "wireguard",
-        Kind::OpenVpn => "vpn",
+        Kind::OpenVpn | Kind::OpenConnect => "vpn",
         Kind::Vlan => "vlan",
         Kind::Bridge => "bridge",
         Kind::Bond => "bond",
@@ -630,6 +645,7 @@ pub fn new_settings(kind: Kind, uuid: &str) -> Settings {
         Kind::Wifi => put(&mut s, "802-11-wireless", "mode", Value::from("infrastructure")),
         Kind::WireGuard => put(&mut s, "wireguard", "peer-routes", Value::from(true)),
         Kind::OpenVpn => put(&mut s, "vpn", "service-type", Value::from(crate::openvpn::SERVICE)),
+        Kind::OpenConnect => put(&mut s, "vpn", "service-type", Value::from(crate::openconnect::SERVICE)),
         Kind::Ethernet | Kind::Other => {
             s.entry("802-3-ethernet".into()).or_default();
         }
@@ -679,6 +695,8 @@ pub struct Errors {
     pub ovpn_user: String,
     pub ovpn_secret: String,
     pub ovpn_files: String,
+    pub oc_gateway: String,
+    pub oc_mtu: String,
     pub virt_interface: String,
     pub virt_settings: String,
     pub virt_monitor: String,
@@ -714,6 +732,8 @@ impl Errors {
                     Tab::Peers => n(&[&self.peers]),
                     Tab::OpenVpn => n(&[&self.ovpn_user, &self.ovpn_secret, &self.ovpn_files]),
                     Tab::Advanced => 0,
+                    Tab::OpenConnect => n(&[&self.oc_gateway]),
+                    Tab::OcAdvanced => n(&[&self.oc_mtu]),
                     Tab::Vlan => n(&[&self.virt_interface, &self.virt_settings, &self.mtu]),
                     Tab::Bridge => n(&[&self.virt_interface, &self.virt_settings]),
                     Tab::Bond => n(&[&self.virt_interface, &self.virt_monitor]),
@@ -738,6 +758,7 @@ pub fn check(kind: Kind, initial: Option<&Form>, f: &Form) -> Errors {
     let fallback = match kind {
         Kind::Wifi => &f.ssid,
         Kind::WireGuard => &f.wg.interface,
+        Kind::OpenConnect => &f.oc.gateway,
         Kind::Vlan | Kind::Bridge | Kind::Bond => &f.virt.interface,
         _ => &f.name,
     };
@@ -780,6 +801,9 @@ pub fn check(kind: Kind, initial: Option<&Form>, f: &Form) -> Errors {
     }
     if kind == Kind::OpenVpn {
         (e.ovpn_user, e.ovpn_secret, e.ovpn_files) = crate::openvpn::check(initial.map(|i| &i.ovpn), &f.ovpn);
+    }
+    if kind == Kind::OpenConnect {
+        (e.oc_gateway, e.oc_mtu) = crate::openconnect::check(&f.oc);
     }
     if kind.is_virtual() {
         (e.virt_interface, e.virt_settings, e.virt_monitor) = crate::virt::check(kind, &f.virt);
@@ -1079,6 +1103,10 @@ pub fn write(kind: Kind, original: &Settings, initial: Option<&Form>, f: &Form, 
     }
     if kind == Kind::OpenVpn && initial.is_none_or(|i| i.ovpn != f.ovpn) {
         crate::openvpn::write(&mut s, initial.map(|i| &i.ovpn), &f.ovpn);
+    }
+    // Even unchanged: it marks the session as never kept, which a connection made elsewhere may not.
+    if kind == Kind::OpenConnect {
+        crate::openconnect::write(&mut s, initial.map(|i| &i.oc), &f.oc);
     }
     if kind.is_virtual() {
         crate::virt::write(&mut s, kind, initial.map(|i| &i.virt), &f.virt);

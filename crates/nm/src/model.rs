@@ -233,6 +233,10 @@ pub enum ConnectionKind {
     /// A NetworkManager VPN plugin, e.g. `org.freedesktop.NetworkManager.openvpn`.
     Vpn {
         service: String,
+        /// The server from `vpn.data`: `gateway` for most plugins, `remote` for OpenVPN.
+        gateway: String,
+        /// OpenConnect's `protocol` ("anyconnect", "gp", …); empty for other plugins.
+        protocol: String,
     },
     Bridge {
         stp: bool,

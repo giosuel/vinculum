@@ -30,14 +30,7 @@ pub fn plugin_installed() -> bool {
     if std::env::var_os("FLATPAK_ID").is_some() {
         return true;
     }
-    [
-        "/usr/lib/NetworkManager/VPN",
-        "/usr/lib64/NetworkManager/VPN",
-        "/etc/NetworkManager/VPN",
-        "/usr/local/lib/NetworkManager/VPN",
-    ]
-    .iter()
-    .any(|dir| Path::new(dir).join("nm-openvpn-service.name").exists())
+    crate::openconnect::plugin_file("nm-openvpn-service.name").is_some()
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
