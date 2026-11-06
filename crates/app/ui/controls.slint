@@ -181,9 +181,10 @@ export component Button inherits Focusable {
     preferred-width: text.preferred-width + 24px;
     border-radius: 8px;
     border-width: kind == "danger" || kind == "destructive" ? 0 : 1px;
-    border-color: kind == "primary" ? Theme.accent : Theme.ctrl-border;
-    background: kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : kind == "danger" ? transparent : (self.has-hover && root.enabled ? Theme.hovered(Theme.ctrl-bg) : Theme.ctrl-bg);
-    opacity: root.enabled ? 1 : 0.45;
+    // Turned off, every kind is a flat grey button with faint text: a primary one in a darker
+    // accent still looked pressable. (No opacity layer: one per button is too much code.)
+    border-color: !root.enabled ? Theme.border : kind == "primary" ? Theme.accent : Theme.ctrl-border;
+    background: kind == "danger" ? transparent : !root.enabled ? Theme.ctrl-bg : kind == "primary" ? Theme.accent : kind == "destructive" ? Theme.danger : (self.has-hover ? Theme.hovered(Theme.ctrl-bg) : Theme.ctrl-bg);
     accessible-role: button;
     accessible-label: label;
     accessible-enabled: root.enabled;
@@ -193,7 +194,7 @@ export component Button inherits Focusable {
         x: 12px;
         width: parent.width - 24px;
         text: root.label;
-        color: kind == "primary" ? Theme.on-accent : kind == "destructive" ? Theme.bg : kind == "danger" ? Theme.danger : Theme.text;
+        color: !root.enabled ? Theme.faint : kind == "primary" ? Theme.on-accent : kind == "destructive" ? Theme.bg : kind == "danger" ? Theme.danger : Theme.text;
         font-size: 13px;
         font-weight: kind == "primary" || kind == "destructive" ? 600 : 400;
         vertical-alignment: center;
@@ -224,28 +225,60 @@ export component IconButton inherits Focusable {
     Icon { name: root.icon; size: root.icon-size; tint: root.has-hover ? Theme.text : Theme.icon-soft; }
 }
 
+/// Adds an item to the list above it ("Add address", "Add a layout…"): as wide as its label.
+export component AddButton inherits Focusable {
+    in property <string> label;
+    callback clicked();
+    height: 32px;
+    width: text.preferred-width + 24px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.enabled ? Theme.ctrl-border : Theme.border;
+    background: self.has-hover && root.enabled ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { clicked(); } }
+    activated => { root.clicked(); }
+    text := Text { text: root.label; color: root.enabled ? Theme.icon-soft : Theme.faint; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+/// An on/off switch, drawn 20 px tall (22 in a pill) in a 24 px tall target. Off, its track has a
+/// `ctrl-border` edge, which stands out 3:1 from the card. Turned off (`enabled: false`), it's
+/// flat and faint; `shows-only` draws it as usable all the same, for a pill that takes the
+/// clicks itself.
 export component Switch inherits Focusable {
     in property <bool> on;
     in property <string> label;
     in property <length> switch-width: 34px;
+    in property <bool> shows-only;
     callback toggled();
+    property <bool> live: root.enabled || root.shows-only;
     width: switch-width;
-    height: switch-width == 34px ? 20px : 22px;
+    height: 24px;
     border-radius: self.height / 2;
-    background: on ? Theme.accent : Theme.off-track;
     accessible-role: switch;
     accessible-label: label;
     accessible-checked: on;
-    accessible-action-default => { toggled(); }
+    accessible-enabled: root.live;
+    accessible-action-default => { if root.live { toggled(); } }
     activated => { root.toggled(); }
     Rectangle {
-        x: root.on ? parent.width - self.width - 2px : 2px;
         y: (parent.height - self.height) / 2;
-        width: parent.height - 4px;
-        height: self.width;
-        border-radius: self.width / 2;
-        background: root.on ? Theme.on-accent : Theme.knob-off;
-        animate x { duration: 120ms; easing: ease-out; }
+        height: root.switch-width == 34px ? 20px : 22px;
+        border-radius: self.height / 2;
+        background: !root.live ? Theme.ctrl-bg : root.on ? Theme.accent : Theme.off-track;
+        border-width: root.on || !root.live ? 0 : 1px;
+        border-color: Theme.ctrl-border;
+        Rectangle {
+            x: root.on ? parent.width - self.width - 2px : 2px;
+            y: (parent.height - self.height) / 2;
+            width: parent.height - 4px;
+            height: self.width;
+            border-radius: self.width / 2;
+            background: !root.live ? Theme.faint : root.on ? Theme.on-accent : Theme.knob-off;
+            animate x { duration: 120ms; easing: ease-out; }
+        }
     }
 }
 
@@ -276,6 +309,7 @@ export component PillSwitch inherits Focusable {
             label: root.label;
             switch-width: 40px;
             enabled: false;
+            shows-only: true;
             y: (parent.height - self.height) / 2;
             toggled => { root.toggled(); }
         }
@@ -318,7 +352,7 @@ export component Banner inherits Rectangle {
     callback dismissed();
     border-radius: 8px;
     border-width: 1px;
-    border-color: tone == "danger" ? Theme.danger : tone == "warn" ? Theme.warn-border : Theme.ctrl-border;
+    border-color: tone == "danger" ? Theme.danger : tone == "warn" ? Theme.warn-border : Theme.border2;
     background: tone == "warn" ? Theme.warn-bg : transparent;
     accessible-role: AccessibleRole.text;
     accessible-label: title == "" ? text : title + " " + text;
@@ -365,7 +399,7 @@ export component Kbd inherits HorizontalLayout {
     alignment: start;
     Rectangle {
         border-width: 1px;
-        border-color: Theme.ctrl-border;
+        border-color: Theme.border2;
         border-radius: 4px;
         width: k.preferred-width + 10px;
         height: 16px;

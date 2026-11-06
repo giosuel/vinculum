@@ -4020,4 +4020,88 @@ mod tests {
             assert!((light.1 - gradient.1).abs() < 8.0, "{w}: {light:?} {gradient:?}");
         }
     }
+
+    /// The control with this label, not its name's text.
+    fn control(window: &MainWindow, label: &str, role: AccessibleRole) -> ElementHandle {
+        ElementHandle::find_by_accessible_label(window, label).find(|e| e.accessible_role() == Some(role)).expect(label)
+    }
+
+    /// In the owner's window the list stops at 520 px beside the details, a switch in the pane
+    /// stays near its name, and buttons and fields keep their kind's width instead of the row's.
+    #[test]
+    fn wide_windows_keep_controls_near_their_names() {
+        let window = window();
+        window.set_has_details(true);
+        window.set_details(super::Details {
+            title: "Lumen Home".into(),
+            toggles: super::model(vec![view::toggle("autoconnect", "Connect automatically", "", true)]),
+            ..Default::default()
+        });
+        window.set_bottom_label("Connect to hidden network…".into());
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        let list = ElementHandle::find_by_element_id(&window, "MainWindow::list-card").next().expect("the list");
+        assert!(list.size().width <= 520.0, "{}", list.size().width);
+        let name = control(&window, "Connect automatically", AccessibleRole::Text).absolute_position().x;
+        let switch = control(&window, "Connect automatically", AccessibleRole::Switch);
+        assert!(switch.absolute_position().x - name < 720.0, "{} {name}", switch.absolute_position().x);
+        // Drawn 20 px tall, in a 24 px target.
+        assert_eq!(switch.size().height, 24.0);
+        let hidden = control(&window, "Connect to hidden network…", AccessibleRole::Button).size().width;
+        assert!(hidden < 300.0, "{hidden}");
+
+        window.set_page("hotspot".into());
+        window.set_hotspot_available(true);
+        for field in ["Network name", "Password"] {
+            let width = control(&window, field, AccessibleRole::TextInput).size().width;
+            assert!(width <= 360.0, "{field}: {width}");
+        }
+
+        window.set_page("displays".into());
+        window.set_displays(super::DisplaysView { state: "list".into(), ..Default::default() });
+        mock_elapsed_time(Duration::from_millis(50));
+        let resolution = control(&window, "Resolution", AccessibleRole::Combobox).size().width;
+        assert!(resolution <= 360.0, "{resolution}");
+        // Turned off, Apply is a grey button, not a faded accent one.
+        let apply = control(&window, "Apply", AccessibleRole::Button);
+        assert_eq!((apply.accessible_enabled(), apply.computed_opacity()), (Some(false), 1.0));
+    }
+
+    /// Settings: the card is as tall as its settings, "Follow wallpaper" is turned off (not only
+    /// faded) while there are no wallpaper colours, the passwords line isn't a setting row, and a
+    /// short window gets the compact hero.
+    #[test]
+    fn settings_has_a_compact_hero_and_a_card_as_tall_as_its_settings() {
+        let window = window();
+        let acted = Rc::new(RefCell::new(Vec::new()));
+        let a = acted.clone();
+        window.on_ap_act(move |verb, _| a.borrow_mut().push(verb.to_string()));
+        window.set_page("settings".into());
+        window.set_ap_name("Teal".into());
+        window.set_keyring_label("Kept in KWallet".into());
+        window.set_ap_follow_available(false);
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        let card = ElementHandle::find_by_element_id(&window, "MainWindow::settings-card").next().expect("the card");
+        let bottom = card.absolute_position().y + card.size().height;
+        assert!(bottom < 980.0, "{bottom}");
+        let follow = control(&window, "Follow wallpaper", AccessibleRole::Switch);
+        assert_eq!(follow.accessible_enabled(), Some(false));
+        follow.invoke_accessible_default_action();
+        assert!(acted.borrow().is_empty(), "{:?}", acted.borrow());
+        assert!(
+            ElementHandle::find_by_accessible_label(&window, "Passwords \"for me only\": Kept in KWallet.")
+                .next()
+                .is_some()
+        );
+
+        let name_bottom = || {
+            let name = control(&window, "Teal", AccessibleRole::Text);
+            name.absolute_position().y + name.size().height
+        };
+        // The page's padding (18 px) and the hero: 206 px, or 136 px below 720 px.
+        assert!(name_bottom() > 18.0 + 136.0, "{}", name_bottom());
+        window.window().set_size(LogicalSize::new(1040.0, 600.0));
+        // The window notes its new height on its next turn.
+        mock_elapsed_time(Duration::from_millis(50));
+        assert!(name_bottom() <= 18.0 + 136.0, "{}", name_bottom());
+    }
 }

@@ -140,9 +140,11 @@ export component BluetoothPage inherits HorizontalLayout {
     Rectangle {
         // The command in the "service not running" state, for Copy.
         copy-field := TextInput { visible: false; text: root.page.empty-command; read-only: true; }
-        // As the Network lists: a card beside the details card.
+        // As the Network lists: a card beside the details card, up to 520 px; alone, it fills the
+        // row.
         min-width: 330px;
         preferred-width: 440px;
+        max-width: root.page.state == "list" && root.page.has-details ? 520px : 100000px;
         horizontal-stretch: 1;
         background: Theme.surface;
         border-radius: 16px;

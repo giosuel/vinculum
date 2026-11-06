@@ -4,7 +4,7 @@
 // whenever it changes (see src/editor.rs) and sends back the errors.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, IconButton, SectionLabel, FieldLabel, Banner, Scroll, Focusable, Focus } from "controls.slint";
+import { Button, IconButton, AddButton, SectionLabel, FieldLabel, Banner, Scroll, Focusable, Focus } from "controls.slint";
 import { TextField, Segmented, CheckBox, Select, FormRow, Modal } from "dialogs.slint";
 
 export struct AddressRow { address: string, prefix: string }
@@ -247,23 +247,6 @@ component Remove inherits IconButton {
     flat: true;
     size: 28px;
     icon-size: 12px;
-}
-
-/// A dashed "Add address" style button.
-component AddButton inherits Focusable {
-    in property <string> label;
-    callback clicked();
-    height: 32px;
-    width: text.preferred-width + 24px;
-    border-radius: 8px;
-    border-width: 1px;
-    border-color: Theme.ctrl-border;
-    background: self.has-hover ? Theme.hover : transparent;
-    accessible-role: button;
-    accessible-label: label;
-    accessible-action-default => { clicked(); }
-    activated => { root.clicked(); }
-    text := Text { text: root.label; color: Theme.icon-soft; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
 }
 
 /// A bridge's or bond's ports, with Remove, and "Add port…".

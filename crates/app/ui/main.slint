@@ -9,7 +9,7 @@ import "fonts/JetBrainsMono-Medium.ttf";
 import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
-import { Button, IconButton, Switch, PillSwitch, SectionLabel, Banner, Kbd, Scroll, Focusable, Focus } from "controls.slint";
+import { Button, IconButton, AddButton, Switch, PillSwitch, SectionLabel, Banner, Kbd, Scroll, Focusable, Focus } from "controls.slint";
 import { JoinDialog, TextField, Segmented, FormRow, Modal } from "dialogs.slint";
 import { QuickWindow, QuickRow } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
@@ -430,7 +430,7 @@ export component MainWindow inherits Window {
                                 width: 260px;
                                 border-radius: 10px;
                                 border-width: 1px;
-                                border-color: search-input.has-focus ? Theme.accent : Theme.border2;
+                                border-color: search-input.has-focus ? Theme.accent : Theme.ctrl-border;
                                 background: Theme.input-bg;
                                 HorizontalLayout {
                                     padding-left: 10px;
@@ -458,7 +458,7 @@ export component MainWindow inherits Window {
                                         height: 16px;
                                         y: (parent.height - self.height) / 2;
                                         border-width: 1px;
-                                        border-color: Theme.ctrl-border;
+                                        border-color: Theme.border2;
                                         border-radius: 4px;
                                         Text { text: "/"; color: Theme.faint; font-size: 11px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
                                     }
@@ -473,6 +473,9 @@ export component MainWindow inherits Window {
                                 horizontal-stretch: 1;
                                 min-width: 330px;
                                 preferred-width: 440px;
+                                // Up to 520 px beside the details, as Mouse & touchpad's list; alone,
+                                // it fills the row.
+                                max-width: root.has-details ? 520px : 100000px;
                                 VerticalLayout {
                                     padding: 10px;
                                     spacing: 10px;
@@ -515,18 +518,10 @@ export component MainWindow inherits Window {
                                     Button { label: root.empty-action; kind: "primary"; button-height: 36px; clicked => { root.empty-action-clicked(); } }
                                 }
                             }
-                            if root.bottom-label != "" && root.empty-title == "": Focusable {
-                                height: 36px;
-                                border-radius: 8px;
-                                border-width: 1px;
-                                border-color: Theme.ctrl-border;
-                                ring-gap: -2px;
-                                background: self.has-hover ? Theme.hover : transparent;
-                                accessible-role: button;
-                                accessible-label: root.bottom-label;
-                                accessible-action-default => { root.bottom-clicked(); }
-                                activated => { root.bottom-clicked(); }
-                                Text { text: root.bottom-label; color: Theme.icon-soft; font-size: 13px; horizontal-alignment: center; vertical-alignment: center; }
+                            // As wide as its label: a button across the list was 800 px wide.
+                            if root.bottom-label != "" && root.empty-title == "": HorizontalLayout {
+                                alignment: start;
+                                AddButton { label: root.bottom-label; clicked => { root.bottom-clicked(); } }
                             }
                                 }
                             }
@@ -555,22 +550,31 @@ export component MainWindow inherits Window {
                         // The switch and the state are in the hero; the card is as tall as the form.
                         if root.page == "hotspot" && root.hotspot-available: Card {
                             height: hotspot-form.preferred-height;
+                            // The form stops at 720 px with the code beside it; the fields are as wide
+                            // as the editor's (360 px), and narrower only in a small window.
                             hotspot-form := HorizontalLayout {
                                 padding: 16px;
                                 spacing: 40px;
+                                alignment: start;
                                 VerticalLayout {
                                     spacing: 16px;
                                     alignment: start;
                                     horizontal-stretch: 1;
+                                    preferred-width: 720px;
+                                    max-width: 720px;
                                     FormRow {
                                         label: "Network name";
-                                        TextField { text <=> root.hotspot-ssid; mono: true; label: "Network name"; enabled: !root.hotspot-on; edited => { root.hotspot-edited(); } }
+                                        HorizontalLayout {
+                                            alignment: start;
+                                            TextField { text <=> root.hotspot-ssid; mono: true; label: "Network name"; enabled: !root.hotspot-on; horizontal-stretch: 1; preferred-width: 360px; max-width: 360px; edited => { root.hotspot-edited(); } }
+                                        }
                                     }
                                     FormRow {
                                         label: "Password";
                                         HorizontalLayout {
                                             spacing: 10px;
-                                            TextField { text <=> root.hotspot-password; mono: true; label: "Password"; enabled: !root.hotspot-on; horizontal-stretch: 1; edited => { root.hotspot-edited(); } }
+                                            alignment: start;
+                                            TextField { text <=> root.hotspot-password; mono: true; label: "Password"; enabled: !root.hotspot-on; horizontal-stretch: 1; preferred-width: 360px; max-width: 360px; edited => { root.hotspot-edited(); } }
                                             Button { label: "Generate"; button-height: 36px; horizontal-stretch: 0; enabled: !root.hotspot-on; clicked => { root.hotspot-new-password(); } }
                                         }
                                     }
@@ -709,6 +713,7 @@ export component MainWindow inherits Window {
                         act(verb, id, value) => { root.sound-act(verb, id, value); }
                     }
                     if root.page == "settings": SettingsHero {
+                        compact: root.compact;
                         sub: "Saved to " + root.config-path;
                         wallpaper-in-use: root.ap-wallpaper-in-use;
                         name: root.ap-name;
@@ -722,10 +727,9 @@ export component MainWindow inherits Window {
                         // column fits the smallest window.
                         min-width: 0;
                         vertical-stretch: 1;
-                        fill: true;
                         bar-inset: -16px;
-                        Card {
-                            vertical-stretch: 1;
+                        // As tall as its settings.
+                        settings-card := Card {
                             HorizontalLayout {
                                 padding: 22px;
                                 padding-top: 10px;
@@ -762,7 +766,13 @@ export component MainWindow inherits Window {
                                         Switch { on: o.on; label: o.label; focus-key: "option:" + o.id; toggled => { root.option-toggled(o.id); } }
                                     }
                                     SectionLabel { text: "PASSWORDS"; height: 46px; vertical-alignment: bottom; }
-                                    SettingRow { label: "Passwords \"for me only\""; description: root.keyring-label; first: true; }
+                                    // Where they're kept: something to know, not a setting.
+                                    HorizontalLayout {
+                                        padding-top: 6px;
+                                        spacing: 8px;
+                                        VerticalLayout { alignment: start; padding-top: 1px; Icon { name: "info"; tint: Theme.faint; size: 14px; } }
+                                        Text { text: "Passwords \"for me only\": " + root.keyring-label + "."; color: Theme.muted; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
+                                    }
                                 }
                                 if settings-scroll.two-columns: VerticalLayout {
                                     preferred-width: 720px;

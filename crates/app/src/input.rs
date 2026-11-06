@@ -1820,7 +1820,19 @@ B: PROP=5
             }
             // The cards share the width: no layout row runs past the window.
             assert!(lx + add < w, "{w}: {lx} + {add}");
+            // Add is as wide as its label, not the card.
+            assert!(add < 200.0, "{w}: {add}");
         }
+        // In columns, the list of layouts goes down to the bar at the bottom, and Typing is as
+        // tall as its settings: the lower half of the window isn't left empty.
+        let bottom = |name: &str| {
+            let card = i_slint_backend_testing::ElementHandle::find_by_element_type_name(&window, name)
+                .next()
+                .unwrap_or_else(|| panic!("{name}"));
+            card.absolute_position().y + card.size().height
+        };
+        assert!(bottom("LayoutsCard") > 900.0, "{}", bottom("LayoutsCard"));
+        assert!(bottom("TypingCard") < 700.0, "{}", bottom("TypingCard"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

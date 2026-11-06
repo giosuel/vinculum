@@ -33,7 +33,9 @@ export component TextField inherits Rectangle {
     height: 38px;
     border-radius: 8px;
     border-width: 1px;
-    border-color: root.invalid ? Theme.danger : input.has-focus ? Theme.accent : Theme.border2;
+    border-color: root.invalid ? Theme.danger : input.has-focus ? Theme.accent : Theme.ctrl-border;
+    // Also what keeps it inlined in each dialog, so that the dialog's init runs before a field's
+    // `autofocus` (and the dialog doesn't take the keyboard back from it).
     opacity: root.enabled ? 1 : 0.5;
     background: Theme.input-bg;
     forward-focus: input;
@@ -107,10 +109,10 @@ export component Segmented inherits Focusable {
         reject
     }
     height: root.details.length > 0 ? 52px : 40px;
-    opacity: root.enabled ? 1 : 0.5;
     border-radius: 9px;
     border-width: 1px;
-    border-color: Theme.border2;
+    // Turned off, as a Button: a subtle edge, grey for the choice and faint text.
+    border-color: root.enabled ? Theme.ctrl-border : Theme.border;
     accessible-role: radio-group;
     accessible-label: label;
     HorizontalLayout {
@@ -121,7 +123,7 @@ export component Segmented inherits Focusable {
             // Measured in the selected (heavier) weight, so choosing an option doesn't resize it.
             min-width: widest.preferred-width + 24px;
             border-radius: 7px;
-            background: i == root.selected ? Theme.accent-soft-bg : option-touch.has-hover && root.enabled ? Theme.hover : transparent;
+            background: i == root.selected ? (root.enabled ? Theme.accent-soft-bg : Theme.ctrl-bg) : option-touch.has-hover && root.enabled ? Theme.hover : transparent;
             accessible-role: radio-button;
             accessible-label: option;
             accessible-checked: i == root.selected;
@@ -132,7 +134,7 @@ export component Segmented inherits Focusable {
                 spacing: root.details.length > 0 ? 2px : 0;
                 Text {
                     text: option;
-                    color: i == root.selected ? Theme.text : Theme.muted;
+                    color: !root.enabled ? Theme.faint : i == root.selected ? Theme.text : Theme.muted;
                     font-size: 13px;
                     font-weight: i == root.selected ? 500 : 400;
                     horizontal-alignment: center;
@@ -171,7 +173,7 @@ export component ViewSwitcher inherits Focusable {
     height: 34px;
     border-radius: 9px;
     border-width: 1px;
-    border-color: Theme.border2;
+    border-color: Theme.ctrl-border;
     accessible-role: tab-list;
     accessible-label: label;
     HorizontalLayout {
@@ -317,7 +319,7 @@ export component Select inherits Focusable {
     height: select-height;
     border-radius: 8px;
     border-width: 1px;
-    border-color: Theme.border2;
+    border-color: Theme.ctrl-border;
     background: self.has-hover ? Theme.hovered(Theme.input-bg) : Theme.input-bg;
     accessible-role: combobox;
     accessible-label: label;
@@ -361,7 +363,7 @@ export component Select inherits Focusable {
         Rectangle {
             border-radius: 8px;
             border-width: 1px;
-            border-color: Theme.ctrl-border;
+            border-color: Theme.border2;
             background: Theme.surface;
             drop-shadow-blur: 16px;
             drop-shadow-color: #00000060;
@@ -405,7 +407,7 @@ export component Modal inherits Rectangle {
         y: (parent.height - self.height) / 2;
         border-radius: 14px;
         border-width: 1px;
-        border-color: Theme.ctrl-border;
+        border-color: Theme.border2;
         background: Theme.surface;
         drop-shadow-blur: 40px;
         drop-shadow-color: #00000080;

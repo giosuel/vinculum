@@ -92,7 +92,8 @@ export component Slider inherits Focusable {
         width: parent.width - root.knob;
         height: root.big ? 8px : 4px;
         border-radius: self.height / 2;
-        background: Theme.off-track;
+        // A control's edge colour, so the track stands out 3:1 from the card.
+        background: Theme.ctrl-border;
         if root.minimum >= 0: Rectangle {
             x: 0;
             width: parent.width * root.fraction;

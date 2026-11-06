@@ -105,7 +105,7 @@ component Badge inherits Rectangle {
     border-radius: size / 2;
     background: on ? Theme.accent : Theme.ctrl-bg;
     border-width: on ? 0 : 1px;
-    border-color: Theme.ctrl-border;
+    border-color: Theme.border2;
     Text { text: root.n; color: root.on ? Theme.on-accent : Theme.muted; font-size: max(11px, round(root.size / 2px) * 1px); font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
 }
 
@@ -259,8 +259,9 @@ component Field inherits VerticalLayout {
     in property <string> hint;
     in property <bool> bad;
     // A Select's width (the guide's 240 px), so a column doesn't shrink to "sRGB"; wider content
-    // still gets its own.
+    // still gets its own. In a wide window it stops at 360 px, the editor's widest field.
     preferred-width: 240px;
+    max-width: 360px;
     spacing: 6px;
     alignment: start;
     FieldLabel { text: root.label; }
@@ -365,59 +366,65 @@ export component DisplaysPage inherits VerticalLayout {
         // Everything here waits for Apply, so the options are check boxes (the guide's commit
         // rule); a workspace that opens on any monitor has neither, which its row says.
         if root.page-tab == 1: Card {
-            ws-list := VerticalLayout {
-                padding: 18px;
-                padding-top: 12px;
-                spacing: 0;
+            HorizontalLayout {
                 alignment: start;
-                Text {
-                    text: "A workspace bound to a monitor opens there. The monitor's default is the one it shows when it turns on; one kept when empty stays even with no windows on it.";
-                    color: Theme.muted;
-                    font-size: 12px;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    height: 36px;
-                    spacing: 14px;
-                    Text { text: "Workspace"; color: Theme.faint; font-size: 12px; width: 72px; vertical-alignment: bottom; }
-                    Text { text: "Opens on"; color: Theme.faint; font-size: 12px; width: 240px; vertical-alignment: bottom; }
-                    Text { text: "Default"; color: Theme.faint; font-size: 12px; width: 64px; vertical-alignment: bottom; }
-                    Text { text: "Kept when empty"; color: Theme.faint; font-size: 12px; width: 104px; vertical-alignment: bottom; }
-                    Rectangle { horizontal-stretch: 1; }
-                }
-                for w[i] in root.view.workspaces: HorizontalLayout {
-                    height: 44px;
-                    spacing: 14px;
-                    Text { text: w.name; color: Theme.text; font-size: 14px; font-weight: 600; font-family: "JetBrains Mono"; width: 72px; vertical-alignment: center; }
-                    VerticalLayout {
-                        alignment: center;
-                        Select {
-                            width: 240px;
-                            select-height: 34px;
-                            label: "Monitor for workspace " + w.name;
-                            focus-key: "ws-monitor:" + i;
-                            options: root.view.ws-monitors;
-                            selected: w.monitor;
-                            chosen(c) => { root.act("ws-monitor", "" + i, c); }
-                        }
+                ws-list := VerticalLayout {
+                    padding: 18px;
+                    padding-top: 12px;
+                    spacing: 0;
+                    alignment: start;
+                    // A row's controls stay near its name in a wide window.
+                    horizontal-stretch: 1;
+                    max-width: 756px;
+                    Text {
+                        text: "A workspace bound to a monitor opens there. The monitor's default is the one it shows when it turns on; one kept when empty stays even with no windows on it.";
+                        color: Theme.muted;
+                        font-size: 12px;
+                        wrap: word-wrap;
                     }
-                    VerticalLayout {
-                        width: 64px;
-                        alignment: center;
-                        HorizontalLayout {
-                            alignment: start;
-                            CheckBox { checked: w.default; enabled: w.bound; label: "Workspace " + w.name + " is its monitor's default"; focus-key: "ws-default:" + i; toggled => { root.act("ws-default", "" + i, 0); } }
-                        }
+                    HorizontalLayout {
+                        height: 36px;
+                        spacing: 14px;
+                        Text { text: "Workspace"; color: Theme.faint; font-size: 12px; width: 72px; vertical-alignment: bottom; }
+                        Text { text: "Opens on"; color: Theme.faint; font-size: 12px; width: 240px; vertical-alignment: bottom; }
+                        Text { text: "Default"; color: Theme.faint; font-size: 12px; width: 64px; vertical-alignment: bottom; }
+                        Text { text: "Kept when empty"; color: Theme.faint; font-size: 12px; width: 104px; vertical-alignment: bottom; }
+                        Rectangle { horizontal-stretch: 1; }
                     }
-                    VerticalLayout {
-                        width: 104px;
-                        alignment: center;
-                        HorizontalLayout {
-                            alignment: start;
-                            CheckBox { checked: w.persistent; enabled: w.bound; label: "Keep workspace " + w.name + " when empty"; focus-key: "ws-persistent:" + i; toggled => { root.act("ws-persistent", "" + i, 0); } }
+                    for w[i] in root.view.workspaces: HorizontalLayout {
+                        height: 44px;
+                        spacing: 14px;
+                        Text { text: w.name; color: Theme.text; font-size: 14px; font-weight: 600; font-family: "JetBrains Mono"; width: 72px; vertical-alignment: center; }
+                        VerticalLayout {
+                            alignment: center;
+                            Select {
+                                width: 240px;
+                                select-height: 34px;
+                                label: "Monitor for workspace " + w.name;
+                                focus-key: "ws-monitor:" + i;
+                                options: root.view.ws-monitors;
+                                selected: w.monitor;
+                                chosen(c) => { root.act("ws-monitor", "" + i, c); }
+                            }
                         }
+                        VerticalLayout {
+                            width: 64px;
+                            alignment: center;
+                            HorizontalLayout {
+                                alignment: start;
+                                CheckBox { checked: w.default; enabled: w.bound; label: "Workspace " + w.name + " is its monitor's default"; focus-key: "ws-default:" + i; toggled => { root.act("ws-default", "" + i, 0); } }
+                            }
+                        }
+                        VerticalLayout {
+                            width: 104px;
+                            alignment: center;
+                            HorizontalLayout {
+                                alignment: start;
+                                CheckBox { checked: w.persistent; enabled: w.bound; label: "Keep workspace " + w.name + " when empty"; focus-key: "ws-persistent:" + i; toggled => { root.act("ws-persistent", "" + i, 0); } }
+                            }
+                        }
+                        Text { text: w.bound ? "" : "Bind it to a monitor first"; color: Theme.faint; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
                     }
-                    Text { text: w.bound ? "" : "Bind it to a monitor first"; color: Theme.faint; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
                 }
             }
         }
@@ -425,55 +432,61 @@ export component DisplaysPage inherits VerticalLayout {
         // The options here wait for Apply too (check boxes); Use, Update, Delete and Save are
         // actions, which happen when pressed.
         if root.page-tab == 2: Card {
-            profile-list := VerticalLayout {
-                padding: 18px;
-                padding-top: 12px;
-                spacing: 10px;
+            HorizontalLayout {
                 alignment: start;
-                VerticalLayout {
-                    spacing: 4px;
-                    CheckBox { checked: root.view.switch-hotplug; text: "Switch when monitors are plugged in or out"; toggled => { root.act("switch-hotplug", "", 0); } }
-                    HorizontalLayout {
-                        padding-left: 28px;
-                        Text { text: "To the profile made for exactly the monitors plugged in, if it switches by itself. Lituus must be running (in the tray, or with --background)."; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
-                    }
-                }
-                Rectangle { height: 1px; background: Theme.border; }
-                if root.view.profiles.length == 0: Text { text: "No profiles yet. Save the layout you have now as one."; color: Theme.faint; font-size: 13px; height: 32px; vertical-alignment: center; }
-                for p[i] in root.view.profiles: Rectangle {
-                    height: prow.preferred-height;
-                    border-radius: 10px;
-                    background: p.active ? Theme.accent-soft-bg : transparent;
-                    prow := VerticalLayout {
-                        padding: 10px;
-                        spacing: 8px;
-                        HorizontalLayout {
-                            spacing: 10px;
-                            // "In use" leads the line under the name, in accent, as rows say it.
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                spacing: 2px;
-                                Text { text: p.name; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
-                                Text { text: p.active ? "In use · " + p.summary : p.summary; color: p.active ? Theme.accent : Theme.muted; font-size: 12px; overflow: elide; }
-                            }
-                            CheckBox { checked: p.auto; text: "Switch by itself"; label: "Switch to " + p.name + " by itself"; focus-key: "profile-auto:" + i; horizontal-stretch: 0; y: (parent.height - self.height) / 2; toggled => { root.act("profile-auto", "" + i, 0); } }
-                            Button { label: "Use"; focus-key: "profile-use:" + i; button-height: 30px; horizontal-stretch: 0; enabled: !p.active; y: (parent.height - self.height) / 2; clicked => { root.act("profile-use", "" + i, 0); } }
-                            Button { label: "Update"; focus-key: "profile-update:" + i; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-update", "" + i, 0); } }
-                            IconButton { icon: "trash"; label: "Delete " + p.name; focus-key: "profile-delete:" + i; flat: true; y: (parent.height - self.height) / 2; clicked => { root.act("profile-delete", "" + i, 0); } }
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text { text: "Run after switching"; color: Theme.faint; font-size: 12px; vertical-alignment: center; width: 140px; }
-                            exec := Entry { value: p.exec; placeholder: "e.g. pkill -SIGUSR2 waybar"; label: "Run after switching to " + p.name; commit(text) => { root.act("profile-exec", i + ":" + text, 0); } }
-                            Text { text: p.exec-hint != "" || exec.pending ? "Not applied yet" : ""; color: Theme.faint; font-size: 12px; vertical-alignment: center; width: 96px; }
-                        }
-                    }
-                }
-                Rectangle { height: 1px; background: Theme.border; }
-                HorizontalLayout {
+                profile-list := VerticalLayout {
+                    padding: 18px;
+                    padding-top: 12px;
                     spacing: 10px;
-                    TextField { text <=> root.new-profile; placeholder: "Name, e.g. Desk + TV"; label: "New profile's name"; height: 34px; accepted => { root.act("profile-save", root.new-profile, 0); root.new-profile = ""; } }
-                    Button { label: "Save the current layout as a profile"; button-height: 34px; horizontal-stretch: 0; enabled: root.new-profile != ""; clicked => { root.act("profile-save", root.new-profile, 0); root.new-profile = ""; } }
+                    alignment: start;
+                    // A row's controls stay near its name in a wide window.
+                    horizontal-stretch: 1;
+                    max-width: 756px;
+                    VerticalLayout {
+                        spacing: 4px;
+                        CheckBox { checked: root.view.switch-hotplug; text: "Switch when monitors are plugged in or out"; toggled => { root.act("switch-hotplug", "", 0); } }
+                        HorizontalLayout {
+                            padding-left: 28px;
+                            Text { text: "To the profile made for exactly the monitors plugged in, if it switches by itself. Lituus must be running (in the tray, or with --background)."; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
+                        }
+                    }
+                    Rectangle { height: 1px; background: Theme.border; }
+                    if root.view.profiles.length == 0: Text { text: "No profiles yet. Save the layout you have now as one."; color: Theme.faint; font-size: 13px; height: 32px; vertical-alignment: center; }
+                    for p[i] in root.view.profiles: Rectangle {
+                        height: prow.preferred-height;
+                        border-radius: 10px;
+                        background: p.active ? Theme.accent-soft-bg : transparent;
+                        prow := VerticalLayout {
+                            padding: 10px;
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 10px;
+                                // "In use" leads the line under the name, in accent, as rows say it.
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 2px;
+                                    Text { text: p.name; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
+                                    Text { text: p.active ? "In use · " + p.summary : p.summary; color: p.active ? Theme.accent : Theme.muted; font-size: 12px; overflow: elide; }
+                                }
+                                CheckBox { checked: p.auto; text: "Switch by itself"; label: "Switch to " + p.name + " by itself"; focus-key: "profile-auto:" + i; horizontal-stretch: 0; y: (parent.height - self.height) / 2; toggled => { root.act("profile-auto", "" + i, 0); } }
+                                Button { label: "Use"; focus-key: "profile-use:" + i; button-height: 30px; horizontal-stretch: 0; enabled: !p.active; y: (parent.height - self.height) / 2; clicked => { root.act("profile-use", "" + i, 0); } }
+                                Button { label: "Update"; focus-key: "profile-update:" + i; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-update", "" + i, 0); } }
+                                IconButton { icon: "trash"; label: "Delete " + p.name; focus-key: "profile-delete:" + i; flat: true; y: (parent.height - self.height) / 2; clicked => { root.act("profile-delete", "" + i, 0); } }
+                            }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Text { text: "Run after switching"; color: Theme.faint; font-size: 12px; vertical-alignment: center; width: 140px; }
+                                exec := Entry { value: p.exec; placeholder: "e.g. pkill -SIGUSR2 waybar"; label: "Run after switching to " + p.name; commit(text) => { root.act("profile-exec", i + ":" + text, 0); } }
+                                Text { text: p.exec-hint != "" || exec.pending ? "Not applied yet" : ""; color: Theme.faint; font-size: 12px; vertical-alignment: center; width: 96px; }
+                            }
+                        }
+                    }
+                    Rectangle { height: 1px; background: Theme.border; }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        TextField { text <=> root.new-profile; placeholder: "Name, e.g. Desk + TV"; label: "New profile's name"; height: 34px; accepted => { root.act("profile-save", root.new-profile, 0); root.new-profile = ""; } }
+                        Button { label: "Save the current layout as a profile"; button-height: 34px; horizontal-stretch: 0; enabled: root.new-profile != ""; clicked => { root.act("profile-save", root.new-profile, 0); root.new-profile = ""; } }
+                    }
                 }
             }
         }
@@ -510,152 +523,162 @@ export component DisplaysPage inherits VerticalLayout {
                     }
                     Rectangle { height: 1px; background: Theme.border; }
                 }
-                if root.tab == 0: GridLayout {
-                    spacing-horizontal: 22px;
-                    spacing-vertical: 14px;
-                    Field {
-                        label: "Resolution";
-                        Select { options: root.view.resolutions; selected: root.view.resolution; label: "Resolution"; select-height: 34px; chosen(i) => { root.act("resolution", "" + i, 0); } }
-                    }
-                    Field {
-                        label: "Refresh rate";
-                        Select { options: root.view.rates; selected: root.view.rate; label: "Refresh rate"; select-height: 34px; chosen(i) => { root.act("rate", "" + i, 0); } }
-                    }
-                    scale-box := Field {
-                        // The "Other…" field is being typed in, and hasn't been handed over.
-                        property <bool> pending;
-                        label: "Scale";
-                        hint: root.view.scale-valid && root.view.scale-other && self.pending ? "Not applied yet" : root.view.scale-hint;
-                        bad: !root.view.scale-valid;
-                        Select {
-                            // Wide enough for the column's Mirror list too.
-                            min-width: 120px;
-                            preferred-width: 220px;
-                            options: root.view.scales;
-                            details: root.view.scale-details;
-                            selected: root.view.scale;
+                // The fields keep their width in a wide window, from the left.
+                if root.tab == 0: HorizontalLayout {
+                    alignment: start;
+                    GridLayout {
+                        spacing-horizontal: 22px;
+                        spacing-vertical: 14px;
+                        Field {
+                            label: "Resolution";
+                            Select { options: root.view.resolutions; selected: root.view.resolution; label: "Resolution"; select-height: 34px; chosen(i) => { root.act("resolution", "" + i, 0); } }
+                        }
+                        Field {
+                            label: "Refresh rate";
+                            Select { options: root.view.rates; selected: root.view.rate; label: "Refresh rate"; select-height: 34px; chosen(i) => { root.act("rate", "" + i, 0); } }
+                        }
+                        scale-box := Field {
+                            // The "Other…" field is being typed in, and hasn't been handed over.
+                            property <bool> pending;
                             label: "Scale";
-                            select-height: 34px;
-                            chosen(i) => { root.act("scale", "" + i, 0); }
-                        }
-                        // Any scale Hyprland takes at this resolution; one it doesn't stays here,
-                        // marked, and the monitor keeps its own.
-                        if root.view.scale-other: HorizontalLayout {
-                            alignment: start;
-                            Entry {
-                                preferred-width: 96px;
-                                min-width: 64px;
-                                changed pending => { scale-box.pending = self.pending; }
-                                value: root.view.scale-text;
-                                label: "Other scale";
-                                invalid: !root.view.scale-valid;
-                                commit(text) => { root.act("scale-text", text, 0); }
+                            hint: root.view.scale-valid && root.view.scale-other && self.pending ? "Not applied yet" : root.view.scale-hint;
+                            bad: !root.view.scale-valid;
+                            Select {
+                                // Wide enough for the column's Mirror list too.
+                                min-width: 120px;
+                                preferred-width: 220px;
+                                options: root.view.scales;
+                                details: root.view.scale-details;
+                                selected: root.view.scale;
+                                label: "Scale";
+                                select-height: 34px;
+                                chosen(i) => { root.act("scale", "" + i, 0); }
+                            }
+                            // Any scale Hyprland takes at this resolution; one it doesn't stays here,
+                            // marked, and the monitor keeps its own.
+                            if root.view.scale-other: HorizontalLayout {
+                                alignment: start;
+                                Entry {
+                                    preferred-width: 96px;
+                                    min-width: 64px;
+                                    changed pending => { scale-box.pending = self.pending; }
+                                    value: root.view.scale-text;
+                                    label: "Other scale";
+                                    invalid: !root.view.scale-valid;
+                                    commit(text) => { root.act("scale-text", text, 0); }
+                                }
                             }
                         }
-                    }
-                    Field {
-                        row: 1;
-                        label: "Rotation";
-                        HorizontalLayout {
-                            spacing: 10px;
-                            alignment: start;
-                            Segmented {
-                                label: "Rotation";
-                                height: 34px;
-                                options: ["0°", "90°", "180°", "270°"];
-                                selected: root.view.rotation;
-                                changed(i) => { root.act("rotation", "" + i, 0); }
+                        Field {
+                            row: 1;
+                            label: "Rotation";
+                            HorizontalLayout {
+                                spacing: 10px;
+                                alignment: start;
+                                Segmented {
+                                    label: "Rotation";
+                                    height: 34px;
+                                    options: ["0°", "90°", "180°", "270°"];
+                                    selected: root.view.rotation;
+                                    changed(i) => { root.act("rotation", "" + i, 0); }
+                                }
+                                CheckBox { checked: root.view.flipped; text: "Flip"; y: (parent.height - self.height) / 2; toggled(on) => { root.act("flip", "", 0); } }
                             }
-                            CheckBox { checked: root.view.flipped; text: "Flip"; y: (parent.height - self.height) / 2; toggled(on) => { root.act("flip", "", 0); } }
                         }
-                    }
-                    Field {
-                        label: "Position";
-                        hint: root.view.position-hint != "" ? root.view.position-hint : x-field.pending || y-field.pending ? "Not applied yet" : "";
-                        bad: root.view.x-bad || root.view.y-bad;
-                        HorizontalLayout {
-                            spacing: 8px;
-                            alignment: start;
-                            Text { text: "X"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
-                            x-field := Entry { preferred-width: 96px; min-width: 64px; value: root.view.x-text; label: "X"; invalid: root.view.x-bad; commit(text) => { root.act("x", text, 0); } }
-                            Text { text: "Y"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
-                            y-field := Entry { preferred-width: 96px; min-width: 64px; value: root.view.y-text; label: "Y"; invalid: root.view.y-bad; commit(text) => { root.act("y", text, 0); } }
+                        Field {
+                            label: "Position";
+                            hint: root.view.position-hint != "" ? root.view.position-hint : x-field.pending || y-field.pending ? "Not applied yet" : "";
+                            bad: root.view.x-bad || root.view.y-bad;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: start;
+                                Text { text: "X"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+                                x-field := Entry { preferred-width: 96px; min-width: 64px; value: root.view.x-text; label: "X"; invalid: root.view.x-bad; commit(text) => { root.act("x", text, 0); } }
+                                Text { text: "Y"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+                                y-field := Entry { preferred-width: 96px; min-width: 64px; value: root.view.y-text; label: "Y"; invalid: root.view.y-bad; commit(text) => { root.act("y", text, 0); } }
+                            }
                         }
-                    }
-                    Field {
-                        label: "Mirror";
-                        Select { options: root.view.mirrors; selected: root.view.mirror; label: "Mirror"; select-height: 34px; chosen(i) => { root.act("mirror", "" + i, 0); } }
+                        Field {
+                            label: "Mirror";
+                            Select { options: root.view.mirrors; selected: root.view.mirror; label: "Mirror"; select-height: 34px; chosen(i) => { root.act("mirror", "" + i, 0); } }
+                        }
                     }
                 }
-                if root.tab == 1: GridLayout {
-                    spacing-horizontal: 22px;
-                    spacing-vertical: 14px;
-                    Field {
-                        label: "Colour mode";
-                        hint: root.view.hdr-capable ? "HDR needs a monitor and apps that support it." : "This monitor doesn't say it supports HDR.";
-                        Select { options: root.view.colour-modes; selected: root.view.colour-mode; label: "Colour mode"; select-height: 34px; chosen(i) => { root.act("colour", "" + i, 0); } }
-                    }
-                    Field {
-                        label: "Bit depth";
-                        hint: "Some apps can't share a 10-bit screen.";
-                        HorizontalLayout {
-                            alignment: start;
-                            Segmented { label: "Bit depth"; height: 34px; options: ["8-bit", "10-bit"]; selected: root.view.ten-bit ? 1 : 0; changed(i) => { root.act("bitdepth", "" + i, 0); } }
+                if root.tab == 1: HorizontalLayout {
+                    alignment: start;
+                    GridLayout {
+                        spacing-horizontal: 22px;
+                        spacing-vertical: 14px;
+                        Field {
+                            label: "Colour mode";
+                            hint: root.view.hdr-capable ? "HDR needs a monitor and apps that support it." : "This monitor doesn't say it supports HDR.";
+                            Select { options: root.view.colour-modes; selected: root.view.colour-mode; label: "Colour mode"; select-height: 34px; chosen(i) => { root.act("colour", "" + i, 0); } }
                         }
-                    }
-                    Rectangle { }
-                    // Only for HDR: a monitor that doesn't say it does HDR doesn't get them, unless
-                    // an HDR mode is chosen for it all the same.
-                    if root.view.hdr-capable || root.view.hdr: Field {
-                        row: 1;
-                        label: "SDR brightness in HDR";
-                        hint: root.view.hdr ? "1.0 to 2.0 is typical." : "Only in HDR.";
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Slider { label: "SDR brightness"; minimum: 0.5; maximum: 2.5; value: root.view.sdr-brightness; enabled: root.view.hdr; y: (parent.height - self.height) / 2; moved(v) => { root.act("sdr-brightness", "", v); } }
-                            Text { text: round(root.view.sdr-brightness * 100) / 100; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; width: 36px; vertical-alignment: center; }
+                        Field {
+                            label: "Bit depth";
+                            hint: "Some apps can't share a 10-bit screen.";
+                            HorizontalLayout {
+                                alignment: start;
+                                Segmented { label: "Bit depth"; height: 34px; options: ["8-bit", "10-bit"]; selected: root.view.ten-bit ? 1 : 0; changed(i) => { root.act("bitdepth", "" + i, 0); } }
+                            }
                         }
-                    }
-                    if root.view.hdr-capable || root.view.hdr: Field {
-                        label: "SDR saturation in HDR";
-                        hint: root.view.hdr ? "1.0 keeps colours as they are." : "Only in HDR.";
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Slider { label: "SDR saturation"; minimum: 0.5; maximum: 1.5; value: root.view.sdr-saturation; enabled: root.view.hdr; y: (parent.height - self.height) / 2; moved(v) => { root.act("sdr-saturation", "", v); } }
-                            Text { text: round(root.view.sdr-saturation * 100) / 100; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; width: 36px; vertical-alignment: center; }
+                        Rectangle { }
+                        // Only for HDR: a monitor that doesn't say it does HDR doesn't get them, unless
+                        // an HDR mode is chosen for it all the same.
+                        if root.view.hdr-capable || root.view.hdr: Field {
+                            row: 1;
+                            label: "SDR brightness in HDR";
+                            hint: root.view.hdr ? "1.0 to 2.0 is typical." : "Only in HDR.";
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Slider { label: "SDR brightness"; minimum: 0.5; maximum: 2.5; value: root.view.sdr-brightness; enabled: root.view.hdr; y: (parent.height - self.height) / 2; moved(v) => { root.act("sdr-brightness", "", v); } }
+                                Text { text: round(root.view.sdr-brightness * 100) / 100; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; width: 36px; vertical-alignment: center; }
+                            }
+                        }
+                        if root.view.hdr-capable || root.view.hdr: Field {
+                            label: "SDR saturation in HDR";
+                            hint: root.view.hdr ? "1.0 keeps colours as they are." : "Only in HDR.";
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Slider { label: "SDR saturation"; minimum: 0.5; maximum: 1.5; value: root.view.sdr-saturation; enabled: root.view.hdr; y: (parent.height - self.height) / 2; moved(v) => { root.act("sdr-saturation", "", v); } }
+                                Text { text: round(root.view.sdr-saturation * 100) / 100; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; width: 36px; vertical-alignment: center; }
+                            }
                         }
                     }
                 }
                 if root.tab == 2: VerticalLayout {
                     spacing: 14px;
-                    GridLayout {
-                        spacing-horizontal: 22px;
-                        spacing-vertical: 14px;
-                        Field {
-                            label: "Variable refresh rate";
-                            hint: root.view.vrr-capable ? "Off, on, or only for fullscreen apps." : "This monitor doesn't say it supports VRR.";
-                            Select { options: root.view.vrr-options; selected: root.view.vrr; label: "Variable refresh rate"; select-height: 34px; chosen(i) => { root.act("vrr", "" + i, 0); } }
-                        }
-                        Field {
-                            label: "Reserved area";
-                            bad: root.view.reserved-bad[0] || root.view.reserved-bad[1] || root.view.reserved-bad[2] || root.view.reserved-bad[3];
-                            hint: !self.bad && reserved-row.pending ? "Not applied yet" : root.view.reserved-hint;
-                            reserved-row := HorizontalLayout {
-                                // A field is being typed in, and hasn't been handed over.
-                                property <bool> pending;
-                                spacing: 8px;
-                                alignment: start;
-                                for r[k] in root.view.reserved: VerticalLayout {
-                                    spacing: 4px;
-                                    FieldLabel { text: k == 0 ? "Top" : k == 1 ? "Right" : k == 2 ? "Bottom" : "Left"; }
-                                    side := Entry {
-                                        preferred-width: 72px;
-                                        min-width: 52px;
-                                        value: r;
-                                        label: "Reserved at the " + (k == 0 ? "top" : k == 1 ? "right" : k == 2 ? "bottom" : "left");
-                                        invalid: root.view.reserved-bad[k];
-                                        changed pending => { reserved-row.pending = self.pending; }
-                                        commit(text) => { root.act("reserved", k + ":" + text, 0); }
+                    HorizontalLayout {
+                        alignment: start;
+                        GridLayout {
+                            spacing-horizontal: 22px;
+                            spacing-vertical: 14px;
+                            Field {
+                                label: "Variable refresh rate";
+                                hint: root.view.vrr-capable ? "Off, on, or only for fullscreen apps." : "This monitor doesn't say it supports VRR.";
+                                Select { options: root.view.vrr-options; selected: root.view.vrr; label: "Variable refresh rate"; select-height: 34px; chosen(i) => { root.act("vrr", "" + i, 0); } }
+                            }
+                            Field {
+                                label: "Reserved area";
+                                bad: root.view.reserved-bad[0] || root.view.reserved-bad[1] || root.view.reserved-bad[2] || root.view.reserved-bad[3];
+                                hint: !self.bad && reserved-row.pending ? "Not applied yet" : root.view.reserved-hint;
+                                reserved-row := HorizontalLayout {
+                                    // A field is being typed in, and hasn't been handed over.
+                                    property <bool> pending;
+                                    spacing: 8px;
+                                    alignment: start;
+                                    for r[k] in root.view.reserved: VerticalLayout {
+                                        spacing: 4px;
+                                        FieldLabel { text: k == 0 ? "Top" : k == 1 ? "Right" : k == 2 ? "Bottom" : "Left"; }
+                                        side := Entry {
+                                            preferred-width: 72px;
+                                            min-width: 52px;
+                                            value: r;
+                                            label: "Reserved at the " + (k == 0 ? "top" : k == 1 ? "right" : k == 2 ? "bottom" : "left");
+                                            invalid: root.view.reserved-bad[k];
+                                            changed pending => { reserved-row.pending = self.pending; }
+                                            commit(text) => { root.act("reserved", k + ":" + text, 0); }
+                                        }
                                     }
                                 }
                             }
