@@ -1,6 +1,7 @@
 //! The sidebar: its pages in groups, each with a short status, filtered by the search field.
 //! Network's pages (Wi-Fi, Wired, VPN, Hotspot) are its sub-items, shown under it unless it's
-//! folded, and when the search finds them.
+//! folded, and when the search finds them. Settings has its own button at the bottom, so it's
+//! listed only as a search result.
 
 use slint::{ModelRc, SharedString, VecModel};
 
@@ -19,13 +20,16 @@ pub struct Entry {
     pub parent: Option<&'static str>,
 }
 
-const GROUPS: [&str; 3] = ["CONNECTIONS", "DEVICES", "PERSONAL"];
+const GROUPS: [&str; 3] = ["CONNECTIONS", "DEVICES", LITUUS];
+/// The group of the pages that are only listed while searching.
+pub const LITUUS: &str = "LITUUS";
 
 fn matches(entry: &Entry, query: &str) -> bool {
     let query = query.trim().to_lowercase();
-    query.is_empty()
-        || entry.label.to_lowercase().contains(&query)
-        || entry.keywords.split(' ').any(|k| k.starts_with(&query))
+    if query.is_empty() {
+        return entry.group != LITUUS;
+    }
+    entry.label.to_lowercase().contains(&query) || entry.keywords.split(' ').any(|k| k.starts_with(&query))
 }
 
 /// The items shown, in order: each top-level item (if it or a sub-item matches the search), then
@@ -147,11 +151,11 @@ mod tests {
                 parent: None,
             },
             Entry {
-                id: "appearance",
-                label: "Appearance",
-                icon: "palette",
-                group: "PERSONAL",
-                keywords: "theme colours dark light",
+                id: "settings",
+                label: "Settings",
+                icon: "settings",
+                group: LITUUS,
+                keywords: "appearance theme colours dark light",
                 status: String::new(),
                 parent: None,
             },
@@ -162,7 +166,8 @@ mod tests {
     fn groups_keep_their_order_and_drop_when_empty() {
         let g = groups(&entries(), "", "bluetooth", &[]);
         let titles: Vec<String> = g.iter().map(|g| g.title.to_string()).collect();
-        assert_eq!(titles, ["CONNECTIONS", "PERSONAL"]);
+        // Settings is the button below the list, not one of its pages.
+        assert_eq!(titles, ["CONNECTIONS"]);
         assert!(g[0].items.row_data(4).unwrap().current);
         assert_eq!(g[0].items.row_data(4).unwrap().sub, "2 on");
     }
@@ -178,13 +183,16 @@ mod tests {
         assert_eq!(ids("blue"), ["bluetooth"]);
         // A sub-item is found under its item, even when that's folded.
         assert_eq!(ids("WIFI"), ["network", "wifi"]);
-        assert_eq!(ids(""), ["network", "bluetooth", "appearance"]);
-        assert_eq!(ids("dark"), ["appearance"]);
+        assert_eq!(ids(""), ["network", "bluetooth"]);
+        // The app's own look is in Settings.
+        assert_eq!(ids("dark"), ["settings"]);
+        assert_eq!(ids("Appearance"), ["settings"]);
         assert!(ids("zzz").is_empty());
         assert_eq!(first_match(&entries(), "head"), Some("bluetooth"));
         assert_eq!(first_match(&entries(), "wireg"), Some("vpn"));
         assert_eq!(first_match(&entries(), "wire"), Some("wired"));
         assert_eq!(first_match(&entries(), "net"), Some("network"));
+        assert_eq!(first_match(&entries(), "theme"), Some("settings"));
         assert_eq!(first_match(&entries(), "zzz"), None);
     }
 
