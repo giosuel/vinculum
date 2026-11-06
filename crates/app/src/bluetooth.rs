@@ -311,7 +311,14 @@ pub fn nav(state: &State, current: bool) -> NavItem {
             },
         }
     };
-    NavItem { id: s("bluetooth"), label: s("Bluetooth"), sub: s(sub), icon: s("bluetooth"), current }
+    NavItem {
+        id: s("bluetooth"),
+        label: s("Bluetooth"),
+        sub: s(sub),
+        icon: s("bluetooth"),
+        current,
+        ..NavItem::default()
+    }
 }
 
 /// The paired devices for the tray's popup (three at most), connected first: (id "bt:path", name, meta, connected).

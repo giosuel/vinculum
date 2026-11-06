@@ -166,7 +166,7 @@ When you join a network, Lituus asks where to keep its password:
 | Key | Action |
 |---|---|
 | <kbd>Ctrl</kbd> <kbd>K</kbd> | Find a setting (the sidebar's search) |
-| <kbd>/</kbd> | Search networks |
+| <kbd>/</kbd> | Search the Wi-Fi networks or the VPNs |
 | <kbd>↑</kbd> <kbd>↓</kbd> | Select a network or connection |
 | <kbd>Enter</kbd> | Connect |
 | <kbd>E</kbd> | Edit the selected connection |
