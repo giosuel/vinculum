@@ -89,6 +89,38 @@ export component Switch inherits Rectangle {
     }
 }
 
+/// A switch in a pill with its label, as the hero's master switches are: the whole pill
+/// toggles. note: a short machine value after the label ("2:41"), if any.
+export component PillSwitch inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <string> note;
+    callback toggled();
+    width: pill.preferred-width;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.ctrl-border;
+    background: touch.has-hover ? Theme.sel-bg : Theme.input-bg;
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.toggled(); }
+    }
+    pill := HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 6px;
+        spacing: 10px;
+        Text { text: root.label; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+        if root.note != "": Text { text: root.note; color: Theme.accent; font-size: 12px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+        Switch {
+            on: root.on;
+            label: root.label;
+            switch-width: 40px;
+            y: (parent.height - self.height) / 2;
+            toggled => { root.toggled(); }
+        }
+    }
+}
+
 /// The small uppercase label above a group of rows.
 export component SectionLabel inherits Text {
     color: Theme.faint;
