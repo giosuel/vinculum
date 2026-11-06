@@ -6,9 +6,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
 use lituus_sound::{Session, Snapshot, Volume};
-use slint::SharedString;
+use slint::{Model, SharedString};
 
-use crate::{APP, HeroInfo, MainWindow, SoundApp, SoundCard, SoundDevice, SoundView, model, update};
+use crate::{APP, HeroInfo, MainWindow, SoundApp, SoundCard, SoundView, model, update};
 
 /// What the page asks the sound server for.
 #[derive(Clone, Debug, PartialEq)]
@@ -160,13 +160,21 @@ fn send(state: &State, command: Command) {
     }
 }
 
-/// What a click or a drag on the page does: (verb, id, value).
+/// The command a page needs to start PipeWire's PulseAudio service.
+pub const NOT_RUNNING_COMMAND: &str = "systemctl --user enable --now pipewire-pulse";
+
+/// What a click or a drag on the page does: (verb, id, value). The device lists send the
+/// device's place in the list as the value.
 pub fn act(state: &mut State, verb: &str, id: &str, value: f32) -> Option<(&'static str, &'static str, bool)> {
+    if verb == "dismiss" {
+        state.error = None;
+        return None;
+    }
     let snap = state.snapshot.as_ref()?;
     let percent = (value.max(0.0) * 100.0).round() as u32;
     let command = match verb {
-        "default-sink" => Command::DefaultSink(id.to_owned()),
-        "default-source" => Command::DefaultSource(id.to_owned()),
+        "default-sink" => Command::DefaultSink(snap.sinks.get(value as usize)?.name.clone()),
+        "default-source" => Command::DefaultSource(snap.sources.get(value as usize)?.name.clone()),
         "out-volume" => {
             let d = snap.default_sink()?;
             Command::SinkVolume(d.index, d.volume.with_percent(percent))
@@ -223,6 +231,26 @@ fn icon(kind: &str) -> &'static str {
     }
 }
 
+/// What it is, for a device that says nothing about its bus or ports.
+fn kind_name(kind: &str) -> &'static str {
+    match kind {
+        "headphones" => "Headphones",
+        "headset" => "Headset",
+        "tv" => "TV or monitor",
+        "webcam" => "Webcam",
+        "microphone" => "Microphone",
+        _ => "Speakers",
+    }
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    match n {
+        0 => format!("no {one}"),
+        1 => format!("1 {one}"),
+        n => format!("{n} {many}"),
+    }
+}
+
 fn s(text: impl AsRef<str>) -> SharedString {
     SharedString::from(text.as_ref())
 }
@@ -245,9 +273,12 @@ pub fn view(state: &State) -> SoundView {
             v.state = s("not-running");
             v.sub = s("Not running");
             v.empty_title = s("PipeWire isn't running");
-            v.empty_text = s(
-                "Lituus talks to PipeWire's PulseAudio service (pipewire-pulse). Start it with: systemctl --user enable --now pipewire-pulse",
-            );
+            v.empty_text = s("Lituus uses PipeWire's PulseAudio service. Start it with:");
+            v.empty_command = s(NOT_RUNNING_COMMAND);
+        } else if let Some(error) = &state.error {
+            v.state = s("loading");
+            v.empty_title = s("Couldn't reach PipeWire");
+            v.empty_text = s(format!("{error}. Lituus tries again every few seconds."));
         } else {
             v.state = s("loading");
             v.empty_title = s("Reading PipeWire…");
@@ -256,19 +287,19 @@ pub fn view(state: &State) -> SoundView {
     };
     v.state = s("list");
     v.error = s(state.error.clone().unwrap_or_default());
+    // How many of each, as the other pages' lines say it.
     let playing = snap.streams.iter().filter(|s| !s.corked).count();
-    // "PulseAudio (on PipeWire 1.6.2) 15.0.0" is PipeWire 1.6.2 to the user.
-    let server = match snap.server.split_once("(on ").and_then(|(_, r)| r.split_once(')')) {
-        Some((pipewire, _)) => pipewire.to_owned(),
-        None => snap.server.clone(),
-    };
-    v.sub = s(match playing {
-        0 => server,
-        1 => format!("{server} · 1 app playing"),
-        n => format!("{server} · {n} apps playing"),
-    });
-    let default_sink = snap.default_sink().map(|d| d.name.clone());
-    let default_source = snap.default_source().map(|d| d.name.clone());
+    let mut sub = format!(
+        "{} · {}",
+        plural(snap.sinks.len(), "output", "outputs"),
+        plural(snap.sources.len(), "input", "inputs")
+    );
+    match playing {
+        0 => {}
+        1 => sub.push_str(" · 1 app playing"),
+        n => sub.push_str(&format!(" · {n} apps playing")),
+    }
+    v.sub = s(sub);
     let port_name = |d: &lituus_sound::Device| {
         d.active_port.as_deref().and_then(|p| d.ports.iter().find(|x| x.name == p)).map(|p| p.description.clone())
     };
@@ -295,17 +326,24 @@ pub fn view(state: &State) -> SoundView {
             ..HeroInfo::default()
         };
     }
-    let device = |d: &lituus_sound::Device, in_use: bool| {
-        let sub = match (port_name(d), bus(&d.bus)) {
+    // The line under a device in its list: "Bluetooth · Headphones", "USB", "Headphones".
+    let details = |d: &lituus_sound::Device| {
+        s(match (port_name(d), bus(&d.bus)) {
             (Some(p), "") => p,
             (Some(p), b) => format!("{b} · {p}"),
+            (None, "") => kind_name(d.kind()).to_owned(),
             (None, b) => b.to_owned(),
-        };
-        SoundDevice { id: s(&d.name), name: s(&d.description), sub: s(sub), icon: s(icon(d.kind())), in_use }
+        })
     };
-    v.outputs = model(snap.sinks.iter().map(|d| device(d, Some(&d.name) == default_sink.as_ref())).collect());
+    let place = |devices: &[lituus_sound::Device], used: Option<&lituus_sound::Device>| {
+        used.and_then(|u| devices.iter().position(|d| d.name == u.name)).map_or(-1, |i| i as i32)
+    };
     v.outputs_names = model(snap.sinks.iter().map(|d| s(&d.description)).collect());
-    v.inputs = model(snap.sources.iter().map(|d| device(d, Some(&d.name) == default_source.as_ref())).collect());
+    v.outputs_details = model(snap.sinks.iter().map(details).collect());
+    v.output = place(&snap.sinks, snap.default_sink());
+    v.inputs_names = model(snap.sources.iter().map(|d| s(&d.description)).collect());
+    v.inputs_details = model(snap.sources.iter().map(details).collect());
+    v.input = place(&snap.sources, snap.default_source());
     if let Some(d) = snap.default_source() {
         v.in_volume = d.volume.percent() as f32 / 100.0;
         v.in_muted = d.muted;
@@ -360,14 +398,18 @@ fn bus(bus: &str) -> &'static str {
 }
 
 pub fn render(window: &MainWindow, state: &State) {
-    window.set_sound(view(state));
+    let view = view(state);
+    // The Cards tab goes when the last card with profiles does.
+    if view.cards.row_count() == 0 && window.get_sound_tab() > 1 {
+        window.set_sound_tab(0);
+    }
+    window.set_sound(view);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use lituus_sound::{Device, NORM, Port, Stream};
-    use slint::Model;
 
     fn stereo(percent: u32) -> Volume {
         Volume { channels: vec![NORM * percent / 100; 2], sides: vec![-1, 1] }
@@ -436,13 +478,32 @@ mod tests {
         assert!((v.out_volume - 0.45).abs() < 0.001);
         assert_eq!(v.out_ports.row_count(), 2);
         assert!(v.has_balance);
-        let outputs: Vec<(String, bool)> = v.outputs.iter().map(|d| (d.name.to_string(), d.in_use)).collect();
-        assert_eq!(outputs, [("Speakers".into(), true), ("Sony WH-1000XM5".into(), false)]);
-        assert_eq!(v.outputs.row_data(1).unwrap().icon, "headphones");
+        let names: Vec<String> = v.outputs_names.iter().map(|n| n.to_string()).collect();
+        assert_eq!(names, ["Speakers", "Sony WH-1000XM5"]);
+        let details: Vec<String> = v.outputs_details.iter().map(|n| n.to_string()).collect();
+        assert_eq!(details, ["Built in · Speakers", "Bluetooth"]);
+        assert_eq!(v.output, 0, "the output in use is the one chosen");
+        assert_eq!((v.inputs_names.row_count(), v.input), (1, 0));
+        assert_eq!(v.inputs_details.row_data(0).unwrap(), "USB");
         let app = v.apps.row_data(0).unwrap();
         assert_eq!((app.name.as_str(), app.output), ("Firefox", 1));
-        assert_eq!(v.sub, "PipeWire 1.6.2 · 1 app playing");
+        assert_eq!(v.sub, "2 outputs · 1 input · 1 app playing");
         assert_eq!(status(&state), "45%");
+    }
+
+    /// A device that says nothing about where it's plugged in is described by what it is.
+    #[test]
+    fn a_device_without_a_bus_says_what_it_is() {
+        let mut snap = snapshot();
+        snap.sinks[1].bus.clear();
+        snap.sources.clear();
+        snap.streams.clear();
+        snap.default_sink = Some("bluez_output.AC_80".into());
+        let v = view(&State { snapshot: Some(snap), ..State::default() });
+        assert_eq!(v.outputs_details.row_data(1).unwrap(), "Headphones");
+        assert_eq!(v.output, 1);
+        assert_eq!((v.inputs_names.row_count(), v.input), (0, -1));
+        assert_eq!(v.sub, "2 outputs · no input");
     }
 
     #[test]
@@ -460,12 +521,22 @@ mod tests {
         assert_eq!(sent("out-mute", "", 0.0), Some(Command::SinkMute(40, true)));
         assert_eq!(sent("out-port", "1", 0.0), Some(Command::SinkPort(40, "analog-output-headphones".into())));
         assert_eq!(sent("app-output", "7", 0.0), Some(Command::Move(7, 40)));
-        assert_eq!(
-            sent("default-sink", "bluez_output.AC_80", 0.0),
-            Some(Command::DefaultSink("bluez_output.AC_80".into()))
-        );
+        // The device lists send the chosen device's place in the list.
+        assert_eq!(sent("default-sink", "", 1.0), Some(Command::DefaultSink("bluez_output.AC_80".into())));
+        assert_eq!(sent("default-source", "", 0.0), Some(Command::DefaultSource("yeti".into())));
+        assert_eq!(sent("default-sink", "", 5.0), None, "no such output");
         assert_eq!(sent("in-volume", "", 0.5), Some(Command::SourceVolume(50, stereo(50))));
+        assert_eq!(sent("in-mute", "", 0.0), Some(Command::SourceMute(50, true)));
         assert_eq!(sent("app-volume", "99", 0.5), None, "no such app");
+    }
+
+    #[test]
+    fn a_refused_change_shows_until_dismissed() {
+        let mut state =
+            State { snapshot: Some(snapshot()), error: Some("Couldn't change that: busy".into()), ..State::default() };
+        assert_eq!(view(&state).error, "Couldn't change that: busy");
+        act(&mut state, "dismiss", "", 0.0);
+        assert_eq!(view(&state).error, "");
     }
 
     #[test]
@@ -480,6 +551,10 @@ mod tests {
     fn no_pipewire_is_said_plainly() {
         let v = view(&State { not_running: true, ..State::default() });
         assert_eq!(v.state, "not-running");
-        assert!(v.empty_text.contains("pipewire-pulse"));
+        assert!(v.empty_text.contains("PulseAudio"));
+        // The command is on its own, for its Copy button.
+        assert_eq!(v.empty_command, NOT_RUNNING_COMMAND);
+        let v = view(&State { error: Some("Connection refused".into()), ..State::default() });
+        assert_eq!((v.state.as_str(), v.empty_title.as_str()), ("loading", "Couldn't reach PipeWire"));
     }
 }

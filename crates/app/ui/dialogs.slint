@@ -11,6 +11,8 @@ component FieldLabel inherits Text {
 }
 
 /// A one-line text field; with `password`, the text is hidden and an eye button shows it.
+/// `committed` is for a field whose value takes effect by itself (not one with a dialog's
+/// button): Enter, or the focus leaving the field after an edit.
 export component TextField inherits Rectangle {
     in-out property <string> text;
     in property <bool> password;
@@ -23,6 +25,16 @@ export component TextField inherits Rectangle {
     property <bool> shown;
     callback accepted();
     callback edited();
+    callback committed();
+    // Edited since the last commit.
+    property <bool> typed;
+    property <bool> focused: input.has-focus;
+    changed focused => {
+        if !self.focused && self.typed {
+            self.typed = false;
+            root.committed();
+        }
+    }
     init => { if root.autofocus { input.focus(); input.select-all(); } }
     height: 38px;
     border-radius: 8px;
@@ -51,8 +63,15 @@ export component TextField inherits Rectangle {
                 single-line: true;
                 enabled: root.enabled;
                 accessible-label: root.label;
-                accepted => { root.accepted(); }
-                edited => { root.edited(); }
+                accepted => {
+                    root.typed = false;
+                    root.accepted();
+                    root.committed();
+                }
+                edited => {
+                    root.typed = true;
+                    root.edited();
+                }
             }
             if input.text == "" && root.placeholder != "": Text {
                 text: root.placeholder;
@@ -131,16 +150,20 @@ export component Segmented inherits Focusable {
     }
 }
 
+/// A check box and its text; `label` names it for screen readers when it has no text (a column
+/// heading names it on the screen).
 export component CheckBox inherits Focusable {
     in-out property <bool> checked;
     in property <string> text;
+    in property <string> label: text;
     callback toggled(bool);
     height: 24px;
     border-radius: 4px;
     accessible-role: checkbox;
-    accessible-label: text;
+    accessible-label: label;
     accessible-checked: checked;
-    accessible-action-default => { checked = !checked; toggled(checked); }
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { checked = !checked; toggled(checked); } }
     activated => { root.checked = !root.checked; root.toggled(root.checked); }
     HorizontalLayout {
         spacing: 10px;
@@ -152,10 +175,13 @@ export component CheckBox inherits Focusable {
             border-radius: 4px;
             border-width: root.checked ? 0 : 1.5px;
             border-color: Theme.ctrl-border;
-            background: root.checked ? Theme.accent : transparent;
-            if root.checked: Icon { name: "check"; tint: Theme.on-accent; size: 14px; stroke-width: 2px; }
+            // Turned off: faint, and not the accent even when checked.
+            background: !root.checked ? transparent : root.enabled ? Theme.accent : Theme.faint;
+            // Hidden rather than an `if`, and no opacity layer for turned off: one of either per
+            // check box makes the generated code too big to compile in 8 GB.
+            Icon { name: "check"; tint: Theme.on-accent; size: 14px; stroke-width: 2px; visible: root.checked; }
         }
-        Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+        Text { text: root.text; color: root.enabled ? Theme.text : Theme.faint; font-size: 13px; vertical-alignment: center; }
     }
 }
 

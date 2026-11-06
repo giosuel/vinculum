@@ -19,6 +19,8 @@ pub enum Page {
     Bluetooth,
     Displays,
     Sound,
+    Keyboard,
+    Mouse,
     Settings,
 }
 
@@ -32,17 +34,20 @@ impl Page {
             "bluetooth" => Self::Bluetooth,
             "displays" => Self::Displays,
             "sound" => Self::Sound,
+            "keyboard" => Self::Keyboard,
+            "mouse" => Self::Mouse,
             // Lituus's own look moved to Settings.
             "settings" | "appearance" => Self::Settings,
             _ => return None,
         })
     }
 
-    /// The page a sidebar item opens: Network opens its sub-page used last.
+    /// The page a sidebar item opens: Network opens its sub-page used last, Input its first.
     pub fn open(id: &str, last_network: Self) -> Option<Self> {
         match id {
             "network" if last_network.is_network() => Some(last_network),
             "network" => Some(Self::Wifi),
+            "input" => Some(Self::Keyboard),
             _ => Self::from_id(id),
         }
     }
@@ -61,6 +66,8 @@ impl Page {
             Self::Bluetooth => "bluetooth",
             Self::Displays => "displays",
             Self::Sound => "sound",
+            Self::Keyboard => "keyboard",
+            Self::Mouse => "mouse",
             Self::Settings => "settings",
         }
     }
@@ -347,7 +354,7 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
             Vec::new()
         }
         // Bluetooth has a page of its own (bluetooth.rs).
-        Page::Bluetooth | Page::Displays | Page::Sound | Page::Settings => Vec::new(),
+        Page::Bluetooth | Page::Displays | Page::Sound | Page::Keyboard | Page::Mouse | Page::Settings => Vec::new(),
     };
     // Rows grouped by section title, the selection resolved, and the selected row's details.
     view.row_ids = rows.iter().flat_map(|(_, r)| r.iter().map(|r| r.id.clone())).collect();
@@ -394,6 +401,8 @@ fn page_title(page: Page) -> &'static str {
         Page::Bluetooth => "Bluetooth",
         Page::Displays => "Displays",
         Page::Sound => "Sound",
+        Page::Keyboard => "Keyboard",
+        Page::Mouse => "Mouse & touchpad",
         Page::Settings => "Settings",
     }
 }
