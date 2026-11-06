@@ -3,7 +3,7 @@
 // user does goes back through one callback, `act(verb, argument)`.
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Battery, Spinner } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel } from "controls.slint";
+import { Button, IconButton, Switch, SectionLabel, Scroll } from "controls.slint";
 import { TextField, Segmented, CheckBox, Modal } from "dialogs.slint";
 import { Details, DetailsPane } from "details.slint";
 import { HeroInfo } from "shell.slint";
@@ -66,8 +66,12 @@ export struct BtPair {
 
 component BtListRow inherits Rectangle {
     in property <BtRow> entry;
+    /// Whether the selected row scrolls into view (after a move with the keyboard).
+    in property <bool> follow;
     callback clicked();
     callback button-clicked();
+    /// Its place in the window, for the list to scroll to.
+    callback reveal(length, length);
     height: 52px;
     border-radius: 8px;
     background: entry.selected ? Theme.accent-soft-bg : touch.has-hover ? Theme.sel-bg : transparent;
@@ -107,6 +111,12 @@ component BtListRow inherits Rectangle {
             clicked => { root.button-clicked(); }
         }
     }
+    // Rows are made anew with each update, so this runs once the new selected row is laid out.
+    Timer {
+        interval: 1ms;
+        running: root.follow && root.entry.selected;
+        triggered => { self.running = false; root.reveal(root.absolute-position.y, root.height); }
+    }
 }
 
 /// A small switch-like label on the adapter card ("✓ Visible · 2:41").
@@ -137,6 +147,8 @@ component Pill inherits Rectangle {
 export component BluetoothPage inherits HorizontalLayout {
     spacing: 14px;
     in property <BtPage> page;
+    /// Set by the arrow keys, so the selected row stays in view; scrolling clears it.
+    in-out property <bool> follow-selection;
     /// Moves the keyboard focus back to the window after a click.
     callback act(string, string);
 
@@ -217,36 +229,38 @@ export component BluetoothPage inherits HorizontalLayout {
                     }
                 }
             }
-            if root.page.state == "list": Flickable {
+            // At least three rows before the page itself scrolls.
+            if root.page.state == "list": list := Scroll {
                 vertical-stretch: 1;
-                content-height: rows.preferred-height;
-                rows := VerticalLayout {
-                    alignment: start;
+                min-height: 160px;
+                spacing: 2px;
+                bar-inset: -8px;
+                scrolled => { root.follow-selection = false; }
+                for section[si] in root.page.sections: VerticalLayout {
                     spacing: 2px;
-                    for section[si] in root.page.sections: VerticalLayout {
-                        spacing: 2px;
-                        padding-top: si == 0 ? 4px : 14px;
-                        HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            height: 22px;
-                            spacing: 6px;
-                            SectionLabel { text: section.title; vertical-alignment: center; horizontal-stretch: 1; }
-                            if section.busy != "": Spinner { y: (parent.height - 12px) / 2; }
-                            if section.busy != "": Text { text: section.busy; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
-                        }
-                        for row in section.rows: BtListRow {
-                            entry: row;
-                            clicked => { root.act("select", row.id); }
-                            button-clicked => { root.act("row-button", row.id); }
-                        }
-                        if section.rows.length == 0 && section.empty != "": HorizontalLayout {
-                            padding-left: 10px;
-                            padding-right: 10px;
-                            padding-top: 6px;
-                            padding-bottom: 6px;
-                            Text { text: section.empty; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
-                        }
+                    padding-top: si == 0 ? 4px : 14px;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        height: 22px;
+                        spacing: 6px;
+                        SectionLabel { text: section.title; vertical-alignment: center; horizontal-stretch: 1; }
+                        if section.busy != "": Spinner { y: (parent.height - 12px) / 2; }
+                        if section.busy != "": Text { text: section.busy; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                    }
+                    for row in section.rows: BtListRow {
+                        entry: row;
+                        follow: root.follow-selection;
+                        reveal(top, size) => { list.reveal(top, size); }
+                        clicked => { root.follow-selection = false; root.act("select", row.id); }
+                        button-clicked => { root.act("row-button", row.id); }
+                    }
+                    if section.rows.length == 0 && section.empty != "": HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        Text { text: section.empty; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
                     }
                 }
             }
