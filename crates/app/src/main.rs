@@ -3234,6 +3234,49 @@ mod tests {
         assert!(list.size().width > 1600.0, "{}", list.size().width);
     }
 
+    /// Sound chooses the output and the input from a list each, with no button per device; in
+    /// the owner's window the volume slider and the lists keep their own widths.
+    #[test]
+    fn sound_devices_are_chosen_from_a_list() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("sound".into());
+        let names = |n: &[&str]| super::model(n.iter().map(|&n| SharedString::from(n)).collect());
+        window.set_sound(super::SoundView {
+            state: "list".into(),
+            outputs_names: names(&["Speakers", "Samsung TV (HDMI)", "Sony WH-1000XM5"]),
+            outputs_details: names(&["Built in · Speakers", "TV or monitor", "Bluetooth"]),
+            output: 1,
+            inputs_names: names(&["Blue Yeti"]),
+            inputs_details: names(&["USB"]),
+            input: 0,
+            out_volume: 0.5,
+            has_balance: true,
+            max: 1.0,
+            ..super::SoundView::default()
+        });
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        window.show().unwrap();
+        // The control, not its label's text.
+        let control = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() != Some(AccessibleRole::Text))
+                .expect(label)
+        };
+        let width = |label: &str| control(label).size().width;
+        assert!(width("Output device") <= 240.0, "{}", width("Output device"));
+        assert!(width("Input device") <= 240.0, "{}", width("Input device"));
+        assert!(width("Output volume") <= 640.0, "{}", width("Output volume"));
+        assert!(ElementHandle::find_by_accessible_label(&window, "Use").next().is_none());
+        assert_eq!(control("Output device").accessible_role(), Some(AccessibleRole::Combobox));
+        assert_eq!(control("Output device").accessible_value().as_deref(), Some("Samsung TV (HDMI)"));
+
+        // With no card left, the Cards tab goes and the page shows the devices.
+        window.set_sound_tab(2);
+        super::sound::render(&window, &super::sound::State::default());
+        assert_eq!(window.get_sound_tab(), 0);
+    }
+
     /// With Network's sub-items open, the sidebar's pages scroll in the smallest window instead
     /// of pushing Settings and Airplane mode out of it.
     #[test]
