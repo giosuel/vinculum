@@ -6,7 +6,7 @@ import { Theme } from "theme.slint";
 import { Icon, Spinner } from "icons.slint";
 import { Button, IconButton, Switch, CardTitle, Banner, Scroll, Focusable, Focus } from "controls.slint";
 import { ViewSwitcher, Select } from "dialogs.slint";
-import { Hero, HeroInfo, Card, SettingRow } from "shell.slint";
+import { Hero, HeroInfo, Card, SettingRow, EmptyState } from "shell.slint";
 
 /// An app playing. output: its output's place in `outputs`.
 export struct SoundApp { id: string, name: string, sub: string, volume: float, muted: bool, output: int }
@@ -474,42 +474,12 @@ export component SoundPage inherits VerticalLayout {
 
         if root.page.state != "list": Card {
             vertical-stretch: 1;
-            VerticalLayout {
-                alignment: center;
-                spacing: 14px;
-                padding: 18px;
-                if root.page.state == "loading": HorizontalLayout { alignment: center; Spinner { size: 20px; } }
-                if root.page.state != "loading": HorizontalLayout { alignment: center; Icon { name: "volume-off"; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
-                Text { text: root.page.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
-                if root.page.empty-text != "": HorizontalLayout {
-                    alignment: center;
-                    Text { text: root.page.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; max-width: 460px; }
-                }
-                if root.page.empty-command != "": HorizontalLayout {
-                    alignment: center;
-                    Rectangle {
-                        border-radius: 8px;
-                        border-width: 1px;
-                        border-color: Theme.border2;
-                        background: Theme.surface;
-                        width: command.preferred-width;
-                        height: 46px;
-                        copy-field := TextInput { visible: false; text: root.page.empty-command; read-only: true; }
-                        command := HorizontalLayout {
-                            padding-left: 14px;
-                            padding-right: 8px;
-                            spacing: 12px;
-                            Text { text: root.page.empty-command; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; }
-                            Button {
-                                label: "Copy";
-                                button-height: 28px;
-                                min-width: self.preferred-width;
-                                y: (parent.height - self.height) / 2;
-                                clicked => { copy-field.select-all(); copy-field.copy(); }
-                            }
-                        }
-                    }
-                }
+            EmptyState {
+                icon: "volume-off";
+                loading: root.page.state == "loading";
+                title: root.page.empty-title;
+                text: root.page.empty-text;
+                command: root.page.empty-command;
             }
         }
     }

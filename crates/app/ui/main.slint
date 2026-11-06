@@ -9,11 +9,11 @@ import "fonts/JetBrainsMono-Medium.ttf";
 import { Palette } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Logo } from "icons.slint";
-import { Button, IconButton, AddButton, Switch, PillSwitch, SectionLabel, Banner, Kbd, Scroll, Focusable, Focus } from "controls.slint";
+import { Button, IconButton, AddButton, Switch, PillSwitch, SectionLabel, Banner, Kbd, Hint, Scroll, Focusable, Focus } from "controls.slint";
 import { JoinDialog, TextField, Segmented, FormRow, Modal } from "dialogs.slint";
 import { QuickWindow, QuickRow } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
-import { Sidebar, Hero, HeroSubject, Card, SettingRow, NavItem, NavGroup, HeroInfo } from "shell.slint";
+import { Sidebar, Hero, HeroSubject, Card, SettingRow, EmptyState, NavItem, NavGroup, HeroInfo } from "shell.slint";
 import { SettingsHero, AppearanceSettings, ColourFiles, ThemeSwatch, ColourChip, SourceRow } from "appearance.slint";
 import { SendFilesDialog, IncomingFileDialog, FilesView, FileRow } from "files.slint";
 import { DisplaysPage, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeepDialog, ConfigDialog } from "displays.slint";
@@ -22,7 +22,7 @@ import { KeyboardPage, MousePage, KeyboardView, MouseView, InputRow, InputSectio
 import { BluetoothPage, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, Focus, FilesView, FileRow, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, Focus, Hint, FilesView, FileRow, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -84,6 +84,7 @@ export component MainWindow inherits Window {
     in property <string> version;
     in property <[NavGroup]> nav-groups;
     property <int> nav-focus-requests;
+    property <int> nav-list-focus-requests;
     in property <string> hostname;
     in property <string> page: "wifi";
     in property <string> page-title: "Wi-Fi";
@@ -105,12 +106,18 @@ export component MainWindow inherits Window {
     in property <[Section]> sections;
     in property <bool> has-details;
     in property <Details> details;
-    // Shown instead of the list: Wi-Fi off, nothing found, NetworkManager not running.
+    // Shown instead of the list: Wi-Fi off, nothing found, NetworkManager not running. No icon:
+    // reading NetworkManager, with a spinner. `empty-page`: the page has nothing else to show
+    // (Wi-Fi off, no VPN yet), so the hero is only its title and line.
     in property <string> empty-icon;
     in property <string> empty-title;
     in property <string> empty-text;
+    in property <string> empty-command;
     in property <string> empty-action;
+    in property <bool> empty-page;
     in property <string> banner;
+    /// The keys in the bar at the bottom that work on the page shown, from Rust.
+    in property <[Hint]> hints;
     // Settings page.
     in property <string> config-path;
     // Files over Bluetooth (see files.slint).
@@ -151,7 +158,6 @@ export component MainWindow inherits Window {
     callback ap-act(string, int);
     in property <[Toggle]> options;
     callback option-toggled(string);
-    in property <string> placeholder;
     // A message above the list: an error ("danger"), a polkit problem ("warn"), or a note ("info").
     in property <string> message;
     in property <string> message-tone: "info";
@@ -325,6 +331,8 @@ export component MainWindow inherits Window {
             if root.confirm-open && event.text == Key.Escape { root.confirm-cancelled(); return accept; }
             if root.confirm-open { return reject; }
             if event.modifiers.control && (event.text == "k" || event.text == "K") { root.nav-focus-requests += 1; return accept; }
+            // From the page (or no control) to the sidebar's pages; the sidebar sends it back.
+            if event.text == Key.F6 && !root.modal-open && !root.editor-open { root.nav-list-focus-requests += 1; return accept; }
             // The Keyboard page: Alt+↑↓ moves the selected layout, Del removes it.
             if root.page == "keyboard" && event.modifiers.alt && event.text == Key.UpArrow { root.input-act("layout-up", "", 0); return accept; }
             if root.page == "keyboard" && event.modifiers.alt && event.text == Key.DownArrow { root.input-act("layout-down", "", 0); return accept; }
@@ -356,7 +364,12 @@ export component MainWindow inherits Window {
                 airplane: root.airplane;
                 hostname: root.hostname;
                 focus-requests: root.nav-focus-requests;
+                list-focus-requests: root.nav-list-focus-requests;
+                // Enter or a click opens the page; the window's keys work there. (A keyboard user
+                // keeps the focus on the page's item: Focusable takes it back.)
                 navigate(id) => { root.navigate(id); keys.focus(); }
+                // F6: to the page's first control, as Tab from just before the page would.
+                leave => { page-start.focus(); Focus.keyboard = true; Focus.step(true); }
                 fold(id) => { root.nav-fold(id); }
                 search(text) => { root.nav-search(text); }
                 search-accepted => { root.nav-search-accepted(); }
@@ -370,6 +383,9 @@ export component MainWindow inherits Window {
                 // The same minimum in every state, so the first snapshot doesn't change the
                 // window's limits while it's being mapped.
                 min-width: 790px;
+                // Where F6 from the sidebar starts: Tab goes on from here to the page's first
+                // control.
+                page-start := FocusScope { height: 0; focus-on-tab-navigation: false; focus-on-click: false; }
                 if root.banner != "": Rectangle {
                     height: 40px;
                     background: Theme.warn-bg;
@@ -387,13 +403,16 @@ export component MainWindow inherits Window {
                     padding-right: 22px;
                     spacing: 14px;
                     // Network's pages: Wi-Fi, Wired, VPN and Hotspot, each with its hero.
-                    if root.network-page: Hero {
+                    if root.network-page: network-hero := Hero {
+                        // With nothing on the page (Wi-Fi off, no VPN yet, no Wi-Fi card for a
+                        // hotspot), only the title and its line: the card says the rest.
+                        property <bool> empty: root.empty-page || (root.page == "hotspot" && !root.hotspot-available);
                         title: root.page-title;
                         sub: root.net-sub;
-                        hero-height: root.compact ? 136px : 206px;
+                        hero-height: root.compact || self.empty ? 136px : 206px;
                         compact: root.compact;
                         aside: net-tools.width + 18px;
-                        HeroSubject {
+                        if !network-hero.empty: HeroSubject {
                             x: 24px;
                             y: parent.height - self.height - (root.compact ? 16px : 22px);
                             width: parent.width - 48px;
@@ -466,7 +485,7 @@ export component MainWindow inherits Window {
                             }
                             if root.show-rescan && root.wifi-on: IconButton { icon: "rescan"; label: "Rescan"; size: 34px; clicked => { root.rescan(); } }
                         }
-                        if root.network-page && root.page != "hotspot" && root.placeholder == "": HorizontalLayout {
+                        if root.network-page && root.page != "hotspot": HorizontalLayout {
                             vertical-stretch: 1;
                             spacing: 14px;
                             list-card := Card {
@@ -506,17 +525,15 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
-                            if root.empty-title != "": VerticalLayout {
+                            if root.empty-title != "": EmptyState {
                                 vertical-stretch: 1;
-                                alignment: center;
-                                spacing: 14px;
-                                HorizontalLayout { alignment: center; Icon { name: root.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
-                                Text { text: root.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
-                                Text { text: root.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
-                                if root.empty-action != "": HorizontalLayout {
-                                    alignment: center;
-                                    Button { label: root.empty-action; kind: "primary"; button-height: 36px; clicked => { root.empty-action-clicked(); } }
-                                }
+                                icon: root.empty-icon;
+                                loading: root.empty-icon == "";
+                                title: root.empty-title;
+                                text: root.empty-text;
+                                command: root.empty-command;
+                                action: root.empty-action;
+                                action-clicked => { root.empty-action-clicked(); }
                             }
                             // As wide as its label: a button across the list was 800 px wide.
                             if root.bottom-label != "" && root.empty-title == "": HorizontalLayout {
@@ -533,18 +550,12 @@ export component MainWindow inherits Window {
                                 metered-chosen(i) => { root.metered-chosen(i); }
                             }
                         }
-                        if root.placeholder != "" && root.network-page: Card {
-                            vertical-stretch: 1;
-                            Text { text: root.placeholder; color: Theme.muted; font-size: 14px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap; width: 70%; }
-                        }
                         if root.page == "hotspot" && !root.hotspot-available: Card {
                             vertical-stretch: 1;
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: 12px;
-                                HorizontalLayout { alignment: center; Icon { name: "hotspot"; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
-                                Text { text: "No Wi-Fi card"; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
-                                Text { text: "A hotspot needs a Wi-Fi card to share the connection over."; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
+                            EmptyState {
+                                icon: "hotspot";
+                                title: "No Wi-Fi card";
+                                text: "A hotspot needs a Wi-Fi card to share the connection over.";
                             }
                         }
                         // The switch and the state are in the hero; the card is as tall as the form.
@@ -639,7 +650,8 @@ export component MainWindow inherits Window {
                     if root.page == "bluetooth": Hero {
                         title: "Bluetooth";
                         sub: root.bt.hero-sub;
-                        hero-height: root.compact ? 136px : 206px;
+                        // Off, missing or not running: only the title, its line and the switch.
+                        hero-height: root.compact || (root.bt.state != "list" && root.bt.state != "loading") ? 136px : 206px;
                         compact: root.compact;
                         aside: bt-tools.width + 18px;
                         if root.bt.state == "list": HeroSubject {
@@ -787,7 +799,8 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
-                // Keyboard hints
+                // Keyboard hints: only the keys that work on the page and in its state (Rust
+                // works them out).
                 Rectangle {
                     height: 30px;
                     background: Theme.bg;
@@ -796,14 +809,7 @@ export component MainWindow inherits Window {
                         padding-left: 16px;
                         spacing: 18px;
                         alignment: start;
-                        Kbd { key: "Ctrl K"; label: "Find a setting"; }
-                        if root.network-page && root.show-search: Kbd { key: "/"; label: "Search"; }
-                        if root.page != "hotspot": Kbd { key: "↑↓"; label: "Select"; }
-                        if root.page == "keyboard": Kbd { key: "Alt ↑↓"; label: "Move layout"; }
-                        if root.page == "keyboard": Kbd { key: "Del"; label: "Remove"; }
-                        if root.page != "hotspot" && root.page != "keyboard" && root.page != "mouse": Kbd { key: "↵"; label: "Connect"; }
-                        if root.page == "bluetooth": Kbd { key: "p"; label: "Pair"; }
-                        if root.page == "bluetooth": Kbd { key: "s"; label: "Look for devices"; }
+                        for h in root.hints: Kbd { key: h.key; label: h.label; }
                         // Lets the bar (and so the window) grow wider than its hints.
                         Rectangle { horizontal-stretch: 1; }
                     }

@@ -12,7 +12,7 @@ use slint::{ComponentHandle, SharedString};
 use crate::audio;
 use crate::{
     APP, Action, App, BtPage, BtPair, BtRow, BtSection, Chip, ChipRow, Confirm, Confirmed, DetailItem, Details,
-    HeroInfo, MainWindow, NavItem, Toggle, model, update,
+    HeroInfo, Hint, MainWindow, NavItem, Toggle, model, update,
 };
 
 /// How long "Look for devices" looks before it stops by itself (discovery costs battery).
@@ -303,8 +303,10 @@ fn pairing_method(device: &Device) -> (&'static str, &'static str) {
 /// The sidebar's entry.
 pub fn nav(state: &State, current: bool) -> NavItem {
     // Short: it's the status on the right of the sidebar item.
-    let sub = if state.not_running || state.error.is_some() {
-        "—".to_owned()
+    let sub = if state.not_running {
+        "Not running".to_owned()
+    } else if state.error.is_some() {
+        "Error".to_owned()
     } else {
         match (state.snapshot.as_ref(), state.adapter()) {
             (None, _) => String::new(),
@@ -378,7 +380,7 @@ fn empty(state: &State) -> Option<(&'static str, &'static str, String, String, &
     if state.not_running {
         return Some((
             "no-service",
-            "monitor",
+            "bluetooth-off",
             "The Bluetooth service isn't running".into(),
             "Lituus talks to BlueZ, which isn't running. Install the bluez package if needed, then start it:".into(),
             NOT_RUNNING_COMMAND,
@@ -870,6 +872,32 @@ pub fn render(window: &MainWindow, app: &mut App) {
             format!("Only this computer uses the name. Leave it empty for the device's own, {own}.").into(),
         );
     }
+}
+
+/// The keys that work on the page now, for the bar at the bottom: the list's, what Enter does to
+/// the selected device, and s. (p pairs too, but only where Enter says Pair already.)
+pub fn keys(state: &State) -> Vec<Hint> {
+    if empty(state).is_some() {
+        return Vec::new();
+    }
+    let mut keys = Vec::new();
+    if !state.row_ids.is_empty() {
+        keys.push(Hint::new("↑↓", "Select"));
+    }
+    let selected = state.selected.as_deref().and_then(|id| state.device(id)).filter(|d| !state.busy.contains(&d.path));
+    // As `activate`.
+    let enter = selected.and_then(|d| match (d.paired, d.connected) {
+        (true, true) => Some("Disconnect"),
+        (true, false) if !d.blocked => Some("Connect"),
+        (false, _) => Some("Pair"),
+        _ => None,
+    });
+    if let Some(enter) = enter {
+        keys.push(Hint::new("↵", enter));
+    }
+    // With a list, the adapter is on.
+    keys.push(Hint::new("s", "Look for devices"));
+    keys
 }
 
 /// The selection moved with the arrow keys.
@@ -1704,6 +1732,22 @@ mod tests {
         assert!(app.bt.message.is_none() && app.bt.failed.is_none());
     }
 
+    /// The bar says what Enter does to the selected device.
+    #[test]
+    fn the_bar_lists_the_keys_that_work() {
+        let shown =
+            |state: &State| -> Vec<String> { keys(state).iter().map(|h| format!("{} {}", h.key, h.label)).collect() };
+        let mut state = state();
+        let (_, ids, _) = page(&state, Instant::now());
+        state.row_ids = ids;
+        assert_eq!(shown(&state), ["↑↓ Select", "s Look for devices"]);
+        for (name, enter) in [("Sony WH-1000XM5", "Disconnect"), ("Pixel 8", "Connect"), ("MX Keys S", "Pair")] {
+            let device = state.snapshot.as_ref().unwrap().devices.iter().find(|d| d.alias == name).unwrap();
+            state.selected = Some(device.path.clone());
+            assert_eq!(shown(&state), ["↑↓ Select", format!("↵ {enter}").as_str(), "s Look for devices"], "{name}");
+        }
+    }
+
     #[test]
     fn the_states_without_a_list() {
         let state_of = |state: &State| page(state, Instant::now()).0;
@@ -1724,7 +1768,11 @@ mod tests {
             State { not_running: true, error: Some("Bluetooth isn't running".into()), ..State::default() };
         let page = state_of(&not_running);
         assert_eq!((page.state.as_str(), page.empty_command.as_str()), ("no-service", NOT_RUNNING_COMMAND));
-        assert_eq!(nav(&not_running, false).sub, "—");
+        assert_eq!(page.empty_icon, "bluetooth-off");
+        // Said, not a dash; and no keys for a list that isn't there.
+        assert_eq!(nav(&not_running, false).sub, "Not running");
+        assert_eq!(nav(&State { error: Some("Timed out".into()), ..State::default() }, false).sub, "Error");
+        assert!(keys(&not_running).is_empty());
 
         assert_eq!(state_of(&State::default()).state, "loading");
         assert_eq!(nav(&super::tests::state(), false).sub, "1 on");

@@ -15,7 +15,8 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 
 use crate::xkb::{self, Registry};
 use crate::{
-    HeroInfo, InputBar, InputRow, InputSection, KeyboardView, LayoutRow, MainWindow, MouseView, PointerSetting, update,
+    HeroInfo, Hint, InputBar, InputRow, InputSection, KeyboardView, LayoutRow, MainWindow, MouseView, PointerSetting,
+    update,
 };
 
 /// The name of the Input part of Lituus's file.
@@ -849,9 +850,28 @@ fn empty(state: &State, page: &str) -> (SharedString, SharedString, SharedString
     }
 }
 
+/// Whether the pages show their settings: Hyprland is running and its settings were read.
+fn has_settings(state: &State) -> bool {
+    !state.not_running && state.read && state.file.is_some()
+}
+
+/// The keys that work on the Keyboard page now, for the bar at the bottom: with two layouts or
+/// more, choosing one, moving it and removing it (one always stays).
+pub fn keyboard_keys(state: &State) -> Vec<Hint> {
+    if !has_settings(state) || state.settings.keyboard.layouts.len() < 2 {
+        return Vec::new();
+    }
+    vec![Hint::new("↑↓", "Select"), Hint::new("Alt ↑↓", "Move layout"), Hint::new("Del", "Remove")]
+}
+
+/// The same for Mouse & touchpad: its list.
+pub fn mouse_keys(state: &State) -> Vec<Hint> {
+    if has_settings(state) { vec![Hint::new("↑↓", "Select")] } else { Vec::new() }
+}
+
 pub fn keyboard_view(state: &mut State) -> KeyboardView {
     let mut v = KeyboardView::default();
-    if state.not_running || !state.read || state.file.is_none() {
+    if !has_settings(state) {
         (v.state, v.empty_title, v.empty_text) = empty(state, "Keyboard");
         return v;
     }
@@ -1196,7 +1216,7 @@ fn bluez<'a>(p: &Pointer, bt: &'a [lituus_bt::Device]) -> Option<&'a lituus_bt::
 
 pub fn mouse_view(state: &State, bt: &[lituus_bt::Device]) -> MouseView {
     let mut v = MouseView::default();
-    if state.not_running || !state.read || state.file.is_none() {
+    if !has_settings(state) {
         (v.state, v.empty_title, v.empty_text) = empty(state, "Mouse & touchpad");
         return v;
     }
@@ -1771,6 +1791,20 @@ B: PROP=5
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The layouts' keys show with two layouts, not with one, which can't move or go.
+    #[test]
+    fn the_bar_lists_the_keys_that_work() {
+        let (mut st, dir) = state_in("keys");
+        let shown = |st: &State| -> Vec<String> {
+            keyboard_keys(st).iter().map(|h| format!("{} {}", h.key, h.label)).collect()
+        };
+        assert_eq!(shown(&st), ["↑↓ Select", "Alt ↑↓ Move layout", "Del Remove"]);
+        assert_eq!(mouse_keys(&st).len(), 1);
+        act(&weak(), &mut st, "layout-remove", "1", 0.0);
+        assert!(shown(&st).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn no_hyprland() {
         let mut st = State::default();
@@ -1780,6 +1814,8 @@ B: PROP=5
         assert_eq!(v.state, "not-running");
         assert_eq!(v.empty_title, "Hyprland isn't running");
         assert_eq!(status(&st), (String::new(), String::new()));
+        // No keys for lists that aren't there.
+        assert!(keyboard_keys(&st).is_empty() && mouse_keys(&st).is_empty());
         assert_eq!(State::default().settings, InputSettings::default());
         assert_eq!(status(&State::default()), (String::new(), String::new()));
     }
@@ -1823,16 +1859,26 @@ B: PROP=5
             // Add is as wide as its label, not the card.
             assert!(add < 200.0, "{w}: {add}");
         }
-        // In columns, the list of layouts goes down to the bar at the bottom, and Typing is as
-        // tall as its settings: the lower half of the window isn't left empty.
+        // In three columns, every card is as tall as its content, the list of layouts too: down
+        // to the bar, it was a tall empty card.
         let bottom = |name: &str| {
             let card = i_slint_backend_testing::ElementHandle::find_by_element_type_name(&window, name)
                 .next()
                 .unwrap_or_else(|| panic!("{name}"));
             card.absolute_position().y + card.size().height
         };
-        assert!(bottom("LayoutsCard") > 900.0, "{}", bottom("LayoutsCard"));
+        assert!(bottom("LayoutsCard") < 700.0, "{}", bottom("LayoutsCard"));
         assert!(bottom("TypingCard") < 700.0, "{}", bottom("TypingCard"));
+        // In two, the list is as tall as the column beside it.
+        window.window().set_size(LogicalSize::new(1200.0, 1400.0));
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
+        assert!(
+            (bottom("LayoutsCard") - bottom("KeysCard")).abs() < 1.0,
+            "{} {}",
+            bottom("LayoutsCard"),
+            bottom("KeysCard")
+        );
+        assert!(bottom("KeysCard") < 1300.0, "{}", bottom("KeysCard"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -47,6 +47,9 @@ export component Focusable inherits Rectangle {
     /// False when the control handles the pointer itself (a slider, the options of a segmented
     /// control).
     in property <bool> clickable: true;
+    /// False for a control Tab passes over, which the arrow keys reach instead (the sidebar's
+    /// pages but one).
+    in property <bool> tab-stop: true;
     out property <bool> has-focus: scope.has-focus;
     out property <bool> has-hover: touch.has-hover;
     out property <bool> pressed: touch.pressed;
@@ -70,6 +73,7 @@ export component Focusable inherits Rectangle {
     changed called-back => { if self.called-back { scope.focus(); } }
     scope := FocusScope {
         enabled: root.enabled;
+        focus-on-tab-navigation: root.tab-stop;
         // A click doesn't take the focus from the page, so the window's shortcuts keep working.
         focus-on-click: false;
         focus-gained(reason) => {
@@ -391,6 +395,10 @@ export component Banner inherits Rectangle {
         }
     }
 }
+
+/// A key in the bar at the bottom of the window, and what it does on the page shown (Rust sends
+/// only the keys that work there and then).
+export struct Hint { key: string, label: string }
 
 export component Kbd inherits HorizontalLayout {
     in property <string> key;

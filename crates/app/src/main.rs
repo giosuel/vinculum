@@ -1243,6 +1243,13 @@ fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(items))
 }
 
+impl Hint {
+    /// A key in the bar at the bottom ("↵") and what it does there ("Connect").
+    pub fn new(key: &str, label: &str) -> Self {
+        Hint { key: key.into(), label: label.into() }
+    }
+}
+
 /// Reads the monitors again whenever Hyprland says one came or went; when Hyprland isn't there,
 /// looks again now and then.
 fn spawn_hyprland_watcher(weak: slint::Weak<MainWindow>) {
@@ -1480,6 +1487,7 @@ fn render(window: &MainWindow) {
         let airplane = airplane::follow(&mut state.airplane, state.snapshot.as_ref(), state.bt.snapshot.as_ref());
         app.ui.airplane = airplane;
         let v = view::build(app.snapshot.as_ref(), app.error.as_deref(), &app.ui);
+        let network_keys = view::keys(&v);
         let mut entries = nav_entries(&app);
         let statuses = [&v.net_status, &v.net_items.wifi, &v.net_items.wired, &v.net_items.vpn, &v.net_items.hotspot];
         for (entry, status) in entries.iter_mut().zip(statuses) {
@@ -1522,9 +1530,10 @@ fn render(window: &MainWindow) {
         window.set_empty_icon(empty.icon.into());
         window.set_empty_title(empty.title.into());
         window.set_empty_text(empty.text.into());
+        window.set_empty_command(empty.command.into());
         window.set_empty_action(empty.action.into());
+        window.set_empty_page(empty.page);
         window.set_banner(v.banner.into());
-        window.set_placeholder(v.placeholder.into());
         window.set_hostname(v.hostname.into());
         render_hotspot(window, &mut app, v.hotspot.as_ref());
         window.set_share_open(app.share.is_some());
@@ -1590,6 +1599,16 @@ fn render(window: &MainWindow) {
         let state = &mut *app;
         input::render(window, &mut state.input, state.bt.snapshot.as_ref());
         files::render(window, &app.files);
+        // The keys that work on this page now, after the pages above worked out their lists.
+        let mut hints = vec![Hint::new("Ctrl K", "Find a setting"), Hint::new("F6", "Sidebar or page")];
+        hints.extend(match app.ui.page {
+            view::Page::Wifi | view::Page::Wired | view::Page::Vpn => network_keys,
+            view::Page::Bluetooth => bluetooth::keys(&app.bt),
+            view::Page::Keyboard => input::keyboard_keys(&app.input),
+            view::Page::Mouse => input::mouse_keys(&app.input),
+            _ => Vec::new(),
+        });
+        window.set_hints(model(hints));
         render_quick(&mut app, airplane);
     });
 }
@@ -3017,6 +3036,17 @@ mod tests {
         panic!("Tab never reached {label}");
     }
 
+    /// Presses ↓ (or ↑) until the ring is on `label`; how many presses that took.
+    fn arrow_to(window: &MainWindow, key: Key, label: &str) -> usize {
+        for n in 1..=30 {
+            press(window, key);
+            if ring_on(window, label) {
+                return n;
+            }
+        }
+        panic!("the arrow keys never reached {label}");
+    }
+
     /// The sidebar's label for a page ("Bluetooth, 2 connected"), as its button reads it out.
     fn nav_label(window: &MainWindow, id: &str) -> String {
         let groups = window.get_nav_groups();
@@ -3024,9 +3054,10 @@ mod tests {
         if item.sub.is_empty() { item.label.to_string() } else { format!("{}, {}", item.label, item.spoken) }
     }
 
-    /// Tab goes down the sidebar, sub-items included, and on to the page; Shift+Tab comes back;
-    /// Space and Enter work the control with the ring, which is drawn only once the keyboard
-    /// moved the focus.
+    /// The sidebar's pages are one Tab stop, the current page; Settings, Airplane mode and the
+    /// hostname come next, then the page. Shift+Tab comes back; ↑↓ move among the pages and Enter
+    /// opens one; Space and Enter work the control with the ring, which is drawn only once the
+    /// keyboard moved the focus.
     #[test]
     fn the_keyboard_reaches_the_sidebar_and_works_its_controls() {
         let window = window();
@@ -3038,13 +3069,13 @@ mod tests {
         window.on_airplane_toggled(move || *a.borrow_mut() += 1);
         assert!(ElementHandle::find_by_element_id(&window, "Focusable::ring").next().is_none());
 
-        let wired = tab_to(&window, &nav_label(&window, "wired"));
-        let settings = tab_to(&window, "Settings") + wired;
-        let plane = tab_to(&window, "Airplane mode") + settings;
-        let hostname = tab_to(&window, "Change the hostname") + plane;
-        assert!(wired < settings && settings < plane && plane < hostname);
+        // After the search field, the current page, and none of the others.
+        assert_eq!(tab_to(&window, &nav_label(&window, "wifi")), 2);
+        assert_eq!(tab_to(&window, "Settings"), 1);
+        assert_eq!(tab_to(&window, "Airplane mode"), 1);
+        assert_eq!(tab_to(&window, "Change the hostname"), 1);
         // After the sidebar, the page: the hero's button.
-        tab_to(&window, "Add a connection");
+        assert_eq!(tab_to(&window, "Add a connection"), 1);
 
         press(&window, Key::Backtab);
         press(&window, Key::Backtab);
@@ -3056,6 +3087,48 @@ mod tests {
         press(&window, Key::Backtab);
         press(&window, Key::Return);
         assert_eq!(*navigated.borrow(), ["settings"]);
+
+        // Back to the pages, and down them with the arrow keys: Enter opens the one with the ring.
+        press(&window, Key::Backtab);
+        assert!(ring_on(&window, &nav_label(&window, "wifi")));
+        assert_eq!(arrow_to(&window, Key::DownArrow, &nav_label(&window, "vpn")), 2);
+        press(&window, Key::UpArrow);
+        assert!(ring_on(&window, &nav_label(&window, "wired")));
+        press(&window, Key::Return);
+        assert_eq!(*navigated.borrow(), ["settings", "wired"]);
+        // The ends: ↑ on the first page stays there.
+        arrow_to(&window, Key::UpArrow, &nav_label(&window, "network"));
+        press(&window, Key::UpArrow);
+        assert!(ring_on(&window, &nav_label(&window, "network")));
+    }
+
+    /// F6 goes from the page to the sidebar's current page, and from anywhere in the sidebar to
+    /// the page's first control.
+    #[test]
+    fn f6_moves_between_the_sidebar_and_the_page() {
+        let window = window();
+        press(&window, Key::F6);
+        assert!(ring_on(&window, &nav_label(&window, "wifi")));
+        press(&window, Key::F6);
+        assert!(ring_on(&window, "Add a connection"));
+        press(&window, Key::F6);
+        assert!(ring_on(&window, &nav_label(&window, "wifi")));
+        // From the search field and the footer too.
+        tab_to(&window, "Airplane mode");
+        press(&window, Key::F6);
+        assert!(ring_on(&window, "Add a connection"));
+        press(&window, Key::F6);
+        // The search field, just before the current page.
+        press(&window, Key::Backtab);
+        assert!(ElementHandle::find_by_element_id(&window, "Focusable::ring").next().is_none());
+        press(&window, Key::F6);
+        assert!(ring_on(&window, "Add a connection"));
+        // Not out of a dialog.
+        window.set_confirm_title("Forget Aster Café?".into());
+        window.set_confirm_open(true);
+        tab_to(&window, "Cancel");
+        press(&window, Key::F6);
+        assert!(ring_on(&window, "Cancel"));
     }
 
     /// Rust sends the sidebar again after every change, and Slint rebuilds its buttons: the
@@ -3064,7 +3137,8 @@ mod tests {
     fn a_rebuilt_sidebar_keeps_the_focus() {
         let window = window();
         let label = nav_label(&window, "bluetooth");
-        tab_to(&window, &label);
+        tab_to(&window, &nav_label(&window, "wifi"));
+        arrow_to(&window, Key::DownArrow, &label);
         let entries = super::nav_entries(&super::App::default());
         window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &[])));
         assert!(ring_on(&window, &label));
@@ -3075,8 +3149,9 @@ mod tests {
         assert!(ring_on(&window, &label));
     }
 
-    /// Network's chevron is a Tab stop after its label: Enter and Space fold, and the folded
-    /// sidebar, rebuilt, keeps the focus on it.
+    /// As in a tree: ← on Network folds it, → unfolds it or, unfolded, goes to its first page,
+    /// and ← on one of its pages goes back to it. The chevron is for the pointer, no Tab stop;
+    /// the folded sidebar, rebuilt, keeps the focus on Network.
     #[test]
     fn the_keyboard_folds_network() {
         let window = window();
@@ -3086,14 +3161,26 @@ mod tests {
             assert_eq!(id, "network");
             *f.borrow_mut() += 1;
         });
-        let label = tab_to(&window, &nav_label(&window, "network"));
-        assert_eq!(tab_to(&window, "Network pages, expanded"), 1, "after {label} presses");
-        press(&window, Key::Return);
-        press(&window, " ");
-        assert_eq!(*folds.borrow(), 2);
+        let network = nav_label(&window, "network");
+        tab_to(&window, &nav_label(&window, "wifi"));
+        press(&window, Key::LeftArrow);
+        assert!(ring_on(&window, &network));
+        assert_eq!(*folds.borrow(), 0);
+        press(&window, Key::LeftArrow);
+        assert_eq!(*folds.borrow(), 1);
+        // Still unfolded here (the app would fold it): → goes to its first page.
+        press(&window, Key::RightArrow);
+        assert!(ring_on(&window, &nav_label(&window, "wifi")));
+        press(&window, Key::Tab);
+        assert!(!ring_on(&window, "Network pages, expanded"));
+        press(&window, Key::Backtab);
+        press(&window, Key::LeftArrow);
         let entries = super::nav_entries(&super::App::default());
         window.set_nav_groups(super::model(super::nav::groups(&entries, "", "wifi", &["network".to_owned()])));
-        assert!(ring_on(&window, "Network pages, collapsed"));
+        assert!(ring_on(&window, &nav_label(&window, "network")));
+        // Folded: → unfolds.
+        press(&window, Key::RightArrow);
+        assert_eq!(*folds.borrow(), 2);
     }
 
     #[test]
@@ -3513,16 +3600,19 @@ mod tests {
         window.window().set_size(LogicalSize::new(1040.0, 600.0));
         let entries = super::nav_entries(&super::App::default());
         let mut groups = super::nav::groups(&entries, "", "wifi", &[]);
-        let item = |label: &str| super::NavItem {
-            id: label.into(),
-            label: label.into(),
-            icon: "settings".into(),
-            ..Default::default()
-        };
-        groups.push(super::NavGroup {
-            title: "MORE".into(),
-            items: super::model(["Input", "Keyboard", "Mouse", "Power", "Night light"].map(item).to_vec()),
+        // After the pages there are, in their places.
+        let count = groups.iter().map(|g| g.items.row_count()).sum::<usize>() as i32;
+        let items = ["Input", "Keyboard", "Mouse", "Power", "Night light"].iter().zip(count..).map(|(label, place)| {
+            super::NavItem {
+                id: (*label).into(),
+                label: (*label).into(),
+                icon: "settings".into(),
+                place,
+                parent: -1,
+                ..Default::default()
+            }
         });
+        groups.push(super::NavGroup { title: "MORE".into(), items: super::model(items.collect()) });
         window.set_nav_groups(super::model(groups));
         mock_elapsed_time(Duration::from_millis(50));
         let list = ElementHandle::find_by_element_id(&window, "Sidebar::page-list").next().expect("the pages");
@@ -3534,11 +3624,12 @@ mod tests {
             })
         };
         assert!(!in_view("Night light"));
-        tab_to(&window, "Night light");
+        tab_to(&window, &nav_label(&window, "wifi"));
+        arrow_to(&window, Key::DownArrow, "Night light");
         mock_elapsed_time(Duration::from_millis(300));
         assert!(in_view("Night light"));
-        // And round to the top again.
-        tab_to(&window, &nav_label(&window, "wifi"));
+        // And up to the top again.
+        arrow_to(&window, Key::UpArrow, &nav_label(&window, "wifi"));
         mock_elapsed_time(Duration::from_millis(300));
         assert!(in_view(&nav_label(&window, "wifi")));
     }

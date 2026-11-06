@@ -55,11 +55,16 @@ fn shown<'a>(entries: &'a [Entry], query: &str, folded: &[String]) -> Vec<&'a En
 }
 
 /// The groups that have a page matching the search, in order. `folded`: the items whose
-/// sub-items are folded away.
+/// sub-items are folded away. The pages are one Tab stop: the current one, or the first when
+/// it isn't listed; the arrow keys go by each item's place in the list.
 pub fn groups(entries: &[Entry], query: &str, current: &str, folded: &[String]) -> Vec<NavGroup> {
     let current_parent = entries.iter().find(|e| e.id == current).and_then(|e| e.parent);
     let shown = shown(entries, query, folded);
     let current_shown = shown.iter().any(|e| e.id == current);
+    // On a sub-page that's folded away, its item stands for it.
+    let is_current = |e: &Entry| e.id == current || (current_parent == Some(e.id) && !current_shown);
+    let place = |id: &str| shown.iter().position(|e| e.id == id).map_or(-1, |i| i as i32);
+    let stop = shown.iter().position(|e| is_current(e)).unwrap_or(0) as i32;
     GROUPS
         .iter()
         .filter_map(|&group| {
@@ -69,7 +74,6 @@ pub fn groups(entries: &[Entry], query: &str, current: &str, folded: &[String]) 
                 .map(|e| {
                     // An item showing sub-items leaves the statuses to them.
                     let subs_shown = shown.iter().any(|s| s.parent == Some(e.id));
-                    // On a sub-page that's folded away, the item stands for it.
                     let on_sub = current_parent == Some(e.id);
                     let sub = if subs_shown { "" } else { e.status.as_str() };
                     NavItem {
@@ -78,11 +82,14 @@ pub fn groups(entries: &[Entry], query: &str, current: &str, folded: &[String]) 
                         sub: SharedString::from(sub),
                         spoken: SharedString::from(spoken(sub)),
                         icon: SharedString::from(e.icon),
-                        current: e.id == current || (on_sub && !current_shown),
+                        current: is_current(e),
                         open: on_sub && current_shown,
                         indent: e.parent.is_some(),
                         foldable: entries.iter().any(|s| s.parent == Some(e.id)),
                         folded: folded.iter().any(|f| f == e.id),
+                        stop: place(e.id) == stop,
+                        place: place(e.id),
+                        parent: e.parent.map_or(-1, place),
                     }
                 })
                 .collect();
@@ -256,6 +263,39 @@ mod tests {
         let g = groups(&entries(), "", "", &[]);
         let foldable: Vec<bool> = g[0].items.iter().map(|i| i.foldable).collect();
         assert_eq!(foldable, [true, false, false, false, false]);
+    }
+
+    /// The list is one Tab stop, the current page; the arrow keys go by place, and ← from a
+    /// sub-item to its item's place.
+    #[test]
+    fn the_current_page_is_the_tab_stop() {
+        let items = |query: &str, current: &str, folded: &[&str]| -> Vec<(String, bool, i32, i32)> {
+            let folded: Vec<String> = folded.iter().map(|f| f.to_string()).collect();
+            groups(&entries(), query, current, &folded)
+                .iter()
+                .flat_map(|g| g.items.iter().map(|i| (i.id.to_string(), i.stop, i.place, i.parent)).collect::<Vec<_>>())
+                .collect()
+        };
+        let row = |id: &str, stop, place, parent| (id.to_owned(), stop, place, parent);
+        assert_eq!(
+            items("", "wired", &[]),
+            [
+                row("network", false, 0, -1),
+                row("wifi", false, 1, 0),
+                row("wired", true, 2, 0),
+                row("vpn", false, 3, 0),
+                row("bluetooth", false, 4, -1),
+                row("mouse", false, 5, -1),
+            ]
+        );
+        // Folded, Network stands for its page; the places close up.
+        assert_eq!(
+            items("", "wired", &["network"]),
+            [row("network", true, 0, -1), row("bluetooth", false, 1, -1), row("mouse", false, 2, -1)]
+        );
+        // Settings has its own button: the first page is the stop.
+        assert_eq!(items("", "settings", &[])[0], row("network", true, 0, -1));
+        assert_eq!(items("blue", "mouse", &[]), [row("bluetooth", true, 0, -1)]);
     }
 
     #[test]

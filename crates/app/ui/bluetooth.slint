@@ -6,7 +6,7 @@ import { Icon, SignalBars, Battery, Spinner } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel, FieldLabel, Banner, Scroll, Focusable, Focus } from "controls.slint";
 import { TextField, Segmented, CheckBox, FormRow, Modal } from "dialogs.slint";
 import { Details, DetailsPane } from "details.slint";
-import { HeroInfo } from "shell.slint";
+import { HeroInfo, EmptyState } from "shell.slint";
 
 /// battery and bars: -1 when not shown. button: the label of the button on the row, if any.
 export struct BtRow { id: string, name: string, meta: string, tone: string, icon: string, battery: int, bars: int, button: string, selected: bool }
@@ -138,8 +138,6 @@ export component BluetoothPage inherits HorizontalLayout {
     callback act(string, string);
 
     Rectangle {
-        // The command in the "service not running" state, for Copy.
-        copy-field := TextInput { visible: false; text: root.page.empty-command; read-only: true; }
         // As the Network lists: a card beside the details card, up to 520 px; alone, it fills the
         // row.
         min-width: 330px;
@@ -197,51 +195,17 @@ export component BluetoothPage inherits HorizontalLayout {
                     }
                 }
             }
-            if root.page.state != "list": VerticalLayout {
+            if root.page.state != "list": EmptyState {
                 vertical-stretch: 1;
-                alignment: center;
-                spacing: 14px;
                 padding-bottom: 40px;
-                if root.page.state == "loading": HorizontalLayout { alignment: center; Spinner { size: 20px; } }
-                if root.page.empty-icon != "": HorizontalLayout { alignment: center; Icon { name: root.page.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
-                Text { text: root.page.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
-                if root.page.empty-text != "": HorizontalLayout {
-                    alignment: center;
-                    Text { text: root.page.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; max-width: 460px; }
-                }
-                if root.page.empty-command != "": HorizontalLayout {
-                    alignment: center;
-                    Rectangle {
-                        border-radius: 8px;
-                        border-width: 1px;
-                        border-color: Theme.border2;
-                        background: Theme.surface;
-                        width: command.preferred-width;
-                        height: 46px;
-                        command := HorizontalLayout {
-                            padding-left: 14px;
-                            padding-right: 8px;
-                            spacing: 12px;
-                            Text { text: root.page.empty-command; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; }
-                            Button {
-                                label: "Copy";
-                                button-height: 28px;
-                                min-width: self.preferred-width;
-                                y: (parent.height - self.height) / 2;
-                                clicked => { copy-field.select-all(); copy-field.copy(); root.act("copied", ""); }
-                            }
-                        }
-                    }
-                }
-                if root.page.empty-action != "": HorizontalLayout {
-                    alignment: center;
-                    Button {
-                        label: root.page.empty-action;
-                        kind: root.page.state == "no-service" ? "secondary" : "primary";
-                        button-height: 34px;
-                        clicked => { root.act("empty-action", ""); }
-                    }
-                }
+                icon: root.page.empty-icon;
+                loading: root.page.state == "loading";
+                title: root.page.empty-title;
+                text: root.page.empty-text;
+                command: root.page.empty-command;
+                action: root.page.empty-action;
+                copied => { root.act("copied", ""); }
+                action-clicked => { root.act("empty-action", ""); }
             }
         }
     }

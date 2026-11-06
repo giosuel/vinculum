@@ -928,7 +928,7 @@ fn strings(items: impl IntoIterator<Item = String>) -> ModelRc<SharedString> {
 /// The sidebar's status: how many monitors are on.
 pub fn status(state: &State) -> String {
     if state.not_running {
-        return "—".to_owned();
+        return "Not running".to_owned();
     }
     match state.monitors.iter().filter(|m| !m.disabled).count() {
         0 => String::new(),
@@ -940,7 +940,8 @@ pub fn view(state: &State) -> DisplaysView {
     let mut v = DisplaysView::default();
     if state.not_running {
         v.state = s("not-running");
-        v.sub = s("Hyprland isn't running");
+        // The card says why; the hero's line only the state.
+        v.sub = s("Not running");
         v.empty_title = s("Hyprland isn't running");
         v.empty_text = s("The Displays page sets up monitors through Hyprland. Open Lituus inside a Hyprland session.");
         return v;
@@ -1976,6 +1977,6 @@ mod tests {
         let mut st = State { store_read: true, ..State::default() };
         loaded(&mut st, Err(lituus_hypr::Error::NotRunning));
         assert_eq!(view(&st).state, "not-running");
-        assert_eq!(status(&st), "—");
+        assert_eq!(status(&st), "Not running");
     }
 }

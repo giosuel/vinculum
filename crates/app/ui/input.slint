@@ -7,7 +7,7 @@ import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 import { Button, IconButton, AddButton, Switch, CardTitle, SectionLabel, Scroll, Focusable, Focus } from "controls.slint";
 import { Segmented, Select, TextField, Modal } from "dialogs.slint";
-import { Hero, HeroSubject, HeroInfo, Card, SettingRow, LoadBanner } from "shell.slint";
+import { Hero, HeroSubject, HeroInfo, Card, SettingRow, LoadBanner, EmptyState } from "shell.slint";
 import { Slider } from "sound.slint";
 
 /// A row of the Mouse & touchpad list. id: "mouse", "touchpad", or "dev:" and the device's name.
@@ -155,17 +155,11 @@ component StatusBar inherits HorizontalLayout {
 /// Hyprland isn't running, or is being read.
 component Empty inherits Card {
     in property <string> icon;
+    in property <bool> loading;
     in property <string> title;
     in property <string> text;
     vertical-stretch: 1;
-    VerticalLayout {
-        alignment: center;
-        spacing: 12px;
-        padding: 22px;
-        HorizontalLayout { alignment: center; Icon { name: root.icon; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
-        Text { text: root.title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
-        if root.text != "": Text { text: root.text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
-    }
+    EmptyState { icon: root.icon; loading: root.loading; title: root.title; text: root.text; }
 }
 
 // A layout in the list: drag it by its handle, or move it with Alt+↑↓ (the window's keys).
@@ -411,7 +405,8 @@ export component KeyboardPage inherits VerticalLayout {
     Hero {
         title: "Keyboard";
         sub: root.view.state == "list" ? "Every keyboard uses these layouts" : "";
-        hero-height: root.compact ? 136px : 206px;
+        // Hyprland not running: only the title and its line; the card says the rest.
+        hero-height: root.compact || root.view.state == "not-running" ? 136px : 206px;
         compact: root.compact;
         if root.view.state == "list": HeroSubject {
             x: 24px;
@@ -450,11 +445,8 @@ export component KeyboardPage inherits VerticalLayout {
             VerticalLayout {
                 preferred-width: 420px;
                 horizontal-stretch: 1;
-                // The list of layouts goes down to the bar, as Mouse & touchpad's list does, or as
-                // far as the column beside it; the other cards are as tall as their settings.
-                // Three short cards left the lower half of a big window empty. (A minimum rather
-                // than `fill`: that sizes the columns by their least heights, and cut off Keys.)
-                LayoutsCard { min-height: body.height; vertical-stretch: 1; view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+                // As tall as the column beside it; the cards there are as tall as their settings.
+                LayoutsCard { vertical-stretch: 1; view: root.view; act(v, a, x) => { root.act(v, a, x); } }
             }
             VerticalLayout {
                 preferred-width: 420px;
@@ -468,10 +460,12 @@ export component KeyboardPage inherits VerticalLayout {
         if body.three-columns: HorizontalLayout {
             spacing: 14px;
             vertical-stretch: 1;
+            // Every card as tall as its content: down to the bar, the list was mostly empty.
             VerticalLayout {
                 preferred-width: 420px;
                 horizontal-stretch: 1;
-                LayoutsCard { min-height: body.height; vertical-stretch: 1; view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+                alignment: start;
+                LayoutsCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
             }
             VerticalLayout {
                 preferred-width: 420px;
@@ -491,7 +485,7 @@ export component KeyboardPage inherits VerticalLayout {
         if !body.two-columns && !body.three-columns: KeysCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
     }
     if root.view.state == "list": StatusBar { bar: root.view.bar; act(verb) => { root.act(verb, "", 0); } }
-    if root.view.state != "list": Empty { icon: "keyboard"; title: root.view.empty-title; text: root.view.empty-text; }
+    if root.view.state != "list": Empty { icon: "keyboard"; loading: root.view.state == "loading"; title: root.view.empty-title; text: root.view.empty-text; }
 }
 
 component PointerRow inherits Focusable {
@@ -537,7 +531,8 @@ export component MousePage inherits VerticalLayout {
     Hero {
         title: "Mouse & touchpad";
         sub: root.view.sub;
-        hero-height: root.compact ? 136px : 206px;
+        // Hyprland not running: only the title and its line; the card says the rest.
+        hero-height: root.compact || root.view.state == "not-running" ? 136px : 206px;
         compact: root.compact;
         if root.view.state == "list": HeroSubject {
             x: 24px;
@@ -626,7 +621,7 @@ export component MousePage inherits VerticalLayout {
         }
     }
     if root.view.state == "list": StatusBar { bar: root.view.bar; act(verb) => { root.act(verb, "", 0); } }
-    if root.view.state != "list": Empty { icon: "mouse"; title: root.view.empty-title; text: root.view.empty-text; }
+    if root.view.state != "list": Empty { icon: "mouse"; loading: root.view.state == "loading"; title: root.view.empty-title; text: root.view.empty-text; }
 }
 
 /// Adding a keyboard layout: a search over xkeyboard-config's layouts and variants.

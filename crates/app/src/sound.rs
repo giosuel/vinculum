@@ -267,7 +267,7 @@ pub fn status(state: &State) -> String {
     match state.snapshot.as_ref().and_then(|s| s.default_sink()) {
         Some(d) if d.muted => "Muted".to_owned(),
         Some(d) => format!("{}%", d.volume.percent()),
-        None if state.not_running => "—".to_owned(),
+        None if state.not_running => "Not running".to_owned(),
         None => String::new(),
     }
 }
@@ -568,6 +568,8 @@ mod tests {
     fn no_pipewire_is_said_plainly() {
         let v = view(&State { not_running: true, ..State::default() });
         assert_eq!(v.state, "not-running");
+        // The sidebar says so too, not with a dash.
+        assert_eq!(status(&State { not_running: true, ..State::default() }), "Not running");
         assert!(v.empty_text.contains("PulseAudio"));
         // The command is on its own, for its Copy button.
         assert_eq!(v.empty_command, NOT_RUNNING_COMMAND);

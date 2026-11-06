@@ -5,9 +5,9 @@ use lituus_nm::{
     ActiveState, Band, ConnectionKind, Device, DeviceKind, KeyMgmt, Network, SavedConnection, Security, Snapshot,
     WifiJoin, bars, channel,
 };
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{Model, ModelRc, SharedString, VecModel};
 
-use crate::{Action, DetailItem, Details, Row, Section, Toggle};
+use crate::{Action, DetailItem, Details, Hint, Row, Section, Toggle};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Page {
@@ -98,14 +98,22 @@ pub fn navigate(state: &mut UiState, last_network: &mut Page, id: &str) -> Optio
     Some(page)
 }
 
-/// An empty state shown instead of the list.
+/// An empty state shown instead of the list. No icon: still reading, with a spinner.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Empty {
     pub icon: &'static str,
     pub title: String,
     pub text: String,
+    /// A command that fixes it, shown with a Copy button.
+    pub command: String,
     pub action: String,
+    /// The page has nothing else to show (Wi-Fi off, no VPN yet), so the hero is only its title
+    /// and line; not for a search that finds nothing or a list that's empty for now.
+    pub page: bool,
 }
+
+/// The command that starts NetworkManager, for its empty state.
+pub const NOT_RUNNING_COMMAND: &str = "systemctl enable --now NetworkManager";
 
 /// The short statuses of Network's sub-items in the sidebar.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -146,7 +154,6 @@ pub struct View {
     pub details: Option<Details>,
     pub empty: Option<Empty>,
     pub banner: String,
-    pub placeholder: String,
     pub hostname: String,
     pub hotspot: Option<HotspotView>,
 }
@@ -336,19 +343,16 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
             Some(e) => format!("{e}. Lituus needs it to manage connections."),
             None => String::new(),
         };
-        view.empty = Some(Empty {
-            icon: "warning",
-            title: if error.is_some() {
-                "NetworkManager isn't running".into()
-            } else {
-                "Reading NetworkManager…".into()
+        view.empty = Some(match error {
+            Some(_) => Empty {
+                icon: "warning",
+                title: "NetworkManager isn't running".into(),
+                text: "Lituus manages connections through NetworkManager. Start it with:".into(),
+                command: NOT_RUNNING_COMMAND.into(),
+                page: true,
+                ..Empty::default()
             },
-            text: if error.is_some() {
-                "Start it with: systemctl enable --now NetworkManager".into()
-            } else {
-                String::new()
-            },
-            action: String::new(),
+            None => Empty { title: "Reading NetworkManager…".into(), ..Empty::default() },
         });
         return view;
     };
@@ -397,11 +401,33 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
     if let Some(id) = &selected {
         view.details = details(snapshot, state, id).map(Details::from);
     }
-    if view.empty.is_none() && view.row_ids.is_empty() && state.page.is_network() && view.placeholder.is_empty() {
+    if view.empty.is_none() && view.row_ids.is_empty() && state.page.is_network() {
         view.empty = Some(nothing_here(state.page, !state.search.is_empty()));
     }
     view.selected = selected;
     view
+}
+
+/// The keys that work on a Network page now, for the bar at the bottom: the search, the list,
+/// and what Enter and e do to the selected row (the details pane's Connect and Edit).
+pub fn keys(view: &View) -> Vec<Hint> {
+    let mut keys = Vec::new();
+    if view.show_search {
+        keys.push(Hint::new("/", "Search"));
+    }
+    if !view.row_ids.is_empty() {
+        keys.push(Hint::new("↑↓", "Select"));
+    }
+    if let Some(d) = &view.details {
+        let action = |id: &str| d.actions.iter().find(|a| a.id == id && a.enabled);
+        if let Some(connect) = action("connect") {
+            keys.push(Hint::new("↵", &connect.label));
+        }
+        if action("edit").is_some() {
+            keys.push(Hint::new("e", "Edit"));
+        }
+    }
+    keys
 }
 
 fn page_title(page: Page) -> &'static str {
@@ -439,7 +465,7 @@ fn nothing_here(page: Page, searching: bool) -> Empty {
             icon: "search",
             title: "Nothing found".into(),
             text: "No name matches the search.".into(),
-            action: String::new(),
+            ..Empty::default()
         };
     }
     match page {
@@ -447,19 +473,22 @@ fn nothing_here(page: Page, searching: bool) -> Empty {
             icon: "wired",
             title: "No wired network card".into(),
             text: "Plug in a USB network adapter to see it here.".into(),
-            action: String::new(),
+            page: true,
+            ..Empty::default()
         },
         Page::Vpn => Empty {
             icon: "vpn",
             title: "No VPN connections".into(),
             text: "Add a WireGuard, OpenVPN or AnyConnect connection with +, or bring one in from a .conf or .ovpn file, or from openconnect-saml.".into(),
             action: "Import a file…".into(),
+            page: true,
+            ..Empty::default()
         },
         _ => Empty {
             icon: "wifi-off",
             title: "No networks in range".into(),
             text: "Try rescanning.".into(),
-            action: String::new(),
+            ..Empty::default()
         },
     }
 }
@@ -819,7 +848,8 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
             icon: "wifi-off",
             title: "No Wi-Fi card".into(),
             text: "Lituus didn't find a Wi-Fi device. Wired and VPN connections are on their own pages.".into(),
-            action: String::new(),
+            page: true,
+            ..Empty::default()
         });
         return Vec::new();
     };
@@ -830,7 +860,8 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
             icon: "wifi-off",
             title: "Wi-Fi is blocked".into(),
             text: "A hardware switch or airplane mode turned the radio off.".into(),
-            action: String::new(),
+            page: true,
+            ..Empty::default()
         });
         return Vec::new();
     }
@@ -852,7 +883,14 @@ fn wifi_page(snap: &Snapshot, state: &UiState, view: &mut View) -> Vec<(String, 
             ("Off", format!("Turn it on to see networks nearby.{kept}"), "Turn on Wi-Fi")
         };
         view.net_hero = off(sub, "Wi-Fi is off");
-        view.empty = Some(Empty { icon: "wifi", title: "Wi-Fi is off".into(), text, action: action.into() });
+        view.empty = Some(Empty {
+            icon: "wifi",
+            title: "Wi-Fi is off".into(),
+            text,
+            action: action.into(),
+            page: true,
+            ..Empty::default()
+        });
         return Vec::new();
     }
     view.bottom_label = "Connect to hidden network…".into();
@@ -2052,7 +2090,8 @@ pub(crate) mod tests {
         assert_eq!(view.row_ids.len(), 1);
         let state = UiState { search: "zzz".into(), ..UiState::default() };
         let view = build(Some(&home()), None, &state);
-        assert_eq!(view.empty.map(|e| e.title), Some("Nothing found".into()));
+        // The page is still there: the hero keeps its height while typing.
+        assert_eq!(view.empty.map(|e| (e.title, e.page)), Some(("Nothing found".into(), false)));
     }
 
     #[test]
@@ -2063,6 +2102,7 @@ pub(crate) mod tests {
         let empty = view.empty.as_ref().unwrap();
         assert_eq!(empty.action, "Turn on Wi-Fi");
         assert_eq!(empty.text, "Turn it on to see networks nearby. Your saved network is kept.");
+        assert!(empty.page);
         assert_eq!((view.net_hero.sub.as_str(), view.net_hero.name.as_str()), ("Off", "Wi-Fi is off"));
         assert_eq!(view.net_hero.meta, "1 saved network");
         assert_eq!(view.net_items.wifi, "off");
@@ -2097,8 +2137,32 @@ pub(crate) mod tests {
     fn network_manager_missing() {
         let view = build(None, Some("NetworkManager isn't running"), &UiState::default());
         assert!(view.banner.starts_with("NetworkManager isn't running"));
-        assert_eq!(view.empty.map(|e| e.title), Some("NetworkManager isn't running".into()));
+        let empty = view.empty.unwrap();
+        assert_eq!(empty.title, "NetworkManager isn't running");
+        // The command, for its Copy button.
+        assert_eq!((empty.command.as_str(), empty.page), (NOT_RUNNING_COMMAND, true));
         assert!(view.sections.is_empty());
+        // Still reading: a spinner (no icon), and the hero as it will be.
+        let view = build(None, None, &UiState::default());
+        assert_eq!(view.empty.map(|e| (e.icon, e.page)), Some(("", false)));
+    }
+
+    /// The bar lists only the keys that work: Enter says what it does to the selected row, and
+    /// e is there when the row can be edited.
+    #[test]
+    fn the_bar_lists_the_keys_that_work() {
+        let shown =
+            |view: &View| -> Vec<String> { keys(view).iter().map(|h| format!("{} {}", h.key, h.label)).collect() };
+        let mut state = UiState::default();
+        let view = build(Some(&home()), None, &state);
+        // The connected network: Enter would only connect it again.
+        assert_eq!(shown(&view), ["/ Search", "↑↓ Select", "e Edit"]);
+        state.selected = Some(view.row_ids[1].clone());
+        assert_eq!(shown(&build(Some(&home()), None, &state)), ["/ Search", "↑↓ Select", "↵ Connect"]);
+        // Wi-Fi off: no list to move in or search.
+        let mut snap = home();
+        snap.wireless_enabled = false;
+        assert!(shown(&build(Some(&snap), None, &UiState::default())).is_empty());
     }
 
     #[test]

@@ -2,38 +2,71 @@
 // and search, the hero at the top of a page (a big live picture of what the page is about), and
 // the cards below it.
 import { Theme } from "theme.slint";
-import { Icon, Logo } from "icons.slint";
-import { Switch, SectionLabel, Banner, Focusable, Scroll } from "controls.slint";
+import { Icon, Logo, Spinner } from "icons.slint";
+import { Button, Switch, SectionLabel, Banner, Focusable, Scroll, Focus } from "controls.slint";
 
 /// sub: a short status on the right ("Home", "2 on", "45%"), and `spoken`, the same as a screen
 /// reader says it ("2 connected"). open: an item showing its sub-items, on one of their pages.
 /// indent: a sub-item. foldable: an item with sub-items, which its chevron folds away (folded).
-export struct NavItem { id: string, label: string, sub: string, spoken: string, icon: string, current: bool, open: bool, indent: bool, foldable: bool, folded: bool }
+/// The pages are one Tab stop, the `stop` (the current page, else the first); the arrow keys
+/// move between them by `place` (top to bottom, from 0), and from a sub-item to its item's
+/// place, `parent`.
+export struct NavItem { id: string, label: string, sub: string, spoken: string, icon: string, current: bool, open: bool, indent: bool, foldable: bool, folded: bool, stop: bool, place: int, parent: int }
 export struct NavGroup { title: string, items: [NavItem] }
 /// What a page's hero shows: a big icon, a name, a line under it and a monospaced line.
 /// tone: the colour of `meta` ("accent", "muted", "danger", "faint").
 export struct HeroInfo { icon: string, name: string, meta: string, tone: string, detail: string }
 
 // A sub-item is smaller and indented, under its item. An item with sub-items has a chevron that
-// folds them away; the rest of the row goes to the page.
+// folds them away; the rest of the row goes to the page. In the list of pages, only the `stop`
+// is a Tab stop: ↑↓ move the focus, Enter or Space opens the page, and as in a tree, → unfolds
+// (then goes to the first sub-item) and ← folds (or goes from a sub-item to its item).
 component NavButton inherits Rectangle {
     in property <NavItem> item;
+    /// What the arrow keys asked for: the place of the page that takes the focus (-1: the stop),
+    /// and a count that goes up with each request.
+    in property <int> want-place;
+    in property <int> want-serial;
     callback clicked();
     callback fold-clicked();
+    /// An arrow key: the page at this place is to take the focus.
+    callback want(int);
     height: item.indent ? 32px : 36px;
     accessible-role: button;
     accessible-label: item.sub == "" ? item.label : item.label + ", " + (item.spoken != "" ? item.spoken : item.sub);
+    accessible-expandable: item.foldable;
+    accessible-expanded: !item.folded;
     accessible-action-default => { clicked(); }
+    accessible-action-expand => { fold-clicked(); }
     forward-focus: body;
+    changed want-serial => {
+        if root.want-place == root.item.place || (root.want-place == -1 && root.item.stop) {
+            Focus.keyboard = true;
+            body.focus();
+        }
+    }
     body := Focusable {
         x: root.item.indent ? 20px : 0;
         width: parent.width - self.x;
         focus-key: "nav:" + root.item.id;
+        tab-stop: root.item.stop;
         // The sidebar's list would cut off a ring outside it.
         ring-gap: -2px;
         border-radius: root.item.indent ? 9px : 10px;
         background: root.item.current ? Theme.accent-soft-bg : self.has-hover ? Theme.hover : transparent;
         activated => { root.clicked(); }
+        key(event) => {
+            if event.modifiers.control || event.modifiers.alt || event.modifiers.meta { return reject; }
+            if event.text == Key.DownArrow { root.want(root.item.place + 1); return accept; }
+            if event.text == Key.UpArrow { if root.item.place > 0 { root.want(root.item.place - 1); } return accept; }
+            if event.text == Key.RightArrow && root.item.foldable {
+                if root.item.folded { root.fold-clicked(); } else { root.want(root.item.place + 1); }
+                return accept;
+            }
+            if event.text == Key.LeftArrow && root.item.foldable && !root.item.folded { root.fold-clicked(); return accept; }
+            if event.text == Key.LeftArrow && root.item.indent { root.want(root.item.parent); return accept; }
+            reject
+        }
         // The accent bar on the current page's left edge.
         if root.item.current: Rectangle { x: 0; width: 3px; height: parent.height - 12px; y: 6px; border-radius: 1.5px; background: Theme.accent; }
         HorizontalLayout {
@@ -53,23 +86,25 @@ component NavButton inherits Rectangle {
                 font-weight: root.item.current || root.item.open ? 600 : 400;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
+                // The name stays whole; the status beside it elides ("Netw…" beside a folded
+                // Network's "Lumen Home").
+                min-width: self.preferred-width;
                 overflow: elide;
             }
             Text {
                 text: root.item.sub;
                 color: root.item.current ? Theme.accent : Theme.faint;
                 font-size: root.item.indent ? 11px : 12px;
-                font-family: "JetBrains Mono";
                 vertical-alignment: center;
                 overflow: elide;
                 max-width: 90px;
             }
-            // A Tab stop of its own: Space or Enter folds, as a click does.
+            // For the pointer: the keyboard folds with ← and →, so it's no Tab stop.
             if root.item.foldable: Focusable {
                 width: 24px;
                 height: 24px;
                 y: (parent.height - self.height) / 2;
-                focus-key: "nav-fold:" + root.item.id;
+                tab-stop: false;
                 border-radius: 6px;
                 activated => { root.fold-clicked(); }
                 accessible-role: button;
@@ -98,6 +133,10 @@ export component Sidebar inherits Rectangle {
     in property <string> hostname;
     /// Incremented to move the keyboard focus into the search field (Ctrl+K).
     in property <int> focus-requests;
+    /// Incremented to move it to the list of pages (F6 from the page).
+    in property <int> list-focus-requests;
+    /// F6 in the sidebar: the page is to take the focus.
+    callback leave();
     callback navigate(string);
     /// The chevron of an item with sub-items.
     callback fold(string);
@@ -110,114 +149,140 @@ export component Sidebar inherits Rectangle {
     callback hostname-clicked();
     width: 250px;
     background: Theme.panel;
-    VerticalLayout {
-        padding: 12px;
-        padding-top: 14px;
-        spacing: 1px;
-        HorizontalLayout {
-            padding-left: 8px;
-            height: 44px;
-            spacing: 10px;
-            alignment: start;
-            Logo { size: 26px; y: (parent.height - 26px) / 2; }
-            Text { text: "Lituus"; color: Theme.text; font-size: 15px; font-weight: 700; vertical-alignment: center; }
+    // The page the arrow keys (or F6) send the focus to; see NavButton.
+    property <int> want-place: -1;
+    property <int> want-serial;
+    changed list-focus-requests => {
+        // Nothing matches the search: back to the search field.
+        if root.groups.length == 0 {
+            input.focus();
+        } else {
+            root.want-place = -1;
+            root.want-serial += 1;
         }
-        Rectangle {
-            property <int> requests: root.focus-requests;
-            changed requests => { input.focus(); }
-            height: 34px;
-            border-radius: 10px;
-            border-width: 1px;
-            border-color: input.has-focus ? Theme.accent : Theme.ctrl-border;
-            background: Theme.input-bg;
+    }
+    // Only for F6 from any of its controls: no Tab stop of its own.
+    FocusScope {
+        focus-on-tab-navigation: false;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.F6 { root.leave(); return accept; }
+            reject
+        }
+        VerticalLayout {
+            padding: 12px;
+            padding-top: 14px;
+            spacing: 1px;
+            HorizontalLayout {
+                padding-left: 8px;
+                height: 44px;
+                spacing: 10px;
+                alignment: start;
+                Logo { size: 26px; y: (parent.height - 26px) / 2; }
+                Text { text: "Lituus"; color: Theme.text; font-size: 15px; font-weight: 700; vertical-alignment: center; }
+            }
+            Rectangle {
+                property <int> requests: root.focus-requests;
+                changed requests => { input.focus(); }
+                height: 34px;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: input.has-focus ? Theme.accent : Theme.ctrl-border;
+                background: Theme.input-bg;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 6px;
+                    spacing: 8px;
+                    Icon { name: "search"; tint: Theme.muted; size: 14px; y: (parent.height - 14px) / 2; }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        input := TextInput {
+                            color: Theme.text;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                            single-line: true;
+                            accessible-label: "Search settings";
+                            edited => { root.search(self.text); }
+                            accepted => { root.search-accepted(); self.text = ""; root.search(""); root.search-left(); }
+                            key-pressed(event) => {
+                                if event.text == Key.Escape { self.text = ""; root.search(""); root.search-left(); return accept; }
+                                if event.text == Key.F6 { root.leave(); return accept; }
+                                reject
+                            }
+                        }
+                        if input.text == "": Text { x: 0; text: "Search"; color: Theme.faint; font-size: 13px; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        width: kbd.preferred-width + 10px;
+                        height: 18px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 4px;
+                        border-width: 1px;
+                        border-color: Theme.border2;
+                        kbd := Text { text: "Ctrl K"; color: Theme.faint; font-size: 11px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+            }
+            // The pages scroll when they don't fit between the search and Settings (Network's
+            // sub-items in a short window), with the scrollbar in the padding on the right.
+            page-list := Scroll {
+                vertical-stretch: 1;
+                spacing: 1px;
+                bar-inset: -8px;
+                for group in root.groups: VerticalLayout {
+                    spacing: 1px;
+                    SectionLabel { text: group.title; height: 30px; vertical-alignment: bottom; x: 12px; }
+                    Rectangle { height: 4px; }
+                    for item in group.items: NavButton {
+                        item: item;
+                        want-place: root.want-place;
+                        want-serial: root.want-serial;
+                        clicked => { root.navigate(item.id); }
+                        fold-clicked => { root.fold(item.id); }
+                        want(place) => { root.want-place = place; root.want-serial += 1; }
+                    }
+                }
+                if root.groups.length == 0: HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    Text { text: "No setting matches the search."; color: Theme.faint; font-size: 12px; wrap: word-wrap; height: 40px; vertical-alignment: center; }
+                }
+            }
+            // A line where the pages are cut off; always there, so the layout doesn't change.
+            Rectangle { height: 1px; background: page-list.overflows ? Theme.border : transparent; }
+            // A Tab stop of its own, below the list.
+            NavButton {
+                item: { id: "settings", label: "Settings", sub: "", icon: "settings", current: root.settings-current, stop: true, place: -1, parent: -1 };
+                clicked => { root.navigate("settings"); }
+            }
             HorizontalLayout {
                 padding-left: 10px;
-                padding-right: 6px;
-                spacing: 8px;
-                Icon { name: "search"; tint: Theme.muted; size: 14px; y: (parent.height - 14px) / 2; }
-                Rectangle {
-                    horizontal-stretch: 1;
-                    input := TextInput {
-                        color: Theme.text;
-                        font-size: 13px;
-                        vertical-alignment: center;
-                        single-line: true;
-                        accessible-label: "Search settings";
-                        edited => { root.search(self.text); }
-                        accepted => { root.search-accepted(); self.text = ""; root.search(""); root.search-left(); }
-                        key-pressed(event) => {
-                            if event.text == Key.Escape { self.text = ""; root.search(""); root.search-left(); return accept; }
-                            reject
-                        }
-                    }
-                    if input.text == "": Text { x: 0; text: "Search"; color: Theme.faint; font-size: 13px; vertical-alignment: center; }
-                }
-                Rectangle {
-                    width: kbd.preferred-width + 10px;
-                    height: 18px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: 4px;
-                    border-width: 1px;
-                    border-color: Theme.border2;
-                    kbd := Text { text: "Ctrl K"; color: Theme.faint; font-size: 11px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
-                }
+                padding-right: 10px;
+                height: 36px;
+                spacing: 11px;
+                Icon { name: "plane"; tint: Theme.muted; size: 17px; y: (parent.height - 17px) / 2; }
+                Text { text: "Airplane mode"; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                Switch { on: root.airplane; label: "Airplane mode"; y: (parent.height - self.height) / 2; toggled => { root.airplane-toggled(); } }
             }
-        }
-        // The pages scroll when they don't fit between the search and Settings (Network's
-        // sub-items in a short window), with the scrollbar in the padding on the right.
-        page-list := Scroll {
-            vertical-stretch: 1;
-            spacing: 1px;
-            bar-inset: -8px;
-            for group in root.groups: VerticalLayout {
-                spacing: 1px;
-                SectionLabel { text: group.title; height: 30px; vertical-alignment: bottom; x: 12px; }
-                Rectangle { height: 4px; }
-                for item in group.items: NavButton {
-                    item: item;
-                    clicked => { root.navigate(item.id); }
-                    fold-clicked => { root.fold(item.id); }
+            if root.hostname != "": Focusable {
+                height: host-row.preferred-height;
+                border-radius: 8px;
+                ring-gap: -2px;
+                background: self.has-hover ? Theme.hover : transparent;
+                accessible-role: button;
+                accessible-label: "Change the hostname";
+                accessible-action-default => { root.hostname-clicked(); }
+                activated => { root.hostname-clicked(); }
+                host-row := HorizontalLayout {
+                    padding: 10px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    spacing: 6px;
+                    Text { text: "Hostname"; color: Theme.faint; font-size: 12px; }
+                    Text { text: root.hostname; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; horizontal-stretch: 1; }
+                    // It opens a dialog to change the name: the pencil says so.
+                    VerticalLayout { alignment: center; Icon { name: "pencil"; size: 12px; tint: Theme.faint; } }
                 }
-            }
-            if root.groups.length == 0: HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                Text { text: "No setting matches the search."; color: Theme.faint; font-size: 12px; wrap: word-wrap; height: 40px; vertical-alignment: center; }
-            }
-        }
-        // A line where the pages are cut off; always there, so the layout doesn't change.
-        Rectangle { height: 1px; background: page-list.overflows ? Theme.border : transparent; }
-        NavButton {
-            item: { id: "settings", label: "Settings", sub: "", icon: "settings", current: root.settings-current };
-            clicked => { root.navigate("settings"); }
-        }
-        HorizontalLayout {
-            padding-left: 10px;
-            padding-right: 10px;
-            height: 36px;
-            spacing: 11px;
-            Icon { name: "plane"; tint: Theme.muted; size: 17px; y: (parent.height - 17px) / 2; }
-            Text { text: "Airplane mode"; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
-            Switch { on: root.airplane; label: "Airplane mode"; y: (parent.height - self.height) / 2; toggled => { root.airplane-toggled(); } }
-        }
-        if root.hostname != "": Focusable {
-            height: host-row.preferred-height;
-            border-radius: 8px;
-            ring-gap: -2px;
-            background: self.has-hover ? Theme.hover : transparent;
-            accessible-role: button;
-            accessible-label: "Change the hostname";
-            accessible-action-default => { root.hostname-clicked(); }
-            activated => { root.hostname-clicked(); }
-            host-row := HorizontalLayout {
-                padding: 10px;
-                padding-top: 6px;
-                padding-bottom: 6px;
-                spacing: 6px;
-                Text { text: "Hostname"; color: Theme.faint; font-size: 12px; }
-                Text { text: root.hostname; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; horizontal-stretch: 1; }
-                // It opens a dialog to change the name: the pencil says so.
-                VerticalLayout { alignment: center; Icon { name: "pencil"; size: 12px; tint: Theme.faint; } }
             }
         }
     }
@@ -352,6 +417,59 @@ export component Card inherits Rectangle {
     border-color: Theme.border;
     background: Theme.surface;
     clip: true;
+}
+
+/// What a card shows when its page has nothing to show (a service isn't running, Wi-Fi is off,
+/// no VPN yet): a 44 px icon (a spinner while `loading`), a title, why, a command that fixes it
+/// with Copy, and a button. With a command, the button is secondary: the command is the fix.
+export component EmptyState inherits VerticalLayout {
+    in property <string> icon;
+    in property <bool> loading;
+    in property <string> title;
+    in property <string> text;
+    in property <string> command;
+    in property <string> action;
+    callback copied();
+    callback action-clicked();
+    alignment: center;
+    spacing: 14px;
+    padding: 18px;
+    if root.loading: HorizontalLayout { alignment: center; Spinner { size: 20px; } }
+    if !root.loading && root.icon != "": HorizontalLayout { alignment: center; Icon { name: root.icon; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
+    Text { text: root.title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; wrap: word-wrap; }
+    if root.text != "": HorizontalLayout {
+        alignment: center;
+        Text { text: root.text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; max-width: 460px; }
+    }
+    if root.command != "": HorizontalLayout {
+        alignment: center;
+        Rectangle {
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border2;
+            background: Theme.surface;
+            width: command.preferred-width;
+            height: 46px;
+            copy-field := TextInput { visible: false; text: root.command; read-only: true; }
+            command := HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 8px;
+                spacing: 12px;
+                Text { text: root.command; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+                Button {
+                    label: "Copy";
+                    button-height: 28px;
+                    min-width: self.preferred-width;
+                    y: (parent.height - self.height) / 2;
+                    clicked => { copy-field.select-all(); copy-field.copy(); root.copied(); }
+                }
+            }
+        }
+    }
+    if root.action != "": HorizontalLayout {
+        alignment: center;
+        Button { label: root.action; kind: root.command != "" ? "secondary" : "primary"; horizontal-stretch: 0; clicked => { root.action-clicked(); } }
+    }
 }
 
 /// Above a page that writes Lituus's file to Hyprland's config folder, while Hyprland's own
