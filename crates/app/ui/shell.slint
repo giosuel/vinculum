@@ -3,12 +3,12 @@
 // the cards below it.
 import { Theme } from "theme.slint";
 import { Icon, Logo } from "icons.slint";
-import { Switch, SectionLabel, Focusable, Scroll } from "controls.slint";
+import { Switch, SectionLabel, Banner, Focusable, Scroll } from "controls.slint";
 
-/// sub: a short status on the right ("Home", "2 on", "45%"). open: an item showing its
-/// sub-items, on one of their pages. indent: a sub-item. foldable: an item with sub-items, which
-/// its chevron folds away (folded).
-export struct NavItem { id: string, label: string, sub: string, icon: string, current: bool, open: bool, indent: bool, foldable: bool, folded: bool }
+/// sub: a short status on the right ("Home", "2 on", "45%"), and `spoken`, the same as a screen
+/// reader says it ("2 connected"). open: an item showing its sub-items, on one of their pages.
+/// indent: a sub-item. foldable: an item with sub-items, which its chevron folds away (folded).
+export struct NavItem { id: string, label: string, sub: string, spoken: string, icon: string, current: bool, open: bool, indent: bool, foldable: bool, folded: bool }
 export struct NavGroup { title: string, items: [NavItem] }
 /// What a page's hero shows: a big icon, a name, a line under it and a monospaced line.
 /// tone: the colour of `meta` ("accent", "muted", "danger", "faint").
@@ -22,7 +22,7 @@ component NavButton inherits Rectangle {
     callback fold-clicked();
     height: item.indent ? 32px : 36px;
     accessible-role: button;
-    accessible-label: item.sub == "" ? item.label : item.label + ", " + item.sub;
+    accessible-label: item.sub == "" ? item.label : item.label + ", " + (item.spoken != "" ? item.spoken : item.sub);
     accessible-action-default => { clicked(); }
     forward-focus: body;
     body := Focusable {
@@ -216,6 +216,8 @@ export component Sidebar inherits Rectangle {
                 spacing: 6px;
                 Text { text: "Hostname"; color: Theme.faint; font-size: 12px; }
                 Text { text: root.hostname; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; horizontal-stretch: 1; }
+                // It opens a dialog to change the name: the pencil says so.
+                VerticalLayout { alignment: center; Icon { name: "pencil"; size: 12px; tint: Theme.faint; } }
             }
         }
     }
@@ -302,21 +304,45 @@ export component HeroSubject inherits HorizontalLayout {
     }
 }
 
-/// A setting in a card: its name and a line under it on the left, its control (the children) on
-/// the right.
-export component SettingRow inherits HorizontalLayout {
+/// "● Changed from 600 ms": a mark beside what differs from the default.
+component Differs inherits HorizontalLayout {
+    in property <string> text;
+    spacing: 6px;
+    VerticalLayout { alignment: center; Rectangle { width: 6px; height: 6px; border-radius: 3px; background: Theme.accent; } }
+    // No width of its own: showing it mustn't move the control beside it (a slider being dragged).
+    Text { text: root.text; color: Theme.muted; font-size: 12px; overflow: elide; preferred-width: 0; horizontal-stretch: 1; }
+}
+
+/// A setting in a card, the one row every page's settings use: its name and a line under it on
+/// the left (or, for a setting that differs from its default, what the default is), its control
+/// (the children) on the right, and a line above it unless it's the first of its group.
+export component SettingRow inherits Rectangle {
     in property <string> label;
     in property <string> description;
-    spacing: 16px;
-    min-height: 52px;
-    VerticalLayout {
-        alignment: center;
-        spacing: 2px;
-        horizontal-stretch: 1;
-        Text { text: root.label; color: Theme.text; font-size: 13px; }
-        if root.description != "": Text { text: root.description; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
+    in property <string> differs;
+    in property <bool> first;
+    min-height: 48px;
+    Rectangle { y: 0; height: 1px; background: root.first ? transparent : Theme.border; }
+    HorizontalLayout {
+        spacing: 14px;
+        padding-top: 5px;
+        padding-bottom: 5px;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            // The control gives way before the name does.
+            min-width: 112px;
+            Text { text: root.label; color: Theme.text; font-size: 13px; overflow: elide; }
+            if root.differs != "": Differs { text: root.differs; }
+            if root.differs == "" && root.description != "": Text { text: root.description; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
+        }
+        // Centred by a layout: a `y` on the control put it at the top of the row.
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
     }
-    @children
 }
 
 /// A panel on a page: the list, the details, a group of settings.
@@ -326,4 +352,21 @@ export component Card inherits Rectangle {
     border-color: Theme.border;
     background: Theme.surface;
     clip: true;
+}
+
+/// Above a page that writes Lituus's file to Hyprland's config folder, while Hyprland's own
+/// config doesn't load it: `line` is what loads it, with a button to copy it.
+export component LoadBanner inherits Rectangle {
+    in property <string> line;
+    height: banner.preferred-height;
+    copy-field := TextInput { visible: false; text: root.line; read-only: true; }
+    banner := Banner {
+        width: parent.width;
+        height: parent.height;
+        tone: "warn";
+        text: "Your Hyprland config doesn't load Lituus's file yet, so changes are lost when Hyprland restarts.";
+        action: "Copy " + root.line;
+        dismissible: false;
+        action-clicked => { copy-field.select-all(); copy-field.copy(); }
+    }
 }

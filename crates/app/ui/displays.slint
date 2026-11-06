@@ -3,17 +3,21 @@
 // what's applied and saved. What it shows comes from Rust (src/displays.rs).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Scroll, Focusable } from "controls.slint";
-import { Segmented, Select, TextField, CheckBox, Modal } from "dialogs.slint";
-import { Hero, Card } from "shell.slint";
+import { Button, IconButton, CardTitle, SectionLabel, FieldLabel, Scroll, Focusable } from "controls.slint";
+import { Segmented, ViewSwitcher, Tabs, Select, TextField, CheckBox, Modal } from "dialogs.slint";
+import { Hero, Card, LoadBanner } from "shell.slint";
 import { Slider } from "sound.slint";
 
 /// A monitor on the layout, in layout pixels.
 /// workspaces: the workspaces bound to it ("1★  2  3"; ★ is the default).
 export struct LayoutMonitor { n: int, port: string, name: string, sub: string, x: float, y: float, w: float, h: float, selected: bool, disabled: bool, mirrored: bool, workspaces: string }
+/// Where a dragged monitor shows, in layout pixels, and the lines it lines up with: one down at
+/// `vx` from `vy1` to `vy2` when `v`, one across at `hy` from `hx1` to `hx2` when `h`.
+export struct DragSnap { x: float, y: float, v: bool, vx: float, vy1: float, vy2: float, h: bool, hy: float, hx1: float, hx2: float }
 /// A workspace and the monitor it opens on: `monitor` is a place in `ws-monitors` (0: any).
 export struct WorkspaceRow { name: string, monitor: int, bound: bool, default: bool, persistent: bool }
-export struct ProfileRow { name: string, summary: string, active: bool, auto: bool, exec: string }
+/// exec-hint: "Not applied yet" while the command differs from the saved one.
+export struct ProfileRow { name: string, summary: string, active: bool, auto: bool, exec: string, exec-hint: string }
 /// state: "list", "loading" or "not-running".
 export struct DisplaysView {
     state: string,
@@ -34,15 +38,23 @@ export struct DisplaysView {
     resolution: int,
     rates: [string],
     rate: int,
+    /// The usual scales as percentages, then "Other…"; `scale` is a place in it.
+    scales: [string],
+    scale-details: [string],
+    scale: int,
+    /// "Other…": the field for any scale shows, with `scale-text`.
+    scale-other: bool,
     scale-text: string,
     scale-valid: bool,
     scale-hint: string,
-    scale-chips: [string],
-    scale-chip: int,
     rotation: int,
     flipped: bool,
+    /// x-bad, y-bad: the field holds text that isn't a number, which `position-hint` says.
     x-text: string,
     y-text: string,
+    x-bad: bool,
+    y-bad: bool,
+    position-hint: string,
     mirrors: [string],
     mirror: int,
     colour-modes: [string],
@@ -55,7 +67,10 @@ export struct DisplaysView {
     vrr-options: [string],
     vrr: int,
     vrr-capable: bool,
+    /// Top, right, bottom, left.
     reserved: [string],
+    reserved-bad: [bool],
+    reserved-hint: string,
     status: string,
     status-tone: string,
     can-apply: bool,
@@ -70,13 +85,14 @@ export struct DisplaysView {
     config-main: string,
     config-open: bool,
     config-text: string,
-    /// "Name monitors by description" is on.
+    /// "Name monitors by description" is on (as edited: it waits for Apply).
     by-description: bool,
     workspaces: [WorkspaceRow],
     ws-monitors: [string],
     profiles: [ProfileRow],
     /// The profile the monitors show now, if any.
     profile: string,
+    /// As edited, like the profiles' "by itself" and command.
     switch-hotplug: bool,
 }
 
@@ -93,43 +109,70 @@ component Badge inherits Rectangle {
     Text { text: root.n; color: root.on ? Theme.on-accent : Theme.muted; font-size: max(11px, round(root.size / 2px) * 1px); font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
 }
 
-/// The monitors to scale, draggable.
+/// The monitors to scale, draggable. A drag moves only the monitor on the screen, lined up with
+/// the others' edges as it goes (`snap`, from Rust, which changes nothing); the drop goes to Rust.
 component Layout inherits Rectangle {
     in property <DisplaysView> view;
     in property <bool> show-workspaces;
     callback select(int);
-    callback drag(int, float, float, bool);
+    /// A monitor dropped at (x, y), in layout pixels.
+    callback drop(int, float, float);
+    /// Where a monitor dragged to (x, y) shows: lined up with another's edge within `threshold`
+    /// layout pixels, unless `free` (Shift is down).
+    pure callback snap(int, float, float, float, bool) -> DragSnap;
     in property <length> margin: 18px;
     property <length> gap: 6px;
+    // The layout's bounds; after a drop that changes them, the monitors glide to where they now
+    // are instead of jumping. Nothing changes them during a drag: only the drop changes the monitors.
+    property <float> bx: view.bounds-x;
+    property <float> by: view.bounds-y;
+    property <float> bw: max(1, view.bounds-w);
+    property <float> bh: max(1, view.bounds-h);
+    animate bx, by, bw, bh { duration: 200ms; easing: ease-out; }
     // Layout pixels to screen.
-    property <float> k: min((self.width - 2 * margin) / 1px / max(1, view.bounds-w), (self.height - 2 * margin) / 1px / max(1, view.bounds-h));
-    property <length> ox: (self.width - view.bounds-w * k * 1px) / 2;
-    property <length> oy: (self.height - view.bounds-h * k * 1px) / 2;
+    property <float> k: min((self.width - 2 * margin) / 1px / bw, (self.height - 2 * margin) / 1px / bh);
+    property <length> ox: (self.width - bw * k * 1px) / 2;
+    property <length> oy: (self.height - bh * k * 1px) / 2;
+    // How far a press moves before it drags, and how close an edge snaps, on the screen.
+    property <length> dead-zone: 4px;
+    property <length> snap-distance: 10px;
+    // The monitor being dragged (-1: none), where it shows, and the point of it that was grabbed,
+    // in layout pixels.
+    property <int> dragging: -1;
+    property <DragSnap> at;
+    property <float> grab-x;
+    property <float> grab-y;
+    // Between the screen (on whole pixels, so borders and text stay sharp) and layout pixels.
+    pure function to-x(v: float) -> length { round((root.ox + (v - root.bx) * root.k * 1px) / 1px) * 1px }
+    pure function to-y(v: float) -> length { round((root.oy + (v - root.by) * root.k * 1px) / 1px) * 1px }
+    pure function from-x(p: length) -> float { (p - root.ox) / 1px / root.k + root.bx }
+    pure function from-y(p: length) -> float { (p - root.oy) / 1px / root.k + root.by }
     // Space or Enter selects one; dragging stays a mouse thing.
     for m[i] in root.view.monitors: tile := Focusable {
-        property <length> dx: touch.pressed ? touch.mouse-x - touch.pressed-x : 0;
-        property <length> dy: touch.pressed ? touch.mouse-y - touch.pressed-y : 0;
-        // The edges on whole pixels, so borders and text stay sharp, and a gap between monitors
-        // that touch.
-        property <length> left: round((root.ox + (m.x - root.view.bounds-x) * root.k * 1px) / 1px) * 1px;
-        property <length> top: round((root.oy + (m.y - root.view.bounds-y) * root.k * 1px) / 1px) * 1px;
-        property <length> right: round((root.ox + (m.x + m.w - root.view.bounds-x) * root.k * 1px) / 1px) * 1px;
-        property <length> bottom: round((root.oy + (m.y + m.h - root.view.bounds-y) * root.k * 1px) / 1px) * 1px;
-        // Text, badge and padding grow with the monitor, from their size at a 1200 × 760 window,
-        // and shrink on a smaller one, the text later and less than the rest.
-        property <float> scale: min(self.width / 165px, self.height / 92px);
-        property <float> f: clamp(scale, 0.7, 1.5);
-        property <float> text-f: max(0.85, min(f + 0.15, max(1, f)));
-        // The padding goes down further, to keep room for the name.
-        property <length> pad: round(10 * clamp(scale, 0.5, 1.5)) * 1px;
-        property <length> line: round(2 * f) * 1px;
-        // A tile too short for every line drops the last ones; the number and the port stay.
-        property <length> name-size: round(13 * text-f) * 1px;
-        property <length> sub-size: round(12 * text-f) * 1px;
-        property <bool> show-name: self.height >= 2 * pad + round(22 * f) * 1px + line + 1.3 * name-size;
-        property <bool> show-sub: show-name && self.height >= 2 * pad + round(22 * f) * 1px + 2 * line + 1.3 * (name-size + sub-size);
-        x: left + root.gap / 2 + dx;
-        y: top + root.gap / 2 + dy;
+        property <bool> dragged: root.dragging == i;
+        property <bool> movable: !m.disabled && !m.mirrored;
+        property <float> mx: dragged ? root.at.x : m.x;
+        property <float> my: dragged ? root.at.y : m.y;
+        // A gap between monitors that touch.
+        property <length> left: root.to-x(mx);
+        property <length> top: root.to-y(my);
+        property <length> right: root.to-x(mx + m.w);
+        property <length> bottom: root.to-y(my + m.h);
+        // The text is the same size on every tile, as on a diagram; a tile too small for it makes
+        // it smaller, and drops the lines that don't fit; the number and the port stay.
+        property <float> scale: min(self.width / 150px, self.height / 80px);
+        property <float> f: clamp(scale, 0.8, 1);
+        property <length> pad: clamp(round(10 * scale) * 1px, 4px, 12px);
+        property <length> badge: round(18 * f) * 1px;
+        property <length> line: 2px;
+        property <length> port-size: round(11 * f) * 1px;
+        property <length> name-size: round(13 * f) * 1px;
+        property <length> sub-size: round(12 * f) * 1px;
+        property <bool> show-name: self.height >= 2 * pad + badge + line + 1.3 * name-size;
+        property <bool> show-sub: show-name && self.height >= 2 * pad + badge + 2 * line + 1.3 * (name-size + sub-size);
+        x: left + root.gap / 2;
+        y: top + root.gap / 2;
+        z: dragged ? 1 : 0;
         width: right - left - root.gap;
         height: bottom - top - root.gap;
         border-radius: 8px;
@@ -151,24 +194,63 @@ component Layout inherits Rectangle {
             padding: tile.pad;
             spacing: tile.line;
             HorizontalLayout {
-                spacing: round(7 * tile.f) * 1px;
-                Badge { n: m.n; on: m.selected; size: round(22 * tile.f) * 1px; }
-                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: round(12 * tile.text-f) * 1px; font-family: "JetBrains Mono"; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                spacing: round(6 * tile.f) * 1px;
+                Badge { n: m.n; on: m.selected; size: tile.badge; }
+                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: tile.port-size; font-family: "JetBrains Mono"; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
             }
             Rectangle { vertical-stretch: 1; }
             if tile.show-name: Text { text: m.name; color: Theme.text; font-size: tile.name-size; font-weight: 600; overflow: elide; }
             if tile.show-sub && !root.show-workspaces: Text { text: m.sub; color: Theme.muted; font-size: tile.sub-size; overflow: elide; }
-            if tile.show-sub && root.show-workspaces: Text { text: m.workspaces == "" ? "No workspaces bound" : m.workspaces; color: m.workspaces == "" ? Theme.faint : Theme.accent; font-size: tile.sub-size; font-family: "JetBrains Mono"; overflow: elide; }
+            if tile.show-sub && root.show-workspaces: Text { text: m.workspaces == "" ? "No workspaces bound" : m.workspaces; color: m.workspaces == "" ? Theme.faint : Theme.accent; font-size: tile.sub-size; font-family: m.workspaces == "" ? "Inter" : "JetBrains Mono"; overflow: elide; }
         }
-        touch := TouchArea {
-            mouse-cursor: m.disabled || m.mirrored ? pointer : move;
+        TouchArea {
+            mouse-cursor: tile.movable ? move : pointer;
             pointer-event(event) => {
-                if event.kind == PointerEventKind.down { root.select(i); }
-                if event.kind == PointerEventKind.up && !m.disabled && !m.mirrored && (abs(self.mouse-x - self.pressed-x) > 2px || abs(self.mouse-y - self.pressed-y) > 2px) {
-                    root.drag(i, m.x + (self.mouse-x - self.pressed-x) / 1px / root.k, m.y + (self.mouse-y - self.pressed-y) / 1px / root.k, true);
+                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left && !m.selected {
+                    root.select(i);
+                }
+                // A press becomes a drag once it has moved a little, so a click only selects.
+                if event.kind == PointerEventKind.move && self.pressed && tile.movable && !tile.dragged
+                    && (abs(self.mouse-x - self.pressed-x) > root.dead-zone || abs(self.mouse-y - self.pressed-y) > root.dead-zone) {
+                    root.grab-x = root.from-x(tile.x + self.pressed-x) - m.x;
+                    root.grab-y = root.from-y(tile.y + self.pressed-y) - m.y;
+                    root.at = { x: m.x, y: m.y };
+                    root.dragging = i;
+                }
+                if event.kind == PointerEventKind.move && tile.dragged {
+                    // The pointer, from the tile where it is now (it moves with the pointer), and
+                    // the tile kept inside the layout.
+                    root.at = root.snap(i,
+                        clamp(root.from-x(tile.x + self.mouse-x) - root.grab-x, root.from-x(0px), root.from-x(root.width) - m.w),
+                        clamp(root.from-y(tile.y + self.mouse-y) - root.grab-y, root.from-y(0px), root.from-y(root.height) - m.h),
+                        root.snap-distance / 1px / root.k, event.modifiers.shift);
+                }
+                if event.kind == PointerEventKind.up && tile.dragged {
+                    root.drop(i, root.at.x, root.at.y);
+                    root.dragging = -1;
+                }
+                if event.kind == PointerEventKind.cancel {
+                    root.dragging = -1;
                 }
             }
         }
+    }
+    // The edges or centres a dragged monitor lines up with, a little past both monitors.
+    if root.dragging >= 0 && root.at.v: Rectangle {
+        x: root.to-x(root.at.vx);
+        y: root.to-y(root.at.vy1) - 8px;
+        z: 2;
+        width: 1px;
+        height: root.to-y(root.at.vy2) - root.to-y(root.at.vy1) + 16px;
+        background: Theme.accent;
+    }
+    if root.dragging >= 0 && root.at.h: Rectangle {
+        x: root.to-x(root.at.hx1) - 8px;
+        y: root.to-y(root.at.hy);
+        z: 2;
+        width: root.to-x(root.at.hx2) - root.to-x(root.at.hx1) + 16px;
+        height: 1px;
+        background: Theme.accent;
     }
 }
 
@@ -176,11 +258,30 @@ component Field inherits VerticalLayout {
     in property <string> label;
     in property <string> hint;
     in property <bool> bad;
+    // A Select's width (the guide's 240 px), so a column doesn't shrink to "sRGB"; wider content
+    // still gets its own.
+    preferred-width: 240px;
     spacing: 6px;
     alignment: start;
-    Text { text: root.label; color: Theme.muted; font-size: 12px; }
+    FieldLabel { text: root.label; }
     @children
-    if root.hint != "": Text { text: root.hint; color: root.bad ? Theme.danger : Theme.faint; font-size: 12px; wrap: word-wrap; }
+    // It wraps at the control's width rather than widening the column (an error appearing
+    // mustn't move the fields beside it).
+    if root.hint != "": Text { text: root.hint; color: root.bad ? Theme.danger : Theme.faint; font-size: 12px; wrap: word-wrap; min-width: 0; preferred-width: 0; }
+}
+
+/// A field for a value from Rust: it shows `value` and follows it when it changes (after a
+/// drag, say), and hands what was typed to `commit` on Enter or when the focus leaves it.
+/// `pending` says it holds text not handed over yet.
+component Entry inherits TextField {
+    in property <string> value;
+    out property <bool> pending: self.text != self.value;
+    callback commit(string);
+    text: root.value;
+    changed value => { self.text = self.value; }
+    height: 34px;
+    mono: true;
+    committed => { root.commit(self.text); }
 }
 
 export component DisplaysPage inherits VerticalLayout {
@@ -193,53 +294,26 @@ export component DisplaysPage inherits VerticalLayout {
     in property <length> window-height;
     property <string> new-profile;
     callback act(string, string, float);
-    callback drag(int, float, float, bool);
+    callback drop(int, float, float);
+    pure callback snap(int, float, float, float, bool) -> DragSnap;
     spacing: 14px;
 
-    if root.view.not-loaded && root.view.state == "list": Rectangle {
-        height: banner.preferred-height;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.warn-border;
-        background: Theme.warn-bg;
-        copy-field := TextInput { visible: false; text: root.view.load-line; read-only: true; }
-        banner := HorizontalLayout {
-            padding: 6px;
-            padding-left: 14px;
-            spacing: 10px;
-            // Centred by a layout: a `y` here put the icon at the top when the text is one line.
-            VerticalLayout { alignment: center; Icon { name: "warning"; tint: Theme.warn-text; } }
-            Text {
-                text: "Your Hyprland config doesn't load Lituus's file yet, so changes are lost when Hyprland restarts.";
-                color: Theme.warn-text;
-                font-size: 13px;
-                wrap: word-wrap;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-            }
-            VerticalLayout {
-                alignment: center;
-                Button {
-                    label: "Copy " + root.view.load-line;
-                    button-height: 30px;
-                    min-width: self.preferred-width;
-                    horizontal-stretch: 0;
-                    clicked => { copy-field.select-all(); copy-field.copy(); }
-                }
-            }
-        }
-    }
+    if root.view.not-loaded && root.view.state == "list": LoadBanner { line: root.view.load-line; }
 
-    // On the Monitor tab the hero (with the monitors) grows into the room the settings leave, up
-    // to 720 px. Workspaces and Profiles keep it at its smallest: their lists need the room.
+    // The hero (with the monitors) takes what the window's height leaves the settings, up to
+    // 720 px, the same on each of the settings' tabs, so the monitors don't change size with
+    // them. Workspaces and Profiles stop at 420 px: their lists need the room in a tall window.
+    // Up to there all three are the same, so the monitors and their text stay as they are.
     hero-box := Rectangle {
         // Smaller in a shorter window, down to where the monitors are still readable, and the
         // settings scroll; the banner takes its height from the hero's, so the settings keep theirs.
         property <length> smallest: root.view.state != "list" ? 140px : clamp(root.window-height - 400px, 236px, 330px) - (root.view.not-loaded ? 44px : 0);
-        property <bool> grows: root.view.state == "list" && root.page-tab == 0;
+        property <bool> grows: root.view.state == "list";
+        property <length> tall: grows ? clamp(root.window-height - 396px - (root.view.not-loaded ? 44px : 0), smallest, root.page-tab == 0 ? 720px : 420px) : smallest;
         min-height: smallest;
-        max-height: grows ? 720px : smallest;
-        vertical-stretch: grows ? 1 : 0;
+        preferred-height: tall;
+        max-height: tall;
+        vertical-stretch: 0;
         Hero {
             title: "Displays";
             sub: root.view.sub;
@@ -255,7 +329,8 @@ export component DisplaysPage inherits VerticalLayout {
                 view: root.view;
                 show-workspaces: root.page-tab == 1;
                 select(i) => { root.act("select", "" + i, 0); }
-                drag(i, x, y, done) => { root.drag(i, x, y, done); }
+                drop(i, x, y) => { root.drop(i, x, y); }
+                snap(i, x, y, threshold, free) => { return root.snap(i, x, y, threshold, free); }
             }
             if root.view.state == "list": Text {
                 x: 24px;
@@ -268,85 +343,100 @@ export component DisplaysPage inherits VerticalLayout {
                 x: parent.width - self.width - 18px;
                 y: 18px;
                 width: self.preferred-width;
-                height: 36px;
+                height: 34px;
                 spacing: 8px;
-                if root.view.state == "list": Segmented {
+                if root.view.state == "list": ViewSwitcher {
                     label: "Displays";
-                    height: 36px;
                     options: ["Monitor", "Workspaces", "Profiles"];
                     selected <=> root.page-tab;
                 }
-                if root.view.state == "list": Button { label: "View config"; button-height: 36px; clicked => { root.act("view-config", "", 0); } }
+                if root.view.state == "list": Button { label: "View config"; clicked => { root.act("view-config", "", 0); } }
             }
         }
     }
 
     // The settings scroll in a short window; the bar with Apply stays below them.
     if root.view.state == "list": Scroll {
-        // On the Monitor tab it asks for the settings' height and grows only once the hero has
-        // all it takes; shorter, it scrolls.
-        preferred-height: root.page-tab == 0 ? self.content-height : 0;
-        vertical-stretch: root.page-tab == 0 ? 0 : 1;
+        // What the hero leaves; shorter than the settings, it scrolls.
+        vertical-stretch: 1;
         fill: true;
         spacing: 14px;
         bar-inset: -16px;
+        // Everything here waits for Apply, so the options are check boxes (the guide's commit
+        // rule); a workspace that opens on any monitor has neither, which its row says.
         if root.page-tab == 1: Card {
-            vertical-stretch: 1;
             ws-list := VerticalLayout {
                 padding: 18px;
                 padding-top: 12px;
                 spacing: 0;
                 alignment: start;
+                Text {
+                    text: "A workspace bound to a monitor opens there. The monitor's default is the one it shows when it turns on; one kept when empty stays even with no windows on it.";
+                    color: Theme.muted;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
                 HorizontalLayout {
-                    height: 30px;
+                    height: 36px;
                     spacing: 14px;
-                    Text { text: "Workspace"; color: Theme.faint; font-size: 12px; width: 80px; vertical-alignment: center; }
-                    Text { text: "Opens on"; color: Theme.faint; font-size: 12px; horizontal-stretch: 1; vertical-alignment: center; }
-                    Text { text: "Shown when the monitor turns on"; color: Theme.faint; font-size: 12px; width: 220px; vertical-alignment: center; }
-                    Text { text: "Kept when empty"; color: Theme.faint; font-size: 12px; width: 120px; vertical-alignment: center; }
+                    Text { text: "Workspace"; color: Theme.faint; font-size: 12px; width: 72px; vertical-alignment: bottom; }
+                    Text { text: "Opens on"; color: Theme.faint; font-size: 12px; width: 240px; vertical-alignment: bottom; }
+                    Text { text: "Default"; color: Theme.faint; font-size: 12px; width: 64px; vertical-alignment: bottom; }
+                    Text { text: "Kept when empty"; color: Theme.faint; font-size: 12px; width: 104px; vertical-alignment: bottom; }
+                    Rectangle { horizontal-stretch: 1; }
                 }
                 for w[i] in root.view.workspaces: HorizontalLayout {
                     height: 44px;
                     spacing: 14px;
-                    Text { text: w.name; color: Theme.text; font-size: 14px; font-weight: 600; font-family: "JetBrains Mono"; width: 80px; vertical-alignment: center; }
-                    Select {
-                        horizontal-stretch: 1;
-                        select-height: 32px;
-                        label: "Monitor for workspace " + w.name;
-                        focus-key: "ws-monitor:" + i;
-                        options: root.view.ws-monitors;
-                        selected: w.monitor;
-                        y: (parent.height - self.height) / 2;
-                        chosen(c) => { root.act("ws-monitor", "" + i, c); }
+                    Text { text: w.name; color: Theme.text; font-size: 14px; font-weight: 600; font-family: "JetBrains Mono"; width: 72px; vertical-alignment: center; }
+                    VerticalLayout {
+                        alignment: center;
+                        Select {
+                            width: 240px;
+                            select-height: 34px;
+                            label: "Monitor for workspace " + w.name;
+                            focus-key: "ws-monitor:" + i;
+                            options: root.view.ws-monitors;
+                            selected: w.monitor;
+                            chosen(c) => { root.act("ws-monitor", "" + i, c); }
+                        }
                     }
-                    HorizontalLayout {
-                        width: 220px;
-                        Switch { on: w.default; label: "Default for its monitor"; focus-key: "ws-default:" + i; opacity: w.bound ? 1 : 0.4; y: (parent.height - self.height) / 2; toggled => { root.act("ws-default", "" + i, 0); } }
+                    VerticalLayout {
+                        width: 64px;
+                        alignment: center;
+                        HorizontalLayout {
+                            alignment: start;
+                            CheckBox { checked: w.default; enabled: w.bound; label: "Workspace " + w.name + " is its monitor's default"; focus-key: "ws-default:" + i; toggled => { root.act("ws-default", "" + i, 0); } }
+                        }
                     }
-                    HorizontalLayout {
-                        width: 120px;
-                        Switch { on: w.persistent; label: "Kept when empty"; focus-key: "ws-persistent:" + i; opacity: w.bound ? 1 : 0.4; y: (parent.height - self.height) / 2; toggled => { root.act("ws-persistent", "" + i, 0); } }
+                    VerticalLayout {
+                        width: 104px;
+                        alignment: center;
+                        HorizontalLayout {
+                            alignment: start;
+                            CheckBox { checked: w.persistent; enabled: w.bound; label: "Keep workspace " + w.name + " when empty"; focus-key: "ws-persistent:" + i; toggled => { root.act("ws-persistent", "" + i, 0); } }
+                        }
                     }
+                    Text { text: w.bound ? "" : "Bind it to a monitor first"; color: Theme.faint; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
                 }
             }
         }
 
+        // The options here wait for Apply too (check boxes); Use, Update, Delete and Save are
+        // actions, which happen when pressed.
         if root.page-tab == 2: Card {
-            vertical-stretch: 1;
             profile-list := VerticalLayout {
                 padding: 18px;
                 padding-top: 12px;
                 spacing: 10px;
                 alignment: start;
-                HorizontalLayout {
-                    spacing: 14px;
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 2px;
-                        Text { text: "Switch when monitors are plugged in or out"; color: Theme.text; font-size: 13px; }
+                VerticalLayout {
+                    spacing: 4px;
+                    CheckBox { checked: root.view.switch-hotplug; text: "Switch when monitors are plugged in or out"; toggled => { root.act("switch-hotplug", "", 0); } }
+                    HorizontalLayout {
+                        padding-left: 28px;
                         Text { text: "To the profile made for exactly the monitors plugged in, if it switches by itself. Lituus must be running (in the tray, or with --background)."; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
                     }
-                    Switch { on: root.view.switch-hotplug; label: "Switch profiles on hotplug"; switch-width: 40px; y: (parent.height - self.height) / 2; toggled => { root.act("switch-hotplug", "", 0); } }
                 }
                 Rectangle { height: 1px; background: Theme.border; }
                 if root.view.profiles.length == 0: Text { text: "No profiles yet. Save the layout you have now as one."; color: Theme.faint; font-size: 13px; height: 32px; vertical-alignment: center; }
@@ -359,27 +449,23 @@ export component DisplaysPage inherits VerticalLayout {
                         spacing: 8px;
                         HorizontalLayout {
                             spacing: 10px;
+                            // "In use" leads the line under the name, in accent, as rows say it.
                             VerticalLayout {
                                 horizontal-stretch: 1;
                                 spacing: 2px;
-                                HorizontalLayout {
-                                    spacing: 8px;
-                                    alignment: start;
-                                    Text { text: p.name; color: Theme.text; font-size: 14px; font-weight: 600; }
-                                    if p.active: Text { text: "In use"; color: Theme.accent; font-size: 12px; vertical-alignment: center; }
-                                }
-                                Text { text: p.summary; color: Theme.faint; font-size: 12px; }
+                                Text { text: p.name; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
+                                Text { text: p.active ? "In use · " + p.summary : p.summary; color: p.active ? Theme.accent : Theme.muted; font-size: 12px; overflow: elide; }
                             }
-                            Text { text: "By itself"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
-                            Switch { on: p.auto; label: "Switch to " + p.name + " by itself"; focus-key: "profile-auto:" + i; y: (parent.height - self.height) / 2; toggled => { root.act("profile-auto", "" + i, 0); } }
+                            CheckBox { checked: p.auto; text: "Switch by itself"; label: "Switch to " + p.name + " by itself"; focus-key: "profile-auto:" + i; horizontal-stretch: 0; y: (parent.height - self.height) / 2; toggled => { root.act("profile-auto", "" + i, 0); } }
                             Button { label: "Use"; focus-key: "profile-use:" + i; button-height: 30px; horizontal-stretch: 0; enabled: !p.active; y: (parent.height - self.height) / 2; clicked => { root.act("profile-use", "" + i, 0); } }
                             Button { label: "Update"; focus-key: "profile-update:" + i; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-update", "" + i, 0); } }
-                            Button { label: "Delete"; kind: "danger"; focus-key: "profile-delete:" + i; button-height: 30px; horizontal-stretch: 0; y: (parent.height - self.height) / 2; clicked => { root.act("profile-delete", "" + i, 0); } }
+                            IconButton { icon: "trash"; label: "Delete " + p.name; focus-key: "profile-delete:" + i; flat: true; y: (parent.height - self.height) / 2; clicked => { root.act("profile-delete", "" + i, 0); } }
                         }
                         HorizontalLayout {
                             spacing: 10px;
                             Text { text: "Run after switching"; color: Theme.faint; font-size: 12px; vertical-alignment: center; width: 140px; }
-                            TextField { text: p.exec; mono: true; placeholder: "e.g. pkill -SIGUSR2 waybar"; label: "Run after switching to " + p.name; height: 32px; accepted => { root.act("profile-exec", i + ":" + self.text, 0); } }
+                            exec := Entry { value: p.exec; placeholder: "e.g. pkill -SIGUSR2 waybar"; label: "Run after switching to " + p.name; commit(text) => { root.act("profile-exec", i + ":" + text, 0); } }
+                            Text { text: p.exec-hint != "" || exec.pending ? "Not applied yet" : ""; color: Theme.faint; font-size: 12px; vertical-alignment: center; width: 96px; }
                         }
                     }
                 }
@@ -398,25 +484,32 @@ export component DisplaysPage inherits VerticalLayout {
                 padding: 18px;
                 padding-top: 14px;
                 spacing: 12px;
-                HorizontalLayout {
-                    spacing: 10px;
-                    Badge { n: root.view.sel-n; on: true; y: (parent.height - self.height) / 2; }
-                    VerticalLayout {
-                        spacing: 1px;
-                        horizontal-stretch: 1;
-                        Text { text: root.view.sel-title; color: Theme.text; font-size: 15px; font-weight: 600; overflow: elide; }
-                        Text { text: root.view.sel-sub; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+                // The monitor's settings in tabs inside the card, underlined on the card's line.
+                VerticalLayout {
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Badge { n: root.view.sel-n; on: true; y: (parent.height - self.height) / 2; }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            horizontal-stretch: 1;
+                            CardTitle { text: root.view.sel-title; overflow: elide; }
+                            Text { text: root.view.sel-sub; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+                        }
+                        Tabs {
+                            label: "Monitor settings";
+                            horizontal-stretch: 0;
+                            options: ["Display", "Colour and HDR", "Advanced"];
+                            selected <=> root.tab;
+                        }
+                        // A check box: it waits for Apply, as everything on this page does.
+                        VerticalLayout {
+                            alignment: center;
+                            CheckBox { checked: root.view.sel-enabled; text: "Enabled"; toggled => { root.act("enabled", "", 0); } }
+                        }
                     }
-                    Segmented {
-                        label: "Monitor settings";
-                        horizontal-stretch: 0;
-                        options: ["Display", "Colour and HDR", "Advanced"];
-                        selected <=> root.tab;
-                    }
-                    Text { text: "Enabled"; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
-                    Switch { on: root.view.sel-enabled; label: "Enabled"; switch-width: 40px; y: (parent.height - self.height) / 2; toggled => { root.act("enabled", "", 0); } }
+                    Rectangle { height: 1px; background: Theme.border; }
                 }
-                Rectangle { height: 1px; background: Theme.border; }
                 if root.tab == 0: GridLayout {
                     spacing-horizontal: 22px;
                     spacing-vertical: 14px;
@@ -428,37 +521,35 @@ export component DisplaysPage inherits VerticalLayout {
                         label: "Refresh rate";
                         Select { options: root.view.rates; selected: root.view.rate; label: "Refresh rate"; select-height: 34px; chosen(i) => { root.act("rate", "" + i, 0); } }
                     }
-                    Field {
+                    scale-box := Field {
+                        // The "Other…" field is being typed in, and hasn't been handed over.
+                        property <bool> pending;
                         label: "Scale";
-                        hint: root.view.scale-hint;
+                        hint: root.view.scale-valid && root.view.scale-other && self.pending ? "Not applied yet" : root.view.scale-hint;
                         bad: !root.view.scale-valid;
-                        HorizontalLayout {
-                            spacing: 6px;
+                        Select {
+                            // Wide enough for the column's Mirror list too.
+                            min-width: 120px;
+                            preferred-width: 220px;
+                            options: root.view.scales;
+                            details: root.view.scale-details;
+                            selected: root.view.scale;
+                            label: "Scale";
+                            select-height: 34px;
+                            chosen(i) => { root.act("scale", "" + i, 0); }
+                        }
+                        // Any scale Hyprland takes at this resolution; one it doesn't stays here,
+                        // marked, and the monitor keeps its own.
+                        if root.view.scale-other: HorizontalLayout {
                             alignment: start;
-                            IconButton { icon: "minus"; label: "Smaller scale"; width: 34px; height: 34px; clicked => { root.act("scale-step", "", -1); } }
-                            Rectangle {
-                                width: 52px;
-                                height: 34px;
-                                border-radius: 8px;
-                                border-width: 1px;
-                                border-color: root.view.scale-valid ? Theme.ctrl-border : Theme.danger;
-                                Text { text: root.view.scale-text; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
-                            }
-                            IconButton { icon: "plus"; label: "Larger scale"; width: 34px; height: 34px; clicked => { root.act("scale-step", "", 1); } }
-                            for c[k] in root.view.scale-chips: Focusable {
-                                width: chip.preferred-width + 18px;
-                                focus-key: "scale:" + c;
-                                height: 26px;
-                                y: 4px;
-                                border-radius: 13px;
-                                border-width: 1px;
-                                border-color: k == root.view.scale-chip ? Theme.accent-soft-border : Theme.ctrl-border;
-                                background: k == root.view.scale-chip ? Theme.accent-soft-bg : transparent;
-                                accessible-role: button;
-                                accessible-label: "Scale " + c;
-                                accessible-action-default => { root.act("scale", "", c.to-float()); }
-                                activated => { root.act("scale", "", c.to-float()); }
-                                chip := Text { text: c; color: Theme.text; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+                            Entry {
+                                preferred-width: 96px;
+                                min-width: 64px;
+                                changed pending => { scale-box.pending = self.pending; }
+                                value: root.view.scale-text;
+                                label: "Other scale";
+                                invalid: !root.view.scale-valid;
+                                commit(text) => { root.act("scale-text", text, 0); }
                             }
                         }
                     }
@@ -480,12 +571,15 @@ export component DisplaysPage inherits VerticalLayout {
                     }
                     Field {
                         label: "Position";
+                        hint: root.view.position-hint != "" ? root.view.position-hint : x-field.pending || y-field.pending ? "Not applied yet" : "";
+                        bad: root.view.x-bad || root.view.y-bad;
                         HorizontalLayout {
                             spacing: 8px;
+                            alignment: start;
                             Text { text: "X"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
-                            TextField { text: root.view.x-text; mono: true; label: "X"; height: 34px; accepted => { root.act("x", self.text, 0); } }
+                            x-field := Entry { preferred-width: 96px; min-width: 64px; value: root.view.x-text; label: "X"; invalid: root.view.x-bad; commit(text) => { root.act("x", text, 0); } }
                             Text { text: "Y"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
-                            TextField { text: root.view.y-text; mono: true; label: "Y"; height: 34px; accepted => { root.act("y", self.text, 0); } }
+                            y-field := Entry { preferred-width: 96px; min-width: 64px; value: root.view.y-text; label: "Y"; invalid: root.view.y-bad; commit(text) => { root.act("y", text, 0); } }
                         }
                     }
                     Field {
@@ -510,7 +604,9 @@ export component DisplaysPage inherits VerticalLayout {
                         }
                     }
                     Rectangle { }
-                    Field {
+                    // Only for HDR: a monitor that doesn't say it does HDR doesn't get them, unless
+                    // an HDR mode is chosen for it all the same.
+                    if root.view.hdr-capable || root.view.hdr: Field {
                         row: 1;
                         label: "SDR brightness in HDR";
                         hint: root.view.hdr ? "1.0 to 2.0 is typical." : "Only in HDR.";
@@ -520,7 +616,7 @@ export component DisplaysPage inherits VerticalLayout {
                             Text { text: round(root.view.sdr-brightness * 100) / 100; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; width: 36px; vertical-alignment: center; }
                         }
                     }
-                    Field {
+                    if root.view.hdr-capable || root.view.hdr: Field {
                         label: "SDR saturation in HDR";
                         hint: root.view.hdr ? "1.0 keeps colours as they are." : "Only in HDR.";
                         HorizontalLayout {
@@ -530,20 +626,56 @@ export component DisplaysPage inherits VerticalLayout {
                         }
                     }
                 }
-                if root.tab == 2: GridLayout {
-                    spacing-horizontal: 22px;
-                    spacing-vertical: 14px;
-                    Field {
-                        label: "Variable refresh rate";
-                        hint: root.view.vrr-capable ? "Off, on, or only for fullscreen apps." : "This monitor doesn't say it supports VRR.";
-                        Select { options: root.view.vrr-options; selected: root.view.vrr; label: "Variable refresh rate"; select-height: 34px; chosen(i) => { root.act("vrr", "" + i, 0); } }
+                if root.tab == 2: VerticalLayout {
+                    spacing: 14px;
+                    GridLayout {
+                        spacing-horizontal: 22px;
+                        spacing-vertical: 14px;
+                        Field {
+                            label: "Variable refresh rate";
+                            hint: root.view.vrr-capable ? "Off, on, or only for fullscreen apps." : "This monitor doesn't say it supports VRR.";
+                            Select { options: root.view.vrr-options; selected: root.view.vrr; label: "Variable refresh rate"; select-height: 34px; chosen(i) => { root.act("vrr", "" + i, 0); } }
+                        }
+                        Field {
+                            label: "Reserved area";
+                            bad: root.view.reserved-bad[0] || root.view.reserved-bad[1] || root.view.reserved-bad[2] || root.view.reserved-bad[3];
+                            hint: !self.bad && reserved-row.pending ? "Not applied yet" : root.view.reserved-hint;
+                            reserved-row := HorizontalLayout {
+                                // A field is being typed in, and hasn't been handed over.
+                                property <bool> pending;
+                                spacing: 8px;
+                                alignment: start;
+                                for r[k] in root.view.reserved: VerticalLayout {
+                                    spacing: 4px;
+                                    FieldLabel { text: k == 0 ? "Top" : k == 1 ? "Right" : k == 2 ? "Bottom" : "Left"; }
+                                    side := Entry {
+                                        preferred-width: 72px;
+                                        min-width: 52px;
+                                        value: r;
+                                        label: "Reserved at the " + (k == 0 ? "top" : k == 1 ? "right" : k == 2 ? "bottom" : "left");
+                                        invalid: root.view.reserved-bad[k];
+                                        changed pending => { reserved-row.pending = self.pending; }
+                                        commit(text) => { root.act("reserved", k + ":" + text, 0); }
+                                    }
+                                }
+                            }
+                        }
                     }
-                    Field {
-                        label: "Reserved area";
-                        hint: "Space tiled windows keep free, besides bars: top, right, bottom, left.";
+                    Rectangle { height: 1px; background: Theme.border; }
+                    SectionLabel { text: "ALL MONITORS"; }
+                    // Like nwg-displays' "Use desc:". Waits for Apply, which writes Lituus's file
+                    // the new way.
+                    VerticalLayout {
+                        spacing: 4px;
+                        CheckBox { checked: root.view.by-description; text: "Name monitors by description"; toggled(on) => { root.act("name-by-description", "", 0); } }
                         HorizontalLayout {
-                            spacing: 6px;
-                            for r[k] in root.view.reserved: TextField { text: r; mono: true; label: "Reserved " + k; height: 34px; accepted => { root.act("reserved", k + ":" + self.text, 0); } }
+                            padding-left: 28px;
+                            Text {
+                                text: "By make, model and serial, so a monitor keeps its settings on another port. Off: by port, such as DP-1.";
+                                color: Theme.faint;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
                         }
                     }
                 }
@@ -580,6 +712,47 @@ export component DisplaysPage inherits VerticalLayout {
     }
 }
 
+/// A thin scrollbar for a Flickable, either way: drag the thumb, or click beside it to move it
+/// there. `position` is the Flickable's content-x or -y (0 down to -(content - visible-size)).
+component ScrollBar inherits Rectangle {
+    in property <bool> vertical;
+    in property <length> content;
+    in property <length> visible-size;
+    in-out property <length> position;
+    property <length> track: vertical ? self.height : self.width;
+    property <length> range: max(1px, content - visible-size);
+    property <length> thumb: max(32px, track * visible-size / max(1px, content));
+    property <length> at: (track - thumb) * (-position / range);
+    property <length> start;
+    accessible-role: none;
+    Rectangle {
+        x: root.vertical ? (parent.width - self.width) : root.at;
+        y: root.vertical ? root.at : (parent.height - self.height);
+        width: root.vertical ? (touch.has-hover || touch.pressed ? 8px : 6px) : root.thumb;
+        height: root.vertical ? root.thumb : (touch.has-hover || touch.pressed ? 8px : 6px);
+        border-radius: 3px;
+        background: touch.has-hover || touch.pressed ? Theme.muted : Theme.faint;
+        opacity: touch.has-hover || touch.pressed ? 0.9 : 0.55;
+    }
+    touch := TouchArea {
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                let p = root.vertical ? self.mouse-y : self.mouse-x;
+                if p < root.at || p > root.at + root.thumb {
+                    root.position = -max(0, min(root.range, (p - root.thumb / 2) / (root.track - root.thumb) * root.range));
+                }
+                root.start = root.position;
+            }
+        }
+        moved => {
+            if self.pressed {
+                let d = root.vertical ? self.mouse-y - self.pressed-y : self.mouse-x - self.pressed-x;
+                root.position = -max(0, min(root.range, -root.start + d / (root.track - root.thumb) * root.range));
+            }
+        }
+    }
+}
+
 /// After Apply: keep the new settings, or they go back by themselves. Esc goes back now.
 export component KeepDialog inherits Modal {
     in property <DisplaysView> view;
@@ -608,7 +781,6 @@ export component KeepDialog inherits Modal {
 export component ConfigDialog inherits Modal {
     in property <DisplaysView> view;
     callback closed();
-    callback name-by-description();
     card-width: min(self.width - 80px, 820px);
     card-spacing: 12px;
     label: "Config file";
@@ -616,35 +788,51 @@ export component ConfigDialog inherits Modal {
     dismissed => { root.closed(); }
     Text { text: "Config file"; color: Theme.text; font-size: 17px; font-weight: 600; }
     Text { text: root.view.config-path + ", with the changes not applied yet"; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; }
+    // The code scrolls both ways, with a bar for each when it doesn't fit.
     Rectangle {
         border-radius: 10px;
         border-width: 1px;
         border-color: Theme.border;
         background: Theme.input-bg;
         height: min(code.preferred-height + 24px, 360px);
-        Flickable {
+        clip: true;
+        code-flick := Flickable {
             x: 12px;
             y: 12px;
             width: parent.width - 24px;
             height: parent.height - 24px;
-            viewport-width: max(self.width, code.preferred-width);
-            viewport-height: code.preferred-height;
-            code := TextInput { text: root.view.config-text; read-only: true; color: Theme.text; font-size: 12px; font-family: "JetBrains Mono"; wrap: no-wrap; }
-        }
-    }
-    // Like nwg-displays' "Use desc:". The text above shows the change at once; the file changes
-    // with "Save to config file".
-    VerticalLayout {
-        spacing: 4px;
-        CheckBox { checked: root.view.by-description; text: "Name monitors by description"; toggled(on) => { root.name-by-description(); } }
-        HorizontalLayout {
-            padding-left: 28px;
-            Text {
-                text: "By make, model and serial, so a monitor keeps its settings on another port. Off: by port, such as DP-1.";
-                color: Theme.faint;
+            content-width: max(self.width, code.preferred-width);
+            content-height: max(self.height, code.preferred-height);
+            code := TextInput {
+                width: code-flick.content-width;
+                text: root.view.config-text;
+                read-only: true;
+                color: Theme.text;
                 font-size: 12px;
-                wrap: word-wrap;
+                font-family: "JetBrains Mono";
+                wrap: no-wrap;
             }
+        }
+        ScrollBar {
+            visible: code-flick.content-height > code-flick.height + 0.5px;
+            x: parent.width - 10px;
+            y: 4px;
+            width: 8px;
+            height: parent.height - 8px;
+            vertical: true;
+            content: code-flick.content-height;
+            visible-size: code-flick.height;
+            position <=> code-flick.content-y;
+        }
+        ScrollBar {
+            visible: code-flick.content-width > code-flick.width + 0.5px;
+            x: 4px;
+            y: parent.height - 10px;
+            width: parent.width - 18px;
+            height: 8px;
+            content: code-flick.content-width;
+            visible-size: code-flick.width;
+            position <=> code-flick.content-x;
         }
     }
     HorizontalLayout {

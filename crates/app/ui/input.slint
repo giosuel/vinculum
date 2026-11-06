@@ -1,0 +1,699 @@
+// The Input pages, following the "More: Keyboard", "More: Mouse" and "More: Touchpad" mockups:
+// Keyboard (layouts in order, the switch keys, the repeat, and keys), and Mouse & touchpad (the
+// defaults and the devices in a list, the selected one's settings beside it). A change applies
+// at once; the bar at the bottom says where it was saved, with Revert for the last change. What
+// they show comes from Rust (src/input.rs); everything done goes back through `act`.
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+import { Button, IconButton, Switch, CardTitle, SectionLabel, Scroll, Focusable, Focus } from "controls.slint";
+import { Segmented, Select, TextField, Modal } from "dialogs.slint";
+import { Hero, HeroSubject, HeroInfo, Card, SettingRow, LoadBanner } from "shell.slint";
+import { Slider } from "sound.slint";
+
+/// A row of the Mouse & touchpad list. id: "mouse", "touchpad", or "dev:" and the device's name.
+export struct InputRow { id: string, name: string, meta: string, icon: string, selected: bool }
+export struct InputSection { title: string, rows: [InputRow] }
+/// One of a pointer's settings. kind: "slider", "switch" or "choice" (two segmented options).
+/// differs: what the defaults have instead ("Every mouse: 0.00"), for a device's own setting.
+export struct PointerSetting { id: string, kind: string, label: string, sub: string, differs: string, value: float, minimum: float, maximum: float, step: float, text: string, on: bool, options: [string], selected: int }
+/// A keyboard layout; code: "ch" or "ch · fr".
+export struct LayoutRow { name: string, meta: string, code: string, active: bool, selected: bool }
+/// The bar under a page: `text`, then the file's `path`; tone: "accent", "faint", "warn",
+/// "danger". not-loaded: Hyprland's config doesn't load Lituus's file (load-line does).
+export struct InputBar { text: string, path: string, tone: string, can-revert: bool, can-save: bool, not-loaded: bool, load-line: string }
+/// state: "list", "loading" or "not-running" (empty-* say why).
+export struct KeyboardView {
+    state: string,
+    empty-title: string,
+    empty-text: string,
+    hero: HeroInfo,
+    can-switch: bool,
+    layouts: [LayoutRow],
+    can-add: bool,
+    add-note: string,
+    switch-options: [string],
+    switch-selected: int,
+    repeat-delay: float,
+    repeat-delay-text: string,
+    delay-differs: string,
+    repeat-rate: float,
+    repeat-rate-text: string,
+    rate-differs: string,
+    caps-options: [string],
+    caps-selected: int,
+    compose-options: [string],
+    compose-selected: int,
+    compose-sub: string,
+    numlock: bool,
+    add-open: bool,
+    add-results: [LayoutRow],
+    add-hint: string,
+    bar: InputBar,
+}
+export struct MouseView {
+    state: string,
+    empty-title: string,
+    empty-text: string,
+    sub: string,
+    hero: HeroInfo,
+    sections: [InputSection],
+    title: string,
+    status: string,
+    status-tone: string,
+    /// "Use the defaults", "Give it its own settings", or none.
+    action: string,
+    settings: [PointerSetting],
+    note: string,
+    device: string,
+    own-open: bool,
+    own-rows: [InputRow],
+    bar: InputBar,
+}
+
+/// A slider with its value written beside it.
+component ValueSlider inherits HorizontalLayout {
+    in property <float> value;
+    in property <float> minimum;
+    in property <float> maximum;
+    in property <float> step;
+    in property <string> text;
+    in property <string> label;
+    in property <string> focus-key;
+    callback moved(float);
+    spacing: 12px;
+    Slider {
+        min-width: 90px;
+        preferred-width: 150px;
+        label: root.label;
+        focus-key: root.focus-key;
+        value: root.value;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        step: root.step;
+        value-text: root.text;
+        moved(v) => { root.moved(v); }
+    }
+    Text { text: root.text; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; horizontal-alignment: right; vertical-alignment: center; width: 50px; }
+}
+
+component SettingLine inherits SettingRow {
+    in property <PointerSetting> setting;
+    callback act(string, float);
+    label: setting.label;
+    description: setting.sub;
+    differs: setting.differs;
+    if root.setting.kind == "slider": ValueSlider {
+        label: root.setting.label;
+        focus-key: "pointer:" + root.setting.id;
+        value: root.setting.value;
+        minimum: root.setting.minimum;
+        maximum: root.setting.maximum;
+        step: root.setting.step;
+        text: root.setting.text;
+        moved(v) => { root.act(root.setting.id, v); }
+    }
+    if root.setting.kind == "switch": Switch {
+        label: root.setting.label;
+        focus-key: "pointer:" + root.setting.id;
+        on: root.setting.on;
+        toggled => { root.act(root.setting.id, 0); }
+    }
+    if root.setting.kind == "choice": Segmented {
+        label: root.setting.label;
+        focus-key: "pointer:" + root.setting.id;
+        height: 34px;
+        horizontal-stretch: 0;
+        options: root.setting.options;
+        selected: root.setting.selected;
+        changed(i) => { root.act(root.setting.id, i); }
+    }
+}
+
+/// The bar at the bottom of the pages.
+component StatusBar inherits HorizontalLayout {
+    in property <InputBar> bar;
+    callback act(string);
+    height: 34px;
+    spacing: 8px;
+    Rectangle {
+        width: 8px;
+        height: 8px;
+        y: (parent.height - 8px) / 2;
+        border-radius: 4px;
+        background: root.bar.tone == "danger" ? Theme.danger : root.bar.tone == "warn" ? Theme.warn-text : root.bar.tone == "accent" ? Theme.accent : Theme.faint;
+    }
+    HorizontalLayout {
+        horizontal-stretch: 1;
+        spacing: 5px;
+        Text { text: root.bar.text; color: root.bar.tone == "danger" ? Theme.danger : Theme.muted; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: root.bar.path == "" ? 1 : 0; }
+        if root.bar.path != "": Text { text: root.bar.path; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+    }
+    if root.bar.can-save: Button { label: "Save to config file"; horizontal-stretch: 0; min-width: self.preferred-width; clicked => { root.act("save"); } }
+    if root.bar.can-revert: Button { label: "Revert"; horizontal-stretch: 0; min-width: 84px; clicked => { root.act("revert"); } }
+}
+
+/// Hyprland isn't running, or is being read.
+component Empty inherits Card {
+    in property <string> icon;
+    in property <string> title;
+    in property <string> text;
+    vertical-stretch: 1;
+    VerticalLayout {
+        alignment: center;
+        spacing: 12px;
+        padding: 22px;
+        HorizontalLayout { alignment: center; Icon { name: root.icon; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
+        Text { text: root.title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+        if root.text != "": Text { text: root.text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; }
+    }
+}
+
+// A layout in the list: drag it by its handle, or move it with Alt+↑↓ (the window's keys).
+component LayoutItem inherits Focusable {
+    in property <LayoutRow> entry;
+    in property <int> index;
+    in property <int> count;
+    in property <length> row-height;
+    /// It's being dragged by this much.
+    in property <length> offset;
+    callback chosen();
+    callback remove();
+    /// While the handle is dragged: how far; and when it's let go.
+    callback dragged(length);
+    callback dropped(length);
+    height: row-height;
+    border-radius: 10px;
+    ring-gap: -2px;
+    focus-key: "layout:" + entry.code;
+    selected-key: entry.selected ? "layouts:selected" : "";
+    background: entry.selected ? Theme.accent-soft-bg : self.has-hover ? Theme.hover : transparent;
+    accessible-role: list-item;
+    accessible-label: entry.name + ", " + entry.meta;
+    accessible-item-selected: entry.selected;
+    accessible-action-default => { chosen(); }
+    // A click takes the focus too, so Alt+↑↓ and Del move the layout and not a slider.
+    activated => { root.chosen(); root.focus(); }
+    key(event) => {
+        // The window moves the selection or the layout; the focus goes with it.
+        if event.text == Key.UpArrow || event.text == Key.DownArrow { Focus.key = "layouts:selected"; }
+        reject
+    }
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 6px;
+        spacing: 10px;
+        Rectangle {
+            width: 24px;
+            accessible-role: none;
+            Icon { name: "grip"; tint: Theme.faint; size: 16px; }
+            grip := TouchArea {
+                mouse-cursor: root.count > 1 ? grab : default;
+                enabled: root.count > 1;
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.down { Focus.keyboard = false; root.chosen(); root.focus(); }
+                    if event.kind == PointerEventKind.up { root.dropped(self.mouse-y - self.pressed-y); }
+                }
+                moved => { if self.pressed { root.dragged(self.mouse-y - self.pressed-y); } }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: root.entry.name; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
+            Text { text: root.entry.meta; color: root.entry.active ? Theme.accent : Theme.muted; font-size: 12px; overflow: elide; }
+        }
+        // A plain icon, as in the mockup: a bordered button on every row was too heavy.
+        if root.count > 1: IconButton {
+            icon: "trash";
+            label: "Remove " + root.entry.name;
+            flat: true;
+            size: 30px;
+            focus-key: "layout-remove:" + root.entry.code;
+            y: (parent.height - self.height) / 2;
+            clicked => { root.remove(); }
+        }
+    }
+}
+
+component LayoutsCard inherits Card {
+    in property <KeyboardView> view;
+    callback act(string, string, float);
+    property <length> row-height: 52px;
+    // The row being dragged by its handle, and how far.
+    property <int> dragging: -1;
+    property <length> drag-offset;
+    property <int> drop-at: root.dragging < 0 ? -1 : clamp(root.dragging + round(root.drag-offset / root.row-height), 0, root.view.layouts.length - 1);
+    VerticalLayout {
+        padding: 20px;
+        padding-top: 14px;
+        spacing: 4px;
+        alignment: start;
+        HorizontalLayout {
+            height: 34px;
+            CardTitle { text: "Layouts"; horizontal-stretch: 1; }
+            if root.view.layouts.length > 1: Text { text: "Drag or Alt ↑↓ to reorder"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+        }
+        Rectangle {
+            height: root.view.layouts.length * root.row-height;
+            for l[i] in root.view.layouts: LayoutItem {
+                x: 0;
+                // It stays in place while it's dragged; the line shows where it goes.
+                y: i * root.row-height;
+                width: parent.width;
+                entry: l;
+                index: i;
+                count: root.view.layouts.length;
+                row-height: root.row-height;
+                opacity: i == root.dragging ? 0.75 : 1;
+                chosen => { root.act("layout-select", "" + i, 0); }
+                remove => { root.act("layout-remove", "" + i, 0); }
+                dragged(dy) => { root.dragging = i; root.drag-offset = dy; }
+                dropped(dy) => {
+                    let to = clamp(i + round(dy / root.row-height), 0, root.view.layouts.length - 1);
+                    root.dragging = -1;
+                    root.drag-offset = 0;
+                    if to != i { root.act("layout-move", i + ":" + to, 0); }
+                }
+            }
+            // Where the dragged layout goes.
+            if root.drop-at >= 0 && root.drop-at != root.dragging: Rectangle {
+                x: 28px;
+                width: parent.width - 28px;
+                height: 2px;
+                y: (root.drop-at > root.dragging ? root.drop-at + 1 : root.drop-at) * root.row-height - 1px;
+                background: Theme.accent;
+            }
+        }
+        HorizontalLayout {
+            padding-top: 8px;
+            padding-bottom: 4px;
+            Button {
+                label: "Add a layout…";
+                focus-key: "layout-add";
+                enabled: root.view.can-add;
+                horizontal-stretch: 1;
+                clicked => { root.act("add-open", "", 0); }
+            }
+        }
+        if root.view.add-note != "": Text { text: root.view.add-note; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
+        SettingRow {
+            label: "Switch layouts with";
+            description: "Pressed together, they go to the next layout";
+            first: true;
+            Select {
+                width: 190px;
+                select-height: 34px;
+                label: "Switch layouts with";
+                focus-key: "switch-keys";
+                options: root.view.switch-options;
+                selected: root.view.switch-selected;
+                chosen(i) => { root.act("switch-keys", "" + i, 0); }
+            }
+        }
+    }
+}
+
+component TypingCard inherits Card {
+    in property <KeyboardView> view;
+    callback act(string, string, float);
+    VerticalLayout {
+        padding: 20px;
+        padding-top: 14px;
+        spacing: 0;
+        alignment: start;
+        CardTitle { text: "Typing"; height: 34px; }
+        SettingRow {
+            label: "Repeat delay";
+            differs: root.view.delay-differs;
+            first: true;
+            ValueSlider {
+                label: "Repeat delay";
+                focus-key: "repeat-delay";
+                value: root.view.repeat-delay;
+                minimum: 100;
+                maximum: 1000;
+                step: 10;
+                text: root.view.repeat-delay-text;
+                moved(v) => { root.act("repeat-delay", "", v); }
+            }
+        }
+        SettingRow {
+            label: "Repeat rate";
+            differs: root.view.rate-differs;
+            ValueSlider {
+                label: "Repeat rate";
+                focus-key: "repeat-rate";
+                value: root.view.repeat-rate;
+                minimum: 5;
+                maximum: 80;
+                step: 1;
+                text: root.view.repeat-rate-text;
+                moved(v) => { root.act("repeat-rate", "", v); }
+            }
+        }
+        HorizontalLayout {
+            padding-top: 8px;
+            TextField { label: "Test the repeat"; placeholder: "Hold a key here to test the repeat"; height: 36px; }
+        }
+    }
+}
+
+component KeysCard inherits Card {
+    in property <KeyboardView> view;
+    callback act(string, string, float);
+    VerticalLayout {
+        padding: 20px;
+        padding-top: 14px;
+        spacing: 0;
+        alignment: start;
+        CardTitle { text: "Keys"; height: 34px; }
+        SettingRow {
+            label: "Caps Lock acts as";
+            first: true;
+            Select {
+                width: 190px;
+                select-height: 34px;
+                label: "Caps Lock acts as";
+                focus-key: "caps";
+                options: root.view.caps-options;
+                selected: root.view.caps-selected;
+                chosen(i) => { root.act("caps", "" + i, 0); }
+            }
+        }
+        SettingRow {
+            label: "Compose key";
+            description: root.view.compose-sub;
+            Select {
+                width: 190px;
+                select-height: 34px;
+                label: "Compose key";
+                focus-key: "compose";
+                options: root.view.compose-options;
+                selected: root.view.compose-selected;
+                chosen(i) => { root.act("compose", "" + i, 0); }
+            }
+        }
+        SettingRow {
+            label: "Num Lock on at login";
+            Switch { label: "Num Lock on at login"; focus-key: "numlock"; on: root.view.numlock; toggled => { root.act("numlock", "", 0); } }
+        }
+    }
+}
+
+export component KeyboardPage inherits VerticalLayout {
+    in property <KeyboardView> view;
+    in property <bool> compact;
+    callback act(string, string, float);
+    spacing: 14px;
+
+    if root.view.bar.not-loaded && root.view.state == "list": LoadBanner { line: root.view.bar.load-line; }
+    Hero {
+        title: "Keyboard";
+        sub: root.view.state == "list" ? "Every keyboard uses these layouts" : "";
+        hero-height: root.compact ? 136px : 206px;
+        compact: root.compact;
+        if root.view.state == "list": HeroSubject {
+            x: 24px;
+            y: parent.height - self.height - (root.compact ? 16px : 22px);
+            width: parent.width - 48px - switch-now.width - 20px;
+            height: root.compact ? 56px : 96px;
+            compact: root.compact;
+            info: root.view.hero;
+        }
+        switch-now := Button {
+            x: parent.width - self.width - 22px;
+            y: parent.height - self.height - 26px;
+            width: root.view.can-switch && root.view.state == "list" ? self.preferred-width : 0;
+            visible: root.view.can-switch && root.view.state == "list";
+            enabled: self.visible;
+            label: "Switch now";
+            focus-key: "switch-now";
+            clicked => { root.act("switch-now", "", 0); }
+        }
+    }
+    if root.view.state == "list": body := Scroll {
+        // Two columns when there's room for them, as in the mockup, and three in a wide window,
+        // so a setting's name stays near its control.
+        property <bool> three-columns: self.width >= 1500px;
+        property <bool> two-columns: self.width >= 900px && !self.three-columns;
+        // The columns follow its width, so its least width can't follow them.
+        min-width: 0;
+        vertical-stretch: 1;
+        spacing: 14px;
+        bar-inset: -16px;
+        if body.two-columns: HorizontalLayout {
+            spacing: 14px;
+            alignment: stretch;
+            // The same preferred width, so they share the row evenly.
+            VerticalLayout {
+                preferred-width: 420px;
+                horizontal-stretch: 1;
+                alignment: start;
+                LayoutsCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+            }
+            VerticalLayout {
+                preferred-width: 420px;
+                horizontal-stretch: 1;
+                spacing: 14px;
+                alignment: start;
+                TypingCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+                KeysCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+            }
+        }
+        if body.three-columns: HorizontalLayout {
+            spacing: 14px;
+            VerticalLayout {
+                preferred-width: 420px;
+                horizontal-stretch: 1;
+                alignment: start;
+                LayoutsCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+            }
+            VerticalLayout {
+                preferred-width: 420px;
+                horizontal-stretch: 1;
+                alignment: start;
+                TypingCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+            }
+            VerticalLayout {
+                preferred-width: 420px;
+                horizontal-stretch: 1;
+                alignment: start;
+                KeysCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+            }
+        }
+        if !body.two-columns && !body.three-columns: LayoutsCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+        if !body.two-columns && !body.three-columns: TypingCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+        if !body.two-columns && !body.three-columns: KeysCard { view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+    }
+    if root.view.state == "list": StatusBar { bar: root.view.bar; act(verb) => { root.act(verb, "", 0); } }
+    if root.view.state != "list": Empty { icon: "keyboard"; title: root.view.empty-title; text: root.view.empty-text; }
+}
+
+component PointerRow inherits Focusable {
+    in property <InputRow> entry;
+    callback chosen();
+    height: 52px;
+    border-radius: 10px;
+    ring-gap: -2px;
+    focus-key: "pointer-row:" + entry.id;
+    selected-key: entry.selected ? "pointers:selected" : "";
+    background: entry.selected ? Theme.accent-soft-bg : self.has-hover ? Theme.hover : transparent;
+    accessible-role: list-item;
+    accessible-label: entry.name + ", " + entry.meta;
+    accessible-item-selected: entry.selected;
+    accessible-action-default => { chosen(); }
+    activated => { root.chosen(); }
+    key(event) => {
+        if event.text == Key.UpArrow || event.text == Key.DownArrow { Focus.key = "pointers:selected"; }
+        reject
+    }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 12px;
+        Icon { name: root.entry.icon; tint: root.entry.selected ? Theme.accent : Theme.muted; size: 17px; y: (parent.height - 17px) / 2; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: root.entry.name; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
+            Text { text: root.entry.meta; color: root.entry.selected ? Theme.accent : Theme.muted; font-size: 12px; overflow: elide; }
+        }
+    }
+}
+
+export component MousePage inherits VerticalLayout {
+    in property <MouseView> view;
+    in property <bool> compact;
+    callback act(string, string, float);
+    spacing: 14px;
+
+    if root.view.bar.not-loaded && root.view.state == "list": LoadBanner { line: root.view.bar.load-line; }
+    Hero {
+        title: "Mouse & touchpad";
+        sub: root.view.sub;
+        hero-height: root.compact ? 136px : 206px;
+        compact: root.compact;
+        if root.view.state == "list": HeroSubject {
+            x: 24px;
+            y: parent.height - self.height - (root.compact ? 16px : 22px);
+            width: parent.width - 48px;
+            height: root.compact ? 56px : 96px;
+            compact: root.compact;
+            info: root.view.hero;
+        }
+    }
+    if root.view.state == "list": Scroll {
+        vertical-stretch: 1;
+        fill: true;
+        bar-inset: -16px;
+        HorizontalLayout {
+            spacing: 14px;
+            vertical-stretch: 1;
+            // Half each at 1200 × 760, as in the mockup; up to 520 px for the list.
+            Card {
+                preferred-width: 420px;
+                min-width: 330px;
+                max-width: 520px;
+                horizontal-stretch: 1;
+                VerticalLayout {
+                    padding: 12px;
+                    padding-top: 6px;
+                    spacing: 0;
+                    for section in root.view.sections: VerticalLayout {
+                        spacing: 0;
+                        SectionLabel { text: section.title; height: 30px; vertical-alignment: center; }
+                        for r in section.rows: PointerRow { entry: r; chosen => { root.act("select", r.id, 0); } }
+                    }
+                    Rectangle { vertical-stretch: 1; min-height: 12px; }
+                    Button {
+                        label: "Give a device its own settings…";
+                        focus-key: "own-open";
+                        clicked => { root.act("own-open", "", 0); }
+                    }
+                }
+            }
+            Card {
+                preferred-width: 420px;
+                horizontal-stretch: 1;
+                HorizontalLayout {
+                    alignment: start;
+                    VerticalLayout {
+                        padding: 20px;
+                        padding-top: 18px;
+                        spacing: 0;
+                        alignment: start;
+                        // Setting rows stay at a width where the label is near its control.
+                        preferred-width: 720px;
+                        max-width: 720px;
+                        horizontal-stretch: 1;
+                        Text { text: root.view.title; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; }
+                        HorizontalLayout {
+                            padding-top: 4px;
+                            padding-bottom: 12px;
+                            spacing: 6px;
+                            if root.view.status-tone == "accent": Rectangle { width: 7px; height: 7px; y: (parent.height - 7px) / 2; border-radius: 3.5px; background: Theme.accent; }
+                            Text { text: root.view.status; color: Theme.tone(root.view.status-tone); font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
+                        }
+                        if root.view.action != "": HorizontalLayout {
+                            padding-bottom: 10px;
+                            alignment: start;
+                            Button { label: root.view.action; focus-key: "pointer-action"; horizontal-stretch: 0; clicked => { root.act(root.view.action == "Use the defaults" ? "defaults" : "own", "", 0); } }
+                        }
+                        for setting[i] in root.view.settings: SettingLine {
+                            setting: setting;
+                            first: i == 0;
+                            act(id, v) => { root.act(id, "" + round(v), v); }
+                        }
+                        if root.view.note != "": Text { text: root.view.note; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
+                        if root.view.note != "" || root.view.device != "": Rectangle { height: 10px; }
+                        if root.view.device != "": Text { text: root.view.device; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; }
+                    }
+                }
+            }
+        }
+    }
+    if root.view.state == "list": StatusBar { bar: root.view.bar; act(verb) => { root.act(verb, "", 0); } }
+    if root.view.state != "list": Empty { icon: "mouse"; title: root.view.empty-title; text: root.view.empty-text; }
+}
+
+/// Adding a keyboard layout: a search over xkeyboard-config's layouts and variants.
+export component AddLayoutDialog inherits Modal {
+    in property <KeyboardView> view;
+    callback query(string);
+    callback add(int);
+    callback closed();
+    card-width: 560px;
+    label: "Add a layout";
+    dismissed => { root.closed(); }
+    Text { text: "Add a layout"; color: Theme.text; font-size: 17px; font-weight: 600; }
+    Text { text: "It goes last; drag it to the top to have it at login."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+    TextField {
+        label: "Search layouts";
+        placeholder: "Search, such as German or dvorak";
+        autofocus: true;
+        edited => { root.query(self.text); }
+        accepted => { if root.view.add-results.length > 0 { root.add(0); } }
+    }
+    Rectangle {
+        height: 280px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.border;
+        Scroll {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            for r[i] in root.view.add-results: Focusable {
+                height: 40px;
+                border-radius: 8px;
+                ring-gap: -2px;
+                focus-key: "add-layout:" + r.code;
+                background: self.has-hover ? Theme.hover : transparent;
+                accessible-role: list-item;
+                accessible-label: r.name;
+                accessible-action-default => { root.add(i); }
+                activated => { root.add(i); }
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 12px;
+                    Text { text: r.name; color: Theme.text; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                    Text { text: r.code; color: Theme.faint; font-size: 12px; font-family: "JetBrains Mono"; vertical-alignment: center; }
+                }
+            }
+            if root.view.add-hint != "": HorizontalLayout {
+                padding: 10px;
+                Text { text: root.view.add-hint; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
+            }
+        }
+    }
+    HorizontalLayout {
+        alignment: end;
+        Button { label: "Cancel"; button-height: 36px; clicked => { root.closed(); } }
+    }
+}
+
+/// Choosing the device that gets its own settings.
+export component OwnSettingsDialog inherits Modal {
+    in property <MouseView> view;
+    callback pick(string);
+    callback closed();
+    card-width: 440px;
+    label: "Give a device its own settings";
+    backdrop-dismisses: true;
+    dismissed => { root.closed(); }
+    Text { text: "Give a device its own settings"; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+    Text { text: "They start as the defaults; what you change then is for that device alone."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+    VerticalLayout {
+        spacing: 0;
+        for r in root.view.own-rows: PointerRow { entry: r; chosen => { root.pick(r.id); } }
+        if root.view.own-rows.length == 0: Text { text: "Every device connected has its own settings already."; color: Theme.faint; font-size: 13px; height: 40px; vertical-alignment: center; }
+    }
+    HorizontalLayout {
+        alignment: end;
+        Button { label: "Cancel"; button-height: 36px; clicked => { root.closed(); } }
+    }
+}

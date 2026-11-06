@@ -1,6 +1,6 @@
 [package]
 name = "lituus-hypr"
-description = "Hyprland over its sockets: monitors, workspaces, events, and monitor rules as Lua or hyprlang"
+description = "Hyprland over its sockets: monitors, workspaces, input devices, events, and monitor and input settings as Lua or hyprlang"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

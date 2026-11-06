@@ -4,7 +4,55 @@
 
 use std::process::Command;
 
-use lituus_hypr::{Monitor, MonitorRule, WorkspaceRule, file};
+use lituus_hypr::{
+    Device, DeviceSettings, InputSettings, KeyboardSettings, Layout, Monitor, MonitorRule, MouseSettings,
+    TouchpadSettings, WorkspaceRule, file, with_section,
+};
+
+/// Input settings with every field Lituus writes, none at its default.
+fn input() -> InputSettings {
+    let touchpad = TouchpadSettings {
+        natural_scroll: true,
+        tap_to_click: false,
+        disable_while_typing: false,
+        scroll_method: "edge".into(),
+        clickfinger: true,
+    };
+    InputSettings {
+        keyboard: KeyboardSettings {
+            layouts: vec![
+                Layout { layout: "ch".into(), variant: String::new() },
+                Layout { layout: "us".into(), variant: "intl".into() },
+            ],
+            options: "grp:win_space_toggle,ctrl:nocaps,compose:ralt".into(),
+            repeat_rate: 33,
+            repeat_delay: 280,
+            numlock: true,
+        },
+        mouse: MouseSettings {
+            sensitivity: -0.25,
+            accel_profile: "flat".into(),
+            natural_scroll: true,
+            scroll_factor: 1.5,
+            left_handed: true,
+        },
+        touchpad: touchpad.clone(),
+        devices: vec![
+            Device {
+                name: "logitech-mx-master-3s".into(),
+                settings: DeviceSettings::Mouse(MouseSettings {
+                    sensitivity: 0.4,
+                    accel_profile: "adaptive".into(),
+                    ..MouseSettings::default()
+                }),
+            },
+            Device {
+                name: "elan0670:00-04f3:3150-touchpad".into(),
+                settings: DeviceSettings::Touchpad(0.15, TouchpadSettings { scroll_method: "2fg".into(), ..touchpad }),
+            },
+        ],
+    }
+}
 
 fn hyprland(dir: &std::path::Path) -> Option<Command> {
     if let Ok(template) = std::env::var("LITUUS_HYPRLAND") {
@@ -73,9 +121,15 @@ fn hyprland_accepts_the_lua_file() {
         WorkspaceRule { workspace: "4".into(), monitor: rules[0].output.clone(), default: false, persistent: false },
     ];
     let mut text = file(true, Some("Desk + TV"), &rules, &workspaces);
+    // The Input part, after the Displays part.
+    text = with_section(&text, "Input", &input().file(true));
     // The live forms too: they're what `hyprctl eval` runs.
     for r in &rules {
         text += &r.lua_live();
+        text += "\n";
+    }
+    for statement in input().lua_live() {
+        text += &statement;
         text += "\n";
     }
     std::fs::write(dir.join("lituus.lua"), &text).unwrap();

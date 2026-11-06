@@ -27,7 +27,7 @@ pub struct QuickNetwork {
     /// The main window's row ID (`wifi:…`).
     pub id: String,
     pub name: String,
-    /// "WPA2 · 2.4 / 5 GHz", "Saved · 5 GHz".
+    /// "WPA2 · 2.4 / 5 GHz", "Saved · 5 GHz", "Connected · 5 GHz".
     pub meta: String,
     pub bars: u8,
     pub active: bool,
@@ -94,7 +94,13 @@ pub fn build(snap: Option<&Snapshot>, airplane: bool, signing_in: &[String]) -> 
         for n in found {
             let bands: Vec<&str> = n.bands.iter().map(|b| b.label().trim_end_matches(" GHz")).collect();
             let bands = if bands.is_empty() { String::new() } else { format!(" · {} GHz", bands.join(" / ")) };
-            let what = if n.saved.is_some() { "Saved" } else { n.security.label() };
+            // The connected one says so first, as rows do.
+            let what = match () {
+                _ if n.active && connecting => "Connecting…",
+                _ if n.active => "Connected",
+                _ if n.saved.is_some() => "Saved",
+                _ => n.security.label(),
+            };
             networks.push(QuickNetwork {
                 id: view::network_id(&n),
                 name: n.name(),
@@ -115,9 +121,9 @@ pub fn build(snap: Option<&Snapshot>, airplane: bool, signing_in: &[String]) -> 
             let signing_in = signing_in.contains(&c.uuid);
             let kind = if c.kind == ConnectionKind::WireGuard { "WireGuard" } else { "VPN" };
             let meta = match state {
-                _ if signing_in => format!("{kind} · signing in…"),
-                Some(ActiveState::Activated) => format!("{kind} · connected"),
-                Some(ActiveState::Activating) => format!("{kind} · connecting…"),
+                _ if signing_in => format!("Signing in… · {kind}"),
+                Some(ActiveState::Activated) => format!("Connected · {kind}"),
+                Some(ActiveState::Activating) => format!("Connecting… · {kind}"),
                 _ => kind.to_owned(),
             };
             QuickVpn {
@@ -178,7 +184,7 @@ mod tests {
         assert_eq!(q.status, "Wi-Fi: Lumen Home");
         let names: Vec<&str> = q.networks.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, ["Lumen Home", "Aster Café", "Bibliothek-Free"]);
-        assert_eq!(q.networks[0].meta, "Saved · 5 GHz");
+        assert_eq!(q.networks[0].meta, "Connected · 5 GHz");
         assert_eq!(q.networks[1].meta, "WPA2 · 2.4 GHz");
         assert!(q.networks[0].active && !q.networks[1].active);
         assert_eq!(q.networks[0].bars, 4);
@@ -199,7 +205,7 @@ mod tests {
         let off = vpn(&build(Some(&snap), false, &[]));
         assert_eq!((off.meta.as_str(), off.on), ("VPN", false));
         let signing_in = vpn(&build(Some(&snap), false, &["u-uzh".into()]));
-        assert_eq!((signing_in.meta.as_str(), signing_in.on, signing_in.connected), ("VPN · signing in…", true, false));
+        assert_eq!((signing_in.meta.as_str(), signing_in.on, signing_in.connected), ("Signing in… · VPN", true, false));
     }
 
     #[test]
