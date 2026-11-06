@@ -38,7 +38,7 @@ impl MonitorRule {
             mode: m.mode(),
             x: m.x,
             y: m.y,
-            scale: m.scale,
+            scale: m.exact_scale(),
             transform: m.transform,
             mirror,
             ten_bit: m.ten_bit(),
@@ -198,6 +198,62 @@ pub fn file(lua: bool, profile: Option<&str>, monitors: &[MonitorRule], workspac
     out
 }
 
+/// What a monitor rule in Lituus's file sets that Hyprland doesn't report back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unreported {
+    pub output: String,
+    pub vrr: Option<u8>,
+    pub reserved: [i32; 4],
+}
+
+/// The VRR setting and reserved area of each monitor rule in a file `file` wrote.
+pub fn unreported(text: &str) -> Vec<Unreported> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if let Some(rule) = line.strip_prefix("hl.monitor({") {
+                let output = lua_unquote(rule.split_once("output = ")?.1)?;
+                let vrr = rule.split_once(", vrr = ").and_then(|(_, v)| leading_number(v)).map(|v| v as u8);
+                let mut reserved = [0; 4];
+                if let Some((_, area)) = rule.split_once("reserved_area = {") {
+                    for (side, value) in ["top", "right", "bottom", "left"].iter().zip(&mut reserved) {
+                        if let Some((_, v)) = area.split_once(&format!("{side} = ")) {
+                            *value = leading_number(v).unwrap_or(0);
+                        }
+                    }
+                }
+                Some(Unreported { output, vrr, reserved })
+            } else {
+                let fields: Vec<&str> = line.strip_prefix("monitor = ")?.split(", ").collect();
+                let vrr = fields.iter().position(|f| *f == "vrr").and_then(|i| fields.get(i + 1)?.parse().ok());
+                Some(Unreported { output: fields.first()?.to_string(), vrr, reserved: [0; 4] })
+            }
+        })
+        .collect()
+}
+
+/// The number at the start of `s`.
+fn leading_number(s: &str) -> Option<i32> {
+    let end = s.find(|c: char| !(c.is_ascii_digit() || c == '-')).unwrap_or(s.len());
+    s[..end].parse().ok()
+}
+
+/// The Lua string literal at the start of `s`, unescaped.
+fn lua_unquote(s: &str) -> Option<String> {
+    let mut chars = s.strip_prefix('"')?.chars();
+    let mut out = String::new();
+    loop {
+        match chars.next()? {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                'n' => out.push('\n'),
+                c => out.push(c),
+            },
+            c => out.push(c),
+        }
+    }
+}
+
 /// A Lua string literal.
 fn lua_string(s: &str) -> String {
     let mut out = String::from("\"");
@@ -290,6 +346,24 @@ mod tests {
         assert_eq!(lua.matches("hl.monitor(").count(), 4);
         let conf = file(false, None, &rules, &[]);
         assert_eq!(conf.matches("\nmonitor = ").count(), 4);
+    }
+
+    #[test]
+    fn what_hyprland_doesnt_report_comes_back_from_the_file() {
+        let all = monitors();
+        let mut rules: Vec<MonitorRule> = all.iter().map(|m| MonitorRule::from_monitor(m, &all)).collect();
+        rules[1].vrr = Some(2);
+        rules[1].reserved = [40, 0, 0, 12];
+        rules[2].output = r#"a "quoted" \ name"#.into();
+        for lua in [true, false] {
+            let back = unreported(&file(lua, Some("Desk"), &rules, &[]));
+            assert_eq!(back.len(), 4);
+            assert_eq!(back[0], Unreported { output: rules[0].output.clone(), vrr: None, reserved: [0; 4] });
+            // hyprlang has no reserved area.
+            let reserved = if lua { [40, 0, 0, 12] } else { [0; 4] };
+            assert_eq!(back[1], Unreported { output: rules[1].output.clone(), vrr: Some(2), reserved });
+            assert_eq!(back[2].output, rules[2].output);
+        }
     }
 
     #[test]

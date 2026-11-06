@@ -7,15 +7,24 @@ use std::path::{Path, PathBuf};
 use lituus_hypr::{Mode, MonitorRule, WorkspaceRule};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Store {
     /// Switch to the profile that matches the monitors plugged in.
     pub switch_on_hotplug: bool,
+    /// Lituus's file names monitors by description (`desc:…`, when they have a serial), else
+    /// by port.
+    pub name_by_description: bool,
     /// The workspaces bound to monitors now.
     pub workspaces: Vec<StoredWorkspace>,
     #[serde(rename = "profile")]
     pub profiles: Vec<Profile>,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self { switch_on_hotplug: false, name_by_description: true, workspaces: Vec::new(), profiles: Vec::new() }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -213,7 +222,8 @@ mod tests {
                 persistent: false,
             }],
         };
-        let store = Store { switch_on_hotplug: true, workspaces: Vec::new(), profiles: vec![profile] };
+        let store =
+            Store { switch_on_hotplug: true, name_by_description: false, profiles: vec![profile], ..Store::default() };
         let dir = std::env::temp_dir().join(format!("lituus-profiles-{}", std::process::id()));
         let file = dir.join("displays.toml");
         save(&file, &store).unwrap();
@@ -246,5 +256,14 @@ mod tests {
     #[test]
     fn no_file_means_switching_on() {
         assert!(load(Path::new("/nonexistent/displays.toml")).switch_on_hotplug);
+    }
+
+    #[test]
+    fn monitors_are_named_by_description_unless_the_file_says_not() {
+        assert!(load(Path::new("/nonexistent/displays.toml")).name_by_description);
+        let store: Store = toml::from_str("switch_on_hotplug = true\n").unwrap();
+        assert!(store.name_by_description);
+        let store: Store = toml::from_str("name_by_description = false\n").unwrap();
+        assert!(!store.name_by_description);
     }
 }

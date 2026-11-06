@@ -44,7 +44,7 @@ component ListRow inherits Focusable {
     ring-gap: -2px;
     focus-key: "row:" + entry.id;
     selected-key: entry.selected ? "list:selected" : "";
-    background: entry.selected ? Theme.accent-soft-bg : self.has-hover ? Theme.sel-bg : transparent;
+    background: entry.selected ? Theme.accent-soft-bg : self.has-hover ? Theme.hover : transparent;
     accessible-role: list-item;
     accessible-label: entry.name + ", " + entry.meta;
     accessible-item-selected: entry.selected;
@@ -365,7 +365,7 @@ export component MainWindow inherits Window {
                     HorizontalLayout {
                         padding-left: 16px;
                         spacing: 10px;
-                        Icon { name: "warning"; tint: Theme.warn-text; y: (parent.height - 16px) / 2; }
+                        VerticalLayout { alignment: center; Icon { name: "warning"; tint: Theme.warn-text; } }
                         Text { text: root.banner; color: Theme.warn-text; font-size: 13px; vertical-alignment: center; }
                     }
                 }
@@ -531,10 +531,13 @@ export component MainWindow inherits Window {
                                     padding: 10px;
                                     padding-right: 6px;
                                     spacing: 10px;
-                                Icon {
-                                        name: root.message-tone == "info" ? "error" : root.message-tone == "warn" ? "warning" : "error";
-                                        tint: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-text : Theme.muted;
-                                        y: 2px;
+                                    // On the first line of the text.
+                                    VerticalLayout {
+                                        alignment: start;
+                                        Icon {
+                                            name: root.message-tone == "info" ? "error" : root.message-tone == "warn" ? "warning" : "error";
+                                            tint: root.message-tone == "danger" ? Theme.danger : root.message-tone == "warn" ? Theme.warn-text : Theme.muted;
+                                        }
                                     }
                                     VerticalLayout {
                                         spacing: 2px;
@@ -564,7 +567,7 @@ export component MainWindow inherits Window {
                                         width: 24px;
                                         height: 24px;
                                         border-radius: 6px;
-                                        background: self.has-hover ? Theme.sel-bg : transparent;
+                                        background: self.has-hover ? Theme.hover : transparent;
                                         accessible-role: button;
                                         accessible-label: "Dismiss";
                                         accessible-action-default => { root.dismiss-message(); }
@@ -615,7 +618,7 @@ export component MainWindow inherits Window {
                                 border-width: 1px;
                                 border-color: Theme.ctrl-border;
                                 ring-gap: -2px;
-                                background: self.has-hover ? Theme.sel-bg : transparent;
+                                background: self.has-hover ? Theme.hover : transparent;
                                 accessible-role: button;
                                 accessible-label: root.bottom-label;
                                 accessible-action-default => { root.bottom-clicked(); }
@@ -684,7 +687,8 @@ export component MainWindow inherits Window {
                                         warn := HorizontalLayout {
                                             padding: 10px;
                                             spacing: 10px;
-                                            Icon { name: "warning"; tint: Theme.warn-text; y: 2px; }
+                                            // On the first line of the text.
+                                            VerticalLayout { alignment: start; Icon { name: "warning"; tint: Theme.warn-text; } }
                                             Text { text: root.hotspot-warning; color: Theme.warn-text; font-size: 13px; wrap: word-wrap; horizontal-stretch: 1; }
                                         }
                                     }
@@ -1014,7 +1018,7 @@ export component MainWindow inherits Window {
                 border-width: 1px;
                 border-color: Theme.border2;
                 enabled: kind.ready;
-                background: self.has-hover ? Theme.sel-bg : transparent;
+                background: self.has-hover ? Theme.hover : transparent;
                 opacity: kind.ready ? 1 : 0.5;
                 accessible-role: button;
                 accessible-label: kind.title;
@@ -1024,7 +1028,7 @@ export component MainWindow inherits Window {
                 HorizontalLayout {
                     padding: 14px;
                     spacing: 12px;
-                    Icon { name: kind.icon; tint: Theme.accent; y: 2px; }
+                    VerticalLayout { alignment: start; Icon { name: kind.icon; tint: Theme.accent; } }
                     VerticalLayout {
                         spacing: 3px;
                         alignment: start;
@@ -1110,6 +1114,7 @@ export component MainWindow inherits Window {
     if root.page == "displays" && root.displays.config-open: ConfigDialog {
         view: root.displays;
         closed => { root.displays-act("close-config", "", 0); keys.focus(); }
+        name-by-description => { root.displays-act("name-by-description", "", 0); }
     }
     if root.files.sending: SendFilesDialog {
         view: root.files;

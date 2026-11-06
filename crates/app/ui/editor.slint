@@ -254,7 +254,7 @@ component Remove inherits Focusable {
     width: 28px;
     height: 28px;
     border-radius: 6px;
-    background: self.has-hover ? Theme.sel-bg : transparent;
+    background: self.has-hover ? Theme.hover : transparent;
     accessible-role: button;
     accessible-label: label;
     accessible-action-default => { clicked(); }
@@ -276,7 +276,7 @@ component AddButton inherits Focusable {
     border-radius: 8px;
     border-width: 1px;
     border-color: Theme.ctrl-border;
-    background: self.has-hover ? Theme.sel-bg : transparent;
+    background: self.has-hover ? Theme.hover : transparent;
     accessible-role: button;
     accessible-label: label;
     accessible-action-default => { clicked(); }
@@ -683,7 +683,7 @@ export component Editor inherits Rectangle {
                 border-radius: 8px;
                 border-width: 1px;
                 border-color: Theme.ctrl-border;
-                background: self.has-hover ? Theme.sel-bg : transparent;
+                background: self.has-hover ? Theme.hover : transparent;
                 accessible-role: button;
                 accessible-label: "Back";
                 accessible-action-default => { root.back(); }
@@ -1358,7 +1358,7 @@ export component Editor inherits Rectangle {
             border-radius: 8px;
             border-width: 1px;
             border-color: Theme.border2;
-            background: pick.has-hover && c.blocked == "" ? Theme.sel-bg : transparent;
+            background: pick.has-hover && c.blocked == "" ? Theme.hover : transparent;
             opacity: c.blocked == "" ? 1 : 0.55;
             accessible-role: button;
             accessible-label: c.interface + ", " + c.meta;
