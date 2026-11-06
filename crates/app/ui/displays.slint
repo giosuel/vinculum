@@ -11,10 +11,10 @@ import { Slider } from "sound.slint";
 /// A monitor on the layout, in layout pixels.
 /// workspaces: the workspaces bound to it ("1★  2  3"; ★ is the default).
 export struct LayoutMonitor { n: int, port: string, name: string, sub: string, x: float, y: float, w: float, h: float, selected: bool, disabled: bool, mirrored: bool, workspaces: string }
-/// A workspace and the monitor it opens on: `monitor` is a place in `ws-monitors` (0: any).
 /// Where a dragged monitor shows, in layout pixels, and the lines it lines up with: one down at
 /// `vx` from `vy1` to `vy2` when `v`, one across at `hy` from `hx1` to `hx2` when `h`.
 export struct DragSnap { x: float, y: float, v: bool, vx: float, vy1: float, vy2: float, h: bool, hy: float, hx1: float, hx2: float }
+/// A workspace and the monitor it opens on: `monitor` is a place in `ws-monitors` (0: any).
 export struct WorkspaceRow { name: string, monitor: int, bound: bool, default: bool, persistent: bool }
 export struct ProfileRow { name: string, summary: string, active: bool, auto: bool, exec: string }
 /// state: "list", "loading" or "not-running".
@@ -110,7 +110,7 @@ component Layout inherits Rectangle {
     in property <length> margin: 18px;
     property <length> gap: 6px;
     // The layout's bounds; after a drop that changes them, the monitors glide to where they now
-    // are instead of jumping. Nothing changes them during a drag (Rust hears only of the drop).
+    // are instead of jumping. Nothing changes them during a drag: only the drop changes the monitors.
     property <float> bx: view.bounds-x;
     property <float> by: view.bounds-y;
     property <float> bw: max(1, view.bounds-w);
