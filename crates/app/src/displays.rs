@@ -12,15 +12,13 @@ use lituus_hypr::{
 use slint::{Model, ModelRc, SharedString, VecModel};
 
 use crate::profiles::{self, Profile, Store, StoredMonitor, StoredWorkspace};
-use crate::{Confirm, Confirmed, DisplaysView, LayoutMonitor, MainWindow, ProfileRow, WorkspaceRow, update};
+use crate::{Confirm, Confirmed, DisplaysView, DragSnap, LayoutMonitor, MainWindow, ProfileRow, WorkspaceRow, update};
 
 /// The workspaces the Workspaces tab lists.
 const WORKSPACES: usize = 10;
 
 /// How long Apply waits for Keep.
 pub const KEEP_FOR: Duration = Duration::from_secs(15);
-/// How close an edge snaps to another monitor's, in layout pixels.
-const SNAP: i32 = 64;
 
 #[derive(Default)]
 pub struct State {
@@ -552,54 +550,166 @@ fn edit(rule: &mut MonitorRule, monitor: &Monitor, all: &[Monitor], verb: &str, 
     }
 }
 
-/// Moves a monitor on the layout: (x, y) in layout pixels; `done` when it's dropped, which snaps
-/// it to the other monitors' edges and centres.
-pub fn drag(state: &mut State, index: usize, x: f32, y: f32, done: bool) {
-    let others: Vec<(i32, i32, i32, i32)> = state
+/// A monitor on the layout, in layout pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Rect {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+impl Rect {
+    fn overlaps(&self, o: &Rect) -> bool {
+        self.x < o.x + o.w && o.x < self.x + self.w && self.y < o.y + o.h && o.y < self.y + self.h
+    }
+
+    /// Shares a stretch of edge with `o`, so the pointer can cross from one to the other.
+    fn touches(&self, o: &Rect) -> bool {
+        let side = (self.x == o.x + o.w || o.x == self.x + self.w) && self.y < o.y + o.h && o.y < self.y + self.h;
+        let top = (self.y == o.y + o.h || o.y == self.y + self.h) && self.x < o.x + o.w && o.x < self.x + self.w;
+        side || top
+    }
+}
+
+/// The monitors a dragged one lines up with and lands next to: the others that are on and not
+/// mirrored.
+fn others(state: &State, index: usize) -> Vec<Rect> {
+    state
         .edit
         .iter()
         .enumerate()
         .filter(|(j, r)| *j != index && !r.disabled && r.mirror.is_none())
         .map(|(_, r)| {
             let (w, h) = r.logical_size();
-            (r.x, r.y, w, h)
+            Rect { x: r.x, y: r.y, w, h }
         })
-        .collect();
+        .collect()
+}
+
+/// Where a monitor being dragged to (x, y) shows, in layout pixels: its edges and centre snap to
+/// the other monitors' within `threshold`, unless `free`. Nothing changes until it's dropped.
+pub fn snap(state: &State, index: usize, x: f32, y: f32, threshold: f32, free: bool) -> DragSnap {
+    let mut at = DragSnap { x: x.round(), y: y.round(), ..DragSnap::default() };
+    let Some(rule) = state.edit.get(index) else { return at };
+    if free {
+        return at;
+    }
+    let (w, h) = rule.logical_size();
+    let others = others(state, index);
+    let sx = snap_axis(x, w, others.iter().map(|o| (o.x, o.w)), threshold);
+    let sy = snap_axis(y, h, others.iter().map(|o| (o.y, o.h)), threshold);
+    if let Some((pos, line)) = sx {
+        at.x = pos as f32;
+        at.v = true;
+        at.vx = line;
+    }
+    if let Some((pos, line)) = sy {
+        at.y = pos as f32;
+        at.h = true;
+        at.hy = line;
+    }
+    // The lines run over the dragged monitor and every other one with an edge or centre on them.
+    let (x, y) = (at.x as i32, at.y as i32);
+    let on = |line: f32, o: i32, olen: i32| [o as f32, (o + olen) as f32, o as f32 + olen as f32 / 2.0].contains(&line);
+    let (mut vy1, mut vy2, mut hx1, mut hx2) = (y, y + h, x, x + w);
+    for o in &others {
+        if at.v && on(at.vx, o.x, o.w) {
+            (vy1, vy2) = (vy1.min(o.y), vy2.max(o.y + o.h));
+        }
+        if at.h && on(at.hy, o.y, o.h) {
+            (hx1, hx2) = (hx1.min(o.x), hx2.max(o.x + o.w));
+        }
+    }
+    (at.vy1, at.vy2, at.hx1, at.hx2) = (vy1 as f32, vy2 as f32, hx1 as f32, hx2 as f32);
+    at
+}
+
+/// The start on one axis that puts a monitor `len` long, now at `pos`, against or in line with
+/// another's edge or centre, if one is within `threshold`: (start, where the line is).
+fn snap_axis(pos: f32, len: i32, others: impl Iterator<Item = (i32, i32)>, threshold: f32) -> Option<(i32, f32)> {
+    let mut best: Option<(i32, f32, f32)> = None;
+    for (o, olen) in others {
+        let centre = o as f32 + olen as f32 / 2.0;
+        let candidates = [
+            // Touching: my start at your end, my end at your start.
+            (o + olen, (o + olen) as f32),
+            (o - len, o as f32),
+            // In line: starts, ends, centres.
+            (o, o as f32),
+            (o + olen - len, (o + olen) as f32),
+            ((centre - len as f32 / 2.0).round() as i32, centre),
+        ];
+        for (start, line) in candidates {
+            let d = (start as f32 - pos).abs();
+            if d <= threshold && best.is_none_or(|b| d < b.2) {
+                best = Some((start, line, d));
+            }
+        }
+    }
+    best.map(|(start, line, _)| (start, line))
+}
+
+/// Drops a monitor at (x, y), in layout pixels, rounded to whole ones. If it would overlap
+/// another monitor or touch none (Hyprland would leave the pointer no way across), it goes to the
+/// nearest place against one instead.
+pub fn drop(state: &mut State, index: usize, x: f32, y: f32) {
+    let others = others(state, index);
     let Some(rule) = state.edit.get_mut(index) else { return };
     let (w, h) = rule.logical_size();
-    let (mut x, mut y) = (x.round() as i32, y.round() as i32);
-    if done {
-        x = snap(x, w, others.iter().map(|o| (o.0, o.2)));
-        y = snap(y, h, others.iter().map(|o| (o.1, o.3)));
-    }
-    rule.x = x;
-    rule.y = y;
-    if done {
-        // The layout's top-left corner stays at 0, 0, as Hyprland lays it out.
-        let enabled: Vec<&MonitorRule> = state.edit.iter().filter(|r| !r.disabled).collect();
-        let min_x = enabled.iter().map(|r| r.x).min().unwrap_or(0);
-        let min_y = enabled.iter().map(|r| r.y).min().unwrap_or(0);
-        if min_x < 0 || min_y < 0 {
-            for r in &mut state.edit {
-                r.x -= min_x.min(0);
-                r.y -= min_y.min(0);
-            }
+    let at = place(Rect { x: x.round() as i32, y: y.round() as i32, w, h }, &others);
+    rule.x = at.x;
+    rule.y = at.y;
+    // The layout's top-left corner stays at 0, 0, as Hyprland lays it out.
+    let enabled: Vec<&MonitorRule> = state.edit.iter().filter(|r| !r.disabled).collect();
+    let min_x = enabled.iter().map(|r| r.x).min().unwrap_or(0);
+    let min_y = enabled.iter().map(|r| r.y).min().unwrap_or(0);
+    if min_x < 0 || min_y < 0 {
+        for r in &mut state.edit {
+            r.x -= min_x.min(0);
+            r.y -= min_y.min(0);
         }
     }
 }
 
-/// The start or end that lines up with another monitor's edge or centre, if one is near.
-fn snap(pos: i32, len: i32, others: impl Iterator<Item = (i32, i32)>) -> i32 {
-    let mut best: Option<(i32, i32)> = None;
-    for (o, olen) in others {
-        for candidate in [o, o + olen, o - len, o + olen - len, o + (olen - len) / 2] {
-            let d = (candidate - pos).abs();
-            if d <= SNAP && best.is_none_or(|(_, bd)| d < bd) {
-                best = Some((candidate, d));
+/// `me` if it touches one of `others` and overlaps none, or else the nearest place that does.
+fn place(me: Rect, others: &[Rect]) -> Rect {
+    let fits = |r: &Rect| others.iter().any(|o| r.touches(o)) && !others.iter().any(|o| r.overlaps(o));
+    if others.is_empty() || fits(&me) {
+        return me;
+    }
+    let mut best: Option<(Rect, i64)> = None;
+    for o in others {
+        // Against its left or right side, or its top or bottom.
+        let ys = along(me.y, me.h, o.y, o.h, others.iter().flat_map(|p| [p.y + p.h, p.y - me.h]));
+        let xs = along(me.x, me.w, o.x, o.w, others.iter().flat_map(|p| [p.x + p.w, p.x - me.w]));
+        let sides = [o.x - me.w, o.x + o.w].into_iter().flat_map(|x| ys.iter().map(move |&y| Rect { x, y, ..me }));
+        let ends = [o.y - me.h, o.y + o.h].into_iter().flat_map(|y| xs.iter().map(move |&x| Rect { x, y, ..me }));
+        for c in sides.chain(ends).filter(|c| fits(c)) {
+            let d = i64::from(c.x - me.x).pow(2) + i64::from(c.y - me.y).pow(2);
+            if best.is_none_or(|b| d < b.1) {
+                best = Some((c, d));
             }
         }
     }
-    best.map_or(pos, |(c, _)| c)
+    // Right of the right-most monitor, in line with its top: always free.
+    best.map_or_else(
+        || {
+            let o = others.iter().max_by_key(|o| o.x + o.w).unwrap_or(&me);
+            Rect { x: o.x + o.w, y: o.y, ..me }
+        },
+        |b| b.0,
+    )
+}
+
+/// Starts on one axis that keep a monitor `len` long against a side `olen` long at `o`, sharing
+/// some of it: where it was dropped (`pos`) if that does, in line with either end of the side, and
+/// those of `more` that do (next to other monitors).
+fn along(pos: i32, len: i32, o: i32, olen: i32, more: impl Iterator<Item = i32>) -> Vec<i32> {
+    let shares = |s: &i32| (o - len + 1..o + olen).contains(s);
+    let mut v = vec![o, o + olen - len];
+    v.extend(std::iter::once(pos).chain(more).filter(shares));
+    v
 }
 
 /// What keeps Apply off: an invalid scale, or monitors on top of each other.
@@ -774,7 +884,7 @@ pub fn view(state: &State) -> DisplaysView {
     v.bounds_y = by as f32;
     v.bounds_w = (right - bx).max(1) as f32;
     v.bounds_h = (by2 - by).max(1) as f32;
-    v.logical = s(format!("Layout pixels · {} × {} · drag to move; edges snap", bx2 - bx, by2 - by));
+    v.logical = s(format!("Layout pixels · {} × {} · drag to move, hold Shift not to snap", bx2 - bx, by2 - by));
     v.monitors = ModelRc::new(VecModel::from(layout));
 
     // The selected monitor.
@@ -1095,18 +1205,167 @@ mod tests {
         assert!(view(&st).status.contains("can't use scale 1.3"));
         assert!(!view(&st).can_apply);
         act(&w, &mut st, "revert", "", 0.0);
-        // DP-4 dragged onto the G8.
-        drag(&mut st, 3, 4000.0, 2400.0, false);
+        // DP-4 moved onto the G8.
+        act(&w, &mut st, "select", "3", 0.0);
+        act(&w, &mut st, "x", "4000", 0.0);
         assert!(view(&st).status.contains("overlap"), "{}", view(&st).status);
     }
 
+    // The fixture's monitors, all 2560 × 1440 in layout pixels: DP-3 at 1218, 2393, HDMI-A-3 at
+    // 3778, 953, the G8 (DP-5) under it at 3778, 2393, and DP-4 right of that at 6338, 2393.
+
     #[test]
-    fn dropping_snaps_to_an_edge() {
+    fn a_dragged_monitor_snaps_against_an_edge() {
+        let st = state();
+        // DP-4 50 px right of the G8 and well above it: its left edge goes to the G8's right one.
+        let at = snap(&st, 3, 6388.0, 1993.0, 100.0, false);
+        assert_eq!((at.x, at.y), (6338.0, 1993.0));
+        assert!(at.v && !at.h);
+        // The line is at that edge, over DP-4 and both monitors whose right edge it is.
+        assert_eq!((at.vx, at.vy1, at.vy2), (6338.0, 953.0, 3833.0));
+    }
+
+    #[test]
+    fn a_dragged_monitor_snaps_in_line_with_another() {
+        // DP-4 at half the size (1280 × 720), far right of the others and 30 px below HDMI-A-3's
+        // top: the tops line up.
         let mut st = state();
-        // DP-4 dropped 30 px right of the G8's right edge, and a little low.
-        let g8_right = st.edit[2].x + st.edit[2].logical_size().0;
-        drag(&mut st, 3, (g8_right + 30) as f32, 2420.0, true);
-        assert_eq!((st.edit[3].x, st.edit[3].y), (g8_right, 2393));
+        st.edit[3].scale = 2.0;
+        let at = snap(&st, 3, 6838.0, 983.0, 100.0, false);
+        assert_eq!((at.x, at.y), (6838.0, 953.0));
+        assert!(at.h && !at.v);
+        assert_eq!((at.hy, at.hx1, at.hx2), (953.0, 3778.0, 8118.0));
+        // 12 px off the G8's centre.
+        let at = snap(&st, 3, 4430.0, 4000.0, 100.0, false);
+        assert_eq!((at.x, at.vx), (4418.0, 5058.0));
+    }
+
+    #[test]
+    fn snapping_needs_the_edge_near_and_no_shift() {
+        let st = state();
+        // Farther than the threshold.
+        let at = snap(&st, 3, 6388.0, 1993.0, 40.0, false);
+        assert_eq!((at.x, at.y, at.v, at.h), (6388.0, 1993.0, false, false));
+        // Shift held.
+        let at = snap(&st, 3, 6388.0, 1993.0, 100.0, true);
+        assert_eq!((at.x, at.y, at.v, at.h), (6388.0, 1993.0, false, false));
+        // On whole layout pixels either way.
+        let at = snap(&st, 3, 6388.4, 1993.6, 100.0, true);
+        assert_eq!((at.x, at.y), (6388.0, 1994.0));
+        // Snapping changes nothing; only the drop does.
+        assert_eq!(st.edit, st.live);
+    }
+
+    #[test]
+    fn a_drop_on_another_monitor_goes_next_to_it() {
+        let mut st = state();
+        // DP-4 dropped 538 px into the G8: it goes back against its right edge, at the same height.
+        drop(&mut st, 3, 5800.0, 2300.0);
+        assert_eq!((st.edit[3].x, st.edit[3].y), (6338, 2300));
+        assert!(!view(&st).status.contains("overlap"));
+        // Dropped onto DP-3 and the G8 at once, nearest their bottom edges: under them.
+        drop(&mut st, 3, 2400.0, 3300.0);
+        assert_eq!((st.edit[3].x, st.edit[3].y), (2400, 3833));
+    }
+
+    #[test]
+    fn a_drop_away_from_the_others_goes_against_the_nearest() {
+        let mut st = state();
+        // 662 px right of the G8.
+        drop(&mut st, 3, 7000.4, 2392.6);
+        assert_eq!((st.edit[3].x, st.edit[3].y), (6338, 2393));
+        // Far under DP-3: up against its bottom.
+        drop(&mut st, 3, 1218.0, 5000.0);
+        assert_eq!((st.edit[3].x, st.edit[3].y), (1218, 3833));
+        // Only touching at a corner is not touching.
+        drop(&mut st, 3, 6338.0, 3833.0);
+        assert_eq!((st.edit[3].x, st.edit[3].y), (6338, 3833 - 1440));
+    }
+
+    #[test]
+    fn a_drop_where_it_fits_stays_there() {
+        let mut st = state();
+        // Right of HDMI-A-3, sharing some of its edge with it, and on top of nothing.
+        drop(&mut st, 3, 6338.0, 900.0);
+        assert_eq!((st.edit[3].x, st.edit[3].y), (6338, 900));
+        // Left of DP-3 and past the layout's edge: everything moves right, so it starts at 0.
+        drop(&mut st, 3, -1342.0, 2393.0);
+        assert_eq!((st.edit[3].x, st.edit[3].y), (0, 2393));
+        assert_eq!(st.edit[0].x, 2560);
+    }
+
+    /// A drag moves the tile 1:1 with the pointer, from where it was grabbed, and asks Rust only
+    /// where it lines up (`snap`, which changes nothing); the drop is the only change. A press
+    /// that moves less than the dead zone only selects.
+    #[test]
+    fn a_drag_moves_only_the_tile_until_the_drop() {
+        use i_slint_backend_testing::ElementHandle;
+        use slint::platform::{PointerEventButton, WindowEvent};
+        use slint::{ComponentHandle, LogicalPosition, LogicalSize};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        i_slint_backend_testing::init_no_event_loop();
+        let window = crate::MainWindow::new().unwrap();
+        window.window().set_size(LogicalSize::new(1200.0, 760.0));
+        window.set_page("displays".into());
+        let st = state();
+        render(&window, &st);
+        window.show().unwrap();
+        let calls = Rc::new(RefCell::new(Vec::<String>::new()));
+        let c = calls.clone();
+        // As it is, so the tile is where the pointer puts it.
+        window.on_displays_snap(move |i, x, y, _, _| {
+            c.borrow_mut().push(format!("snap {i}"));
+            DragSnap { x, y, ..DragSnap::default() }
+        });
+        let c = calls.clone();
+        let drops = Rc::new(RefCell::new(Vec::new()));
+        let d = drops.clone();
+        window.on_displays_drop(move |i, x, y| {
+            c.borrow_mut().push(format!("drop {i}"));
+            d.borrow_mut().push((x, y));
+        });
+        let c = calls.clone();
+        window.on_displays_act(move |verb, arg, _| c.borrow_mut().push(format!("{verb} {arg}")));
+
+        let m = view(&st).monitors.row_data(3).unwrap();
+        let label = format!("{}, {}, {}", m.port, m.name, m.sub);
+        let tile = || ElementHandle::find_by_accessible_label(&window, &label).next().unwrap();
+        let (start, size) = (tile().absolute_position(), tile().size());
+        let at =
+            |dx: f32, dy: f32| LogicalPosition::new(start.x + size.width / 2.0 + dx, start.y + size.height / 2.0 + dy);
+        let send = |e: WindowEvent| window.window().dispatch_event(e);
+        let button = PointerEventButton::Left;
+
+        // A click that wobbles a little.
+        send(WindowEvent::PointerPressed { position: at(0.0, 0.0), button });
+        send(WindowEvent::PointerMoved { position: at(3.0, -2.0) });
+        assert_eq!(tile().absolute_position(), start);
+        send(WindowEvent::PointerReleased { position: at(3.0, -2.0), button });
+        assert_eq!(*calls.borrow(), ["select 3"]);
+        calls.borrow_mut().clear();
+
+        // A drag.
+        send(WindowEvent::PointerPressed { position: at(0.0, 0.0), button });
+        for step in 1..=10 {
+            let d = step as f32 * 5.0;
+            send(WindowEvent::PointerMoved { position: at(d, -d) });
+            let p = tile().absolute_position();
+            assert!((p.x - (start.x + d)).abs() <= 1.0 && (p.y - (start.y - d)).abs() <= 1.0, "{step}: {p:?}");
+        }
+        // (The press selects again: this test doesn't render the selection.)
+        assert_eq!(calls.borrow()[0], "select 3");
+        assert_eq!(calls.borrow()[1..], ["snap 3"; 10], "one per move, and nothing else");
+        send(WindowEvent::PointerReleased { position: at(50.0, -50.0), button });
+        assert_eq!(calls.borrow().last().unwrap(), "drop 3");
+        assert_eq!(calls.borrow().iter().filter(|c| c.starts_with("drop")).count(), 1);
+        // 50 px on the screen, in layout pixels (the tile is a 6 px gap smaller than the monitor),
+        // give or take a pixel's rounding.
+        let k = (size.width + 6.0) / m.w;
+        let (x, y) = drops.borrow()[0];
+        assert!((x - (m.x + 50.0 / k)).abs() < 1.5 / k && (y - (m.y - 50.0 / k)).abs() < 1.5 / k, "{x}, {y}");
+        // Back where the model has it, which the drop (not called here) would have changed.
+        assert_eq!(tile().absolute_position(), start);
     }
 
     #[test]

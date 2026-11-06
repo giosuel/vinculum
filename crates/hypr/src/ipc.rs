@@ -6,6 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::input::{Devices, Value, option_value};
 use crate::model::{Monitor, Version, Workspace};
 
 #[derive(Debug, thiserror::Error)]
@@ -71,6 +72,21 @@ impl Hyprland {
 
     pub fn version(&self) -> Result<Version, Error> {
         self.json("version")
+    }
+
+    /// The keyboards and pointers.
+    pub fn devices(&self) -> Result<Devices, Error> {
+        Ok(Devices::parse(&self.request("j/devices")?)?)
+    }
+
+    /// The value of a setting ("input:repeat_rate"), or `None` if Hyprland has no such setting.
+    pub fn option(&self, name: &str) -> Result<Option<Value>, Error> {
+        Ok(option_value(&self.request(&format!("j/getoption {name}"))?))
+    }
+
+    /// Every keyboard to its next layout, as `hyprctl switchxkblayout all next`.
+    pub fn switch_layout(&self) -> Result<(), Error> {
+        ok(self.request("switchxkblayout all next")?)
     }
 
     /// Runs Lua in Hyprland's config (0.55 and later): `hl.monitor({ … })` applies at once.

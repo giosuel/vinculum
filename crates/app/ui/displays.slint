@@ -5,12 +5,15 @@ import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 import { Button, IconButton, Switch, SectionLabel, Scroll, Focusable } from "controls.slint";
 import { Segmented, Select, TextField, CheckBox, Modal } from "dialogs.slint";
-import { Hero, Card } from "shell.slint";
+import { Hero, Card, LoadBanner } from "shell.slint";
 import { Slider } from "sound.slint";
 
 /// A monitor on the layout, in layout pixels.
 /// workspaces: the workspaces bound to it ("1★  2  3"; ★ is the default).
 export struct LayoutMonitor { n: int, port: string, name: string, sub: string, x: float, y: float, w: float, h: float, selected: bool, disabled: bool, mirrored: bool, workspaces: string }
+/// Where a dragged monitor shows, in layout pixels, and the lines it lines up with: one down at
+/// `vx` from `vy1` to `vy2` when `v`, one across at `hy` from `hx1` to `hx2` when `h`.
+export struct DragSnap { x: float, y: float, v: bool, vx: float, vy1: float, vy2: float, h: bool, hy: float, hx1: float, hx2: float }
 /// A workspace and the monitor it opens on: `monitor` is a place in `ws-monitors` (0: any).
 export struct WorkspaceRow { name: string, monitor: int, bound: bool, default: bool, persistent: bool }
 export struct ProfileRow { name: string, summary: string, active: bool, auto: bool, exec: string }
@@ -93,43 +96,70 @@ component Badge inherits Rectangle {
     Text { text: root.n; color: root.on ? Theme.on-accent : Theme.muted; font-size: max(11px, round(root.size / 2px) * 1px); font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
 }
 
-/// The monitors to scale, draggable.
+/// The monitors to scale, draggable. A drag moves only the monitor on the screen, lined up with
+/// the others' edges as it goes (`snap`, from Rust, which changes nothing); the drop goes to Rust.
 component Layout inherits Rectangle {
     in property <DisplaysView> view;
     in property <bool> show-workspaces;
     callback select(int);
-    callback drag(int, float, float, bool);
+    /// A monitor dropped at (x, y), in layout pixels.
+    callback drop(int, float, float);
+    /// Where a monitor dragged to (x, y) shows: lined up with another's edge within `threshold`
+    /// layout pixels, unless `free` (Shift is down).
+    pure callback snap(int, float, float, float, bool) -> DragSnap;
     in property <length> margin: 18px;
     property <length> gap: 6px;
+    // The layout's bounds; after a drop that changes them, the monitors glide to where they now
+    // are instead of jumping. Nothing changes them during a drag: only the drop changes the monitors.
+    property <float> bx: view.bounds-x;
+    property <float> by: view.bounds-y;
+    property <float> bw: max(1, view.bounds-w);
+    property <float> bh: max(1, view.bounds-h);
+    animate bx, by, bw, bh { duration: 200ms; easing: ease-out; }
     // Layout pixels to screen.
-    property <float> k: min((self.width - 2 * margin) / 1px / max(1, view.bounds-w), (self.height - 2 * margin) / 1px / max(1, view.bounds-h));
-    property <length> ox: (self.width - view.bounds-w * k * 1px) / 2;
-    property <length> oy: (self.height - view.bounds-h * k * 1px) / 2;
+    property <float> k: min((self.width - 2 * margin) / 1px / bw, (self.height - 2 * margin) / 1px / bh);
+    property <length> ox: (self.width - bw * k * 1px) / 2;
+    property <length> oy: (self.height - bh * k * 1px) / 2;
+    // How far a press moves before it drags, and how close an edge snaps, on the screen.
+    property <length> dead-zone: 4px;
+    property <length> snap-distance: 10px;
+    // The monitor being dragged (-1: none), where it shows, and the point of it that was grabbed,
+    // in layout pixels.
+    property <int> dragging: -1;
+    property <DragSnap> at;
+    property <float> grab-x;
+    property <float> grab-y;
+    // Between the screen (on whole pixels, so borders and text stay sharp) and layout pixels.
+    pure function to-x(v: float) -> length { round((root.ox + (v - root.bx) * root.k * 1px) / 1px) * 1px }
+    pure function to-y(v: float) -> length { round((root.oy + (v - root.by) * root.k * 1px) / 1px) * 1px }
+    pure function from-x(p: length) -> float { (p - root.ox) / 1px / root.k + root.bx }
+    pure function from-y(p: length) -> float { (p - root.oy) / 1px / root.k + root.by }
     // Space or Enter selects one; dragging stays a mouse thing.
     for m[i] in root.view.monitors: tile := Focusable {
-        property <length> dx: touch.pressed ? touch.mouse-x - touch.pressed-x : 0;
-        property <length> dy: touch.pressed ? touch.mouse-y - touch.pressed-y : 0;
-        // The edges on whole pixels, so borders and text stay sharp, and a gap between monitors
-        // that touch.
-        property <length> left: round((root.ox + (m.x - root.view.bounds-x) * root.k * 1px) / 1px) * 1px;
-        property <length> top: round((root.oy + (m.y - root.view.bounds-y) * root.k * 1px) / 1px) * 1px;
-        property <length> right: round((root.ox + (m.x + m.w - root.view.bounds-x) * root.k * 1px) / 1px) * 1px;
-        property <length> bottom: round((root.oy + (m.y + m.h - root.view.bounds-y) * root.k * 1px) / 1px) * 1px;
-        // Text, badge and padding grow with the monitor, from their size at a 1200 × 760 window,
-        // and shrink on a smaller one, the text later and less than the rest.
-        property <float> scale: min(self.width / 165px, self.height / 92px);
-        property <float> f: clamp(scale, 0.7, 1.5);
-        property <float> text-f: max(0.85, min(f + 0.15, max(1, f)));
-        // The padding goes down further, to keep room for the name.
-        property <length> pad: round(10 * clamp(scale, 0.5, 1.5)) * 1px;
-        property <length> line: round(2 * f) * 1px;
-        // A tile too short for every line drops the last ones; the number and the port stay.
-        property <length> name-size: round(13 * text-f) * 1px;
-        property <length> sub-size: round(12 * text-f) * 1px;
-        property <bool> show-name: self.height >= 2 * pad + round(22 * f) * 1px + line + 1.3 * name-size;
-        property <bool> show-sub: show-name && self.height >= 2 * pad + round(22 * f) * 1px + 2 * line + 1.3 * (name-size + sub-size);
-        x: left + root.gap / 2 + dx;
-        y: top + root.gap / 2 + dy;
+        property <bool> dragged: root.dragging == i;
+        property <bool> movable: !m.disabled && !m.mirrored;
+        property <float> mx: dragged ? root.at.x : m.x;
+        property <float> my: dragged ? root.at.y : m.y;
+        // A gap between monitors that touch.
+        property <length> left: root.to-x(mx);
+        property <length> top: root.to-y(my);
+        property <length> right: root.to-x(mx + m.w);
+        property <length> bottom: root.to-y(my + m.h);
+        // The text is the same size on every tile, as on a diagram; a tile too small for it makes
+        // it smaller, and drops the lines that don't fit; the number and the port stay.
+        property <float> scale: min(self.width / 150px, self.height / 80px);
+        property <float> f: clamp(scale, 0.8, 1);
+        property <length> pad: clamp(round(10 * scale) * 1px, 4px, 12px);
+        property <length> badge: round(18 * f) * 1px;
+        property <length> line: 2px;
+        property <length> port-size: round(11 * f) * 1px;
+        property <length> name-size: round(13 * f) * 1px;
+        property <length> sub-size: round(12 * f) * 1px;
+        property <bool> show-name: self.height >= 2 * pad + badge + line + 1.3 * name-size;
+        property <bool> show-sub: show-name && self.height >= 2 * pad + badge + 2 * line + 1.3 * (name-size + sub-size);
+        x: left + root.gap / 2;
+        y: top + root.gap / 2;
+        z: dragged ? 1 : 0;
         width: right - left - root.gap;
         height: bottom - top - root.gap;
         border-radius: 8px;
@@ -151,24 +181,63 @@ component Layout inherits Rectangle {
             padding: tile.pad;
             spacing: tile.line;
             HorizontalLayout {
-                spacing: round(7 * tile.f) * 1px;
-                Badge { n: m.n; on: m.selected; size: round(22 * tile.f) * 1px; }
-                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: round(12 * tile.text-f) * 1px; font-family: "JetBrains Mono"; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                spacing: round(6 * tile.f) * 1px;
+                Badge { n: m.n; on: m.selected; size: tile.badge; }
+                Text { text: m.port; color: m.selected ? Theme.accent : Theme.muted; font-size: tile.port-size; font-family: "JetBrains Mono"; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
             }
             Rectangle { vertical-stretch: 1; }
             if tile.show-name: Text { text: m.name; color: Theme.text; font-size: tile.name-size; font-weight: 600; overflow: elide; }
             if tile.show-sub && !root.show-workspaces: Text { text: m.sub; color: Theme.muted; font-size: tile.sub-size; overflow: elide; }
             if tile.show-sub && root.show-workspaces: Text { text: m.workspaces == "" ? "No workspaces bound" : m.workspaces; color: m.workspaces == "" ? Theme.faint : Theme.accent; font-size: tile.sub-size; font-family: "JetBrains Mono"; overflow: elide; }
         }
-        touch := TouchArea {
-            mouse-cursor: m.disabled || m.mirrored ? pointer : move;
+        TouchArea {
+            mouse-cursor: tile.movable ? move : pointer;
             pointer-event(event) => {
-                if event.kind == PointerEventKind.down { root.select(i); }
-                if event.kind == PointerEventKind.up && !m.disabled && !m.mirrored && (abs(self.mouse-x - self.pressed-x) > 2px || abs(self.mouse-y - self.pressed-y) > 2px) {
-                    root.drag(i, m.x + (self.mouse-x - self.pressed-x) / 1px / root.k, m.y + (self.mouse-y - self.pressed-y) / 1px / root.k, true);
+                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left && !m.selected {
+                    root.select(i);
+                }
+                // A press becomes a drag once it has moved a little, so a click only selects.
+                if event.kind == PointerEventKind.move && self.pressed && tile.movable && !tile.dragged
+                    && (abs(self.mouse-x - self.pressed-x) > root.dead-zone || abs(self.mouse-y - self.pressed-y) > root.dead-zone) {
+                    root.grab-x = root.from-x(tile.x + self.pressed-x) - m.x;
+                    root.grab-y = root.from-y(tile.y + self.pressed-y) - m.y;
+                    root.at = { x: m.x, y: m.y };
+                    root.dragging = i;
+                }
+                if event.kind == PointerEventKind.move && tile.dragged {
+                    // The pointer, from the tile where it is now (it moves with the pointer), and
+                    // the tile kept inside the layout.
+                    root.at = root.snap(i,
+                        clamp(root.from-x(tile.x + self.mouse-x) - root.grab-x, root.from-x(0px), root.from-x(root.width) - m.w),
+                        clamp(root.from-y(tile.y + self.mouse-y) - root.grab-y, root.from-y(0px), root.from-y(root.height) - m.h),
+                        root.snap-distance / 1px / root.k, event.modifiers.shift);
+                }
+                if event.kind == PointerEventKind.up && tile.dragged {
+                    root.drop(i, root.at.x, root.at.y);
+                    root.dragging = -1;
+                }
+                if event.kind == PointerEventKind.cancel {
+                    root.dragging = -1;
                 }
             }
         }
+    }
+    // The edges or centres a dragged monitor lines up with, a little past both monitors.
+    if root.dragging >= 0 && root.at.v: Rectangle {
+        x: root.to-x(root.at.vx);
+        y: root.to-y(root.at.vy1) - 8px;
+        z: 2;
+        width: 1px;
+        height: root.to-y(root.at.vy2) - root.to-y(root.at.vy1) + 16px;
+        background: Theme.accent;
+    }
+    if root.dragging >= 0 && root.at.h: Rectangle {
+        x: root.to-x(root.at.hx1) - 8px;
+        y: root.to-y(root.at.hy);
+        z: 2;
+        width: root.to-x(root.at.hx2) - root.to-x(root.at.hx1) + 16px;
+        height: 1px;
+        background: Theme.accent;
     }
 }
 
@@ -193,53 +262,26 @@ export component DisplaysPage inherits VerticalLayout {
     in property <length> window-height;
     property <string> new-profile;
     callback act(string, string, float);
-    callback drag(int, float, float, bool);
+    callback drop(int, float, float);
+    pure callback snap(int, float, float, float, bool) -> DragSnap;
     spacing: 14px;
 
-    if root.view.not-loaded && root.view.state == "list": Rectangle {
-        height: banner.preferred-height;
-        border-radius: 12px;
-        border-width: 1px;
-        border-color: Theme.warn-border;
-        background: Theme.warn-bg;
-        copy-field := TextInput { visible: false; text: root.view.load-line; read-only: true; }
-        banner := HorizontalLayout {
-            padding: 6px;
-            padding-left: 14px;
-            spacing: 10px;
-            // Centred by a layout: a `y` here put the icon at the top when the text is one line.
-            VerticalLayout { alignment: center; Icon { name: "warning"; tint: Theme.warn-text; } }
-            Text {
-                text: "Your Hyprland config doesn't load Lituus's file yet, so changes are lost when Hyprland restarts.";
-                color: Theme.warn-text;
-                font-size: 13px;
-                wrap: word-wrap;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-            }
-            VerticalLayout {
-                alignment: center;
-                Button {
-                    label: "Copy " + root.view.load-line;
-                    button-height: 30px;
-                    min-width: self.preferred-width;
-                    horizontal-stretch: 0;
-                    clicked => { copy-field.select-all(); copy-field.copy(); }
-                }
-            }
-        }
-    }
+    if root.view.not-loaded && root.view.state == "list": LoadBanner { line: root.view.load-line; }
 
-    // On the Monitor tab the hero (with the monitors) grows into the room the settings leave, up
-    // to 720 px. Workspaces and Profiles keep it at its smallest: their lists need the room.
+    // On the Monitor tab the hero (with the monitors) takes what the window's height leaves the
+    // settings, up to 720 px, the same on each of the settings' tabs, so the monitors don't
+    // change size with them. Workspaces and Profiles keep it at its smallest: their lists need
+    // the room.
     hero-box := Rectangle {
         // Smaller in a shorter window, down to where the monitors are still readable, and the
         // settings scroll; the banner takes its height from the hero's, so the settings keep theirs.
         property <length> smallest: root.view.state != "list" ? 140px : clamp(root.window-height - 400px, 236px, 330px) - (root.view.not-loaded ? 44px : 0);
         property <bool> grows: root.view.state == "list" && root.page-tab == 0;
+        property <length> tall: grows ? clamp(root.window-height - 396px - (root.view.not-loaded ? 44px : 0), smallest, 720px) : smallest;
         min-height: smallest;
-        max-height: grows ? 720px : smallest;
-        vertical-stretch: grows ? 1 : 0;
+        preferred-height: tall;
+        max-height: tall;
+        vertical-stretch: 0;
         Hero {
             title: "Displays";
             sub: root.view.sub;
@@ -255,7 +297,8 @@ export component DisplaysPage inherits VerticalLayout {
                 view: root.view;
                 show-workspaces: root.page-tab == 1;
                 select(i) => { root.act("select", "" + i, 0); }
-                drag(i, x, y, done) => { root.drag(i, x, y, done); }
+                drop(i, x, y) => { root.drop(i, x, y); }
+                snap(i, x, y, threshold, free) => { return root.snap(i, x, y, threshold, free); }
             }
             if root.view.state == "list": Text {
                 x: 24px;
@@ -283,10 +326,8 @@ export component DisplaysPage inherits VerticalLayout {
 
     // The settings scroll in a short window; the bar with Apply stays below them.
     if root.view.state == "list": Scroll {
-        // On the Monitor tab it asks for the settings' height and grows only once the hero has
-        // all it takes; shorter, it scrolls.
-        preferred-height: root.page-tab == 0 ? self.content-height : 0;
-        vertical-stretch: root.page-tab == 0 ? 0 : 1;
+        // What the hero leaves; shorter than the settings, it scrolls.
+        vertical-stretch: 1;
         fill: true;
         spacing: 14px;
         bar-inset: -16px;
