@@ -1,0 +1,69 @@
+{
+"mice": [
+    {
+        "address": "0x55d1c2a0e8f0",
+        "name": "logitech-mx-master-3s",
+        "defaultSpeed": 0.00000,
+        "scrollFactor": -1.00
+    },
+    {
+        "address": "0x55d1c2a11a40",
+        "name": "logitech-usb-receiver",
+        "defaultSpeed": 0.00000,
+        "scrollFactor": -1.00
+    }
+],
+"keyboards": [
+    {
+        "address": "0x55d1c29f6b10",
+        "name": "power-button",
+        "rules": "",
+        "model": "",
+        "layout": "ch,us",
+        "variant": ",",
+        "options": "grp:win_space_toggle",
+        "active_layout_index": 0,
+        "active_keymap": "German (Switzerland)",
+        "capsLock": false,
+        "numLock": false,
+        "main": false
+    },
+    {
+        "address": "0x55d1c2a0c3d0",
+        "name": "logitech-usb-receiver",
+        "rules": "",
+        "model": "",
+        "layout": "ch,us",
+        "variant": ",",
+        "options": "grp:win_space_toggle",
+        "active_layout_index": 0,
+        "active_keymap": "German (Switzerland)",
+        "capsLock": false,
+        "numLock": true,
+        "main": true
+    },
+    {
+        "address": "0x55d1c2a10f20",
+        "name": "logitech-usb-receiver-consumer-control",
+        "rules": "",
+        "model": "",
+        "layout": "ch,us",
+        "variant": ",",
+        "options": "grp:win_space_toggle",
+        "active_layout_index": none,
+        "active_keymap": "German (Switzerland)",
+        "capsLock": false,
+        "numLock": false,
+        "main": false
+    }
+],
+"tablets": [
+
+],
+"touch": [
+
+],
+"switches": [
+
+]
+}

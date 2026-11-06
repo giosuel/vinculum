@@ -3,7 +3,7 @@
 // the cards below it.
 import { Theme } from "theme.slint";
 import { Icon, Logo } from "icons.slint";
-import { Switch, SectionLabel, Focusable, Scroll } from "controls.slint";
+import { Button, Switch, SectionLabel, Focusable, Scroll } from "controls.slint";
 
 /// sub: a short status on the right ("Home", "2 on", "45%"). open: an item showing its
 /// sub-items, on one of their pages. indent: a sub-item. foldable: an item with sub-items, which
@@ -326,4 +326,41 @@ export component Card inherits Rectangle {
     border-color: Theme.border;
     background: Theme.surface;
     clip: true;
+}
+
+/// Above a page that writes Lituus's file to Hyprland's config folder, while Hyprland's own
+/// config doesn't load it: `line` is what loads it, with a button to copy it.
+export component LoadBanner inherits Rectangle {
+    in property <string> line;
+    height: banner.preferred-height;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.warn-border;
+    background: Theme.warn-bg;
+    copy-field := TextInput { visible: false; text: root.line; read-only: true; }
+    banner := HorizontalLayout {
+        padding: 6px;
+        padding-left: 14px;
+        spacing: 10px;
+        // Centred by a layout: a `y` here put the icon at the top when the text is one line.
+        VerticalLayout { alignment: center; Icon { name: "warning"; tint: Theme.warn-text; } }
+        Text {
+            text: "Your Hyprland config doesn't load Lituus's file yet, so changes are lost when Hyprland restarts.";
+            color: Theme.warn-text;
+            font-size: 13px;
+            wrap: word-wrap;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        VerticalLayout {
+            alignment: center;
+            Button {
+                label: "Copy " + root.line;
+                button-height: 30px;
+                min-width: self.preferred-width;
+                horizontal-stretch: 0;
+                clicked => { copy-field.select-all(); copy-field.copy(); }
+            }
+        }
+    }
 }
