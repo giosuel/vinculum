@@ -19,7 +19,7 @@ component MiniWindow inherits Rectangle {
     height: 168px;
     border-radius: 14px;
     border-width: 1px;
-    border-color: Theme.ctrl-border;
+    border-color: Theme.border2;
     background: Theme.bg;
     clip: true;
     drop-shadow-blur: 24px;
@@ -120,17 +120,19 @@ export component SettingsHero inherits Hero {
     in property <string> name-text;
     in property <[ColourChip]> chips;
     title: "Settings";
-    hero-height: 206px;
-    picture-width: preview.width + 24px;
+    // In a short window, as compact as the other heroes: the look's name and line, without the
+    // miniature window (it doesn't fit) or the colour chips (the colour files show them).
+    hero-height: root.compact ? 136px : 206px;
+    picture-width: root.compact ? 0 : preview.width + 24px;
     VerticalLayout {
         x: 24px;
         width: parent.width - 48px - root.picture-width;
         height: self.preferred-height;
-        y: parent.height - self.height - 22px;
+        y: parent.height - self.height - (root.compact ? 16px : 22px);
         spacing: 5px;
         Text { text: root.name; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; }
-        Text { text: root.name-text; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-        if root.wallpaper-in-use: HorizontalLayout {
+        Text { text: root.name-text; color: Theme.muted; font-size: 13px; wrap: root.compact ? no-wrap : word-wrap; overflow: elide; }
+        if root.wallpaper-in-use && !root.compact: HorizontalLayout {
             padding-top: 5px;
             spacing: 8px;
             alignment: start;
@@ -139,14 +141,14 @@ export component SettingsHero inherits Hero {
                 height: 22px;
                 border-radius: 6px;
                 border-width: 1px;
-                border-color: Theme.ctrl-border;
+                border-color: Theme.border2;
                 background: chip.value;
                 accessible-role: text;
                 accessible-label: chip.label + " " + chip.hex;
             }
         }
     }
-    preview := MiniWindow { x: parent.width - self.width - 24px; y: (parent.height - self.height) / 2; }
+    preview := MiniWindow { x: parent.width - self.width - 24px; y: (parent.height - self.height) / 2; visible: !root.compact; }
 }
 
 /// The colour files from config.toml, with the colours each has.
@@ -200,15 +202,15 @@ export component AppearanceSettings inherits VerticalLayout {
     SettingRow {
         label: "Follow wallpaper";
         description: root.follow-available ? "Use the colours matugen makes from your wallpaper" : "No wallpaper colours found";
+        first: true;
+        // Turned off, with the reason in the line beside it.
         Switch {
             on: root.follow && root.follow-available;
             label: "Follow wallpaper";
-            opacity: root.follow-available ? 1 : 0.5;
-            y: (parent.height - self.height) / 2;
-            toggled => { if root.follow-available { root.follow-toggled(); } }
+            enabled: root.follow-available;
+            toggled => { root.follow-toggled(); }
         }
     }
-    Rectangle { height: 1px; background: Theme.border; }
     SettingRow {
         label: "Built-in theme";
         description: root.note != "" ? root.note : "Used when Follow wallpaper is off or no colours are found";
@@ -223,7 +225,6 @@ export component AppearanceSettings inherits VerticalLayout {
             clicked => { root.theme-chosen(i); }
         }
     }
-    Rectangle { height: 1px; background: Theme.border; }
     SettingRow {
         label: "Mode";
         description: "Auto follows the desktop";
@@ -231,17 +232,16 @@ export component AppearanceSettings inherits VerticalLayout {
             label: "Mode";
             // As wide as its options, beside the text that takes the rest of the row.
             horizontal-stretch: 0;
+            height: 34px;
             options: ["Auto", "Dark", "Light"];
             selected: root.mode;
             enabled: !root.wallpaper-in-use;
-            y: (parent.height - self.height) / 2;
             changed(i) => { root.mode-chosen(i); }
         }
     }
-    Rectangle { height: 1px; background: Theme.border; }
     SettingRow {
         label: "Hero gradient";
         description: "The accent glow behind each page's picture";
-        Switch { on: root.gradient; label: "Hero gradient"; y: (parent.height - self.height) / 2; toggled => { root.gradient-toggled(); } }
+        Switch { on: root.gradient; label: "Hero gradient"; toggled => { root.gradient-toggled(); } }
     }
 }

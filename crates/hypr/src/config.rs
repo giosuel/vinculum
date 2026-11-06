@@ -1,6 +1,8 @@
 //! Lituus's own file next to the user's Hyprland config: `lituus.lua`, which hyprland.lua loads
 //! with `require("lituus")` (Hyprland puts its config folder on Lua's path), or `lituus.conf`
 //! with `source =` before Hyprland 0.55. The user's own config is only read, never written.
+//! Each page that writes to it has a part of its own, from its first line ("-- Written by Lituus
+//! (Displays).") to the next page's, and writes only that part.
 
 use std::path::{Path, PathBuf};
 
@@ -72,6 +74,16 @@ impl ConfigFile {
         std::fs::read_to_string(self.path()).ok()
     }
 
+    /// The part of the file the page `name` wrote ("Displays", "Input").
+    pub fn read_section(&self, name: &str) -> Option<String> {
+        section(&self.read()?, name)
+    }
+
+    /// Writes the page's part of the file, keeping the other pages' parts.
+    pub fn write_section(&self, name: &str, part: &str) -> std::io::Result<()> {
+        self.write(&with_section(&self.read().unwrap_or_default(), name, part))
+    }
+
     /// Writes the file whole, through a temporary file, so Hyprland never reads half of it.
     pub fn write(&self, text: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
@@ -79,6 +91,48 @@ impl ConfigFile {
         std::fs::write(&tmp, text)?;
         std::fs::rename(&tmp, self.path())
     }
+}
+
+/// The file's parts: (page, its lines). Text before the first part has no page.
+fn sections(text: &str) -> Vec<(Option<String>, String)> {
+    let mut parts: Vec<(Option<String>, String)> = vec![(None, String::new())];
+    for line in text.lines() {
+        let trimmed = line.trim_start_matches(['-', '#']).trim_start();
+        let page = (line.starts_with("--") || line.starts_with('#'))
+            .then(|| trimmed.strip_prefix("Written by Lituus (")?.split_once(')').map(|(p, _)| p.to_owned()))
+            .flatten();
+        if page.is_some() {
+            parts.push((page, String::new()));
+        }
+        let last = &mut parts.last_mut().expect("there's always a part").1;
+        last.push_str(line);
+        last.push('\n');
+    }
+    for (_, text) in &mut parts {
+        let kept = text.trim_end().len();
+        text.truncate(kept);
+        if !text.is_empty() {
+            text.push('\n');
+        }
+    }
+    parts.retain(|(page, text)| page.is_some() || !text.is_empty());
+    parts
+}
+
+/// The part the page `name` wrote, if the file has one.
+pub fn section(text: &str, name: &str) -> Option<String> {
+    sections(text).into_iter().find(|(page, _)| page.as_deref() == Some(name)).map(|(_, text)| text)
+}
+
+/// The file with the page's part replaced by `part` (or added at the end), the rest as it was.
+pub fn with_section(text: &str, name: &str, part: &str) -> String {
+    let mut parts = sections(text);
+    let part = format!("{}\n", part.trim_end());
+    match parts.iter_mut().find(|(page, _)| page.as_deref() == Some(name)) {
+        Some(p) => p.1 = part,
+        None => parts.push((Some(name.to_owned()), part)),
+    }
+    parts.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>().join("\n")
 }
 
 fn file_name(path: &Path) -> String {
@@ -110,6 +164,37 @@ mod tests {
         f.write("require(\"lituus\")\n").unwrap();
         assert!(!f.loaded());
         assert_eq!(f.read().as_deref(), Some("require(\"lituus\")\n"));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn each_page_writes_its_own_part() {
+        let displays = "-- Written by Lituus (Displays). Change it in Lituus.\n\nhl.monitor({ output = \"DP-1\" })\n";
+        let input = "-- Written by Lituus (Input). Change it in Lituus.\n\nhl.config({ input = {} })\n";
+        // A file from before there were parts is the Displays part.
+        assert_eq!(section(displays, "Displays").as_deref(), Some(displays));
+        assert_eq!(section(displays, "Input"), None);
+        let both = with_section(displays, "Input", input);
+        assert_eq!(both, format!("{displays}\n{input}"));
+        assert_eq!(section(&both, "Displays").as_deref(), Some(displays));
+        assert_eq!(section(&both, "Input").as_deref(), Some(input));
+        // Replacing one keeps the other and the order.
+        let moved = displays.replace("DP-1", "DP-2");
+        let again = with_section(&both, "Displays", &moved);
+        assert_eq!(again, format!("{moved}\n{input}"));
+        assert_eq!(with_section("", "Input", input), input);
+        // hyprlang's comments too.
+        let conf = "# Written by Lituus (Displays).\nmonitor = DP-1, preferred, auto, 1\n";
+        assert_eq!(
+            section(&with_section(conf, "Input", "# Written by Lituus (Input).\ninput {\n}\n"), "Displays").as_deref(),
+            Some(conf)
+        );
+        let d = dir("sections");
+        let f = ConfigFile::new(&d, true);
+        f.write_section("Input", input).unwrap();
+        f.write_section("Displays", displays).unwrap();
+        assert_eq!(f.read_section("Input").as_deref(), Some(input));
+        assert_eq!(f.read().unwrap(), format!("{input}\n{displays}"));
         std::fs::remove_dir_all(&d).unwrap();
     }
 

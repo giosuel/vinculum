@@ -1,6 +1,6 @@
 //! The sidebar: its pages in groups, each with a short status, filtered by the search field.
-//! Network's pages (Wi-Fi, Wired, VPN, Hotspot) are its sub-items, shown under it unless it's
-//! folded, and when the search finds them. Settings has its own button at the bottom, so it's
+//! Network's pages (Wi-Fi, Wired, VPN, Hotspot) and Input's (Keyboard, Mouse & touchpad) are their
+//! sub-items, shown under them unless they're folded, and when the search finds them. Settings has its own button at the bottom, so it's
 //! listed only as a search result.
 
 use slint::{ModelRc, SharedString, VecModel};
@@ -29,7 +29,8 @@ fn matches(entry: &Entry, query: &str) -> bool {
     if query.is_empty() {
         return entry.group != LITUUS;
     }
-    entry.label.to_lowercase().contains(&query) || entry.keywords.split(' ').any(|k| k.starts_with(&query))
+    // A keyword, or words in a row ("tap to click", "caps lo").
+    entry.label.to_lowercase().contains(&query) || format!(" {}", entry.keywords).contains(&format!(" {query}"))
 }
 
 /// The items shown, in order: each top-level item (if it or a sub-item matches the search), then
@@ -70,10 +71,12 @@ pub fn groups(entries: &[Entry], query: &str, current: &str, folded: &[String]) 
                     let subs_shown = shown.iter().any(|s| s.parent == Some(e.id));
                     // On a sub-page that's folded away, the item stands for it.
                     let on_sub = current_parent == Some(e.id);
+                    let sub = if subs_shown { "" } else { e.status.as_str() };
                     NavItem {
                         id: SharedString::from(e.id),
                         label: SharedString::from(e.label),
-                        sub: SharedString::from(if subs_shown { "" } else { e.status.as_str() }),
+                        sub: SharedString::from(sub),
+                        spoken: SharedString::from(spoken(sub)),
                         icon: SharedString::from(e.icon),
                         current: e.id == current || (on_sub && !current_shown),
                         open: on_sub && current_shown,
@@ -87,6 +90,14 @@ pub fn groups(entries: &[Entry], query: &str, current: &str, folded: &[String]) 
                 .then(|| NavGroup { title: SharedString::from(group), items: ModelRc::new(VecModel::from(items)) })
         })
         .collect()
+}
+
+/// A status as a screen reader says it: the counts in full ("2 on" is "2 connected").
+pub fn spoken(status: &str) -> String {
+    match status.strip_suffix(" on") {
+        Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => format!("{n} connected"),
+        _ => status.to_owned(),
+    }
 }
 
 /// The page Enter in the search field goes to: the first item whose name matches ("wire" is
@@ -151,6 +162,15 @@ mod tests {
                 parent: None,
             },
             Entry {
+                id: "mouse",
+                label: "Mouse & touchpad",
+                icon: "mouse",
+                group: "DEVICES",
+                keywords: "natural scrolling tap to click",
+                status: "1 on".into(),
+                parent: None,
+            },
+            Entry {
                 id: "settings",
                 label: "Settings",
                 icon: "settings",
@@ -167,7 +187,7 @@ mod tests {
         let g = groups(&entries(), "", "bluetooth", &[]);
         let titles: Vec<String> = g.iter().map(|g| g.title.to_string()).collect();
         // Settings is the button below the list, not one of its pages.
-        assert_eq!(titles, ["CONNECTIONS"]);
+        assert_eq!(titles, ["CONNECTIONS", "DEVICES"]);
         assert!(g[0].items.row_data(4).unwrap().current);
         assert_eq!(g[0].items.row_data(4).unwrap().sub, "2 on");
     }
@@ -183,7 +203,7 @@ mod tests {
         assert_eq!(ids("blue"), ["bluetooth"]);
         // A sub-item is found under its item, even when that's folded.
         assert_eq!(ids("WIFI"), ["network", "wifi"]);
-        assert_eq!(ids(""), ["network", "bluetooth"]);
+        assert_eq!(ids(""), ["network", "bluetooth", "mouse"]);
         // The app's own look is in Settings.
         assert_eq!(ids("dark"), ["settings"]);
         assert_eq!(ids("Appearance"), ["settings"]);
@@ -194,6 +214,12 @@ mod tests {
         assert_eq!(first_match(&entries(), "net"), Some("network"));
         assert_eq!(first_match(&entries(), "theme"), Some("settings"));
         assert_eq!(first_match(&entries(), "zzz"), None);
+        // Words in a row, the last one begun.
+        assert_eq!(first_match(&entries(), "tap to cl"), Some("mouse"));
+        assert_eq!(first_match(&entries(), "Natural Scrolling"), Some("mouse"));
+        assert_eq!(first_match(&entries(), "to click"), Some("mouse"));
+        assert_eq!(first_match(&entries(), "scrolling tap"), Some("mouse"));
+        assert_eq!(first_match(&entries(), "o click"), None);
     }
 
     #[test]
@@ -243,5 +269,17 @@ mod tests {
         assert_eq!(items("ether", "wired"), [("network".to_owned(), false), ("wired".to_owned(), true)]);
         // It isn't: Network stands for it.
         assert_eq!(items("wireg", "wifi"), [("network".to_owned(), true), ("vpn".to_owned(), false)]);
+    }
+
+    #[test]
+    fn counts_are_said_in_full() {
+        assert_eq!(spoken("2 on"), "2 connected");
+        assert_eq!(spoken("On"), "On");
+        assert_eq!(spoken("Lumen Home"), "Lumen Home");
+        assert_eq!(spoken("Turned on"), "Turned on");
+        let mut e = entries();
+        e[2].status = "1 on".into();
+        let item = groups(&e, "", "", &[])[0].items.iter().find(|i| i.id == "wired").unwrap();
+        assert_eq!((item.sub.as_str(), item.spoken.as_str()), ("1 on", "1 connected"));
     }
 }
