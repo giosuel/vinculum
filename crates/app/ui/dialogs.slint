@@ -2,15 +2,11 @@
 // mockups (Password, Hidden network).
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, Focusable, Focus, FocusTrap } from "controls.slint";
-
-component FieldLabel inherits Text {
-    color: Theme.text;
-    font-size: 13px;
-    font-weight: 600;
-}
+import { Button, IconButton, FieldLabel, Focusable, Focus, FocusTrap } from "controls.slint";
 
 /// A one-line text field; with `password`, the text is hidden and an eye button shows it.
+/// `committed` is for a field whose value takes effect by itself (not one with a dialog's
+/// button): Enter, or the focus leaving the field after an edit.
 export component TextField inherits Rectangle {
     in-out property <string> text;
     in property <bool> password;
@@ -23,6 +19,16 @@ export component TextField inherits Rectangle {
     property <bool> shown;
     callback accepted();
     callback edited();
+    callback committed();
+    // Edited since the last commit.
+    property <bool> typed;
+    property <bool> focused: input.has-focus;
+    changed focused => {
+        if !self.focused && self.typed {
+            self.typed = false;
+            root.committed();
+        }
+    }
     init => { if root.autofocus { input.focus(); input.select-all(); } }
     height: 38px;
     border-radius: 8px;
@@ -51,8 +57,15 @@ export component TextField inherits Rectangle {
                 single-line: true;
                 enabled: root.enabled;
                 accessible-label: root.label;
-                accepted => { root.accepted(); }
-                edited => { root.edited(); }
+                accepted => {
+                    root.typed = false;
+                    root.accepted();
+                    root.committed();
+                }
+                edited => {
+                    root.typed = true;
+                    root.edited();
+                }
             }
             if input.text == "" && root.placeholder != "": Text {
                 text: root.placeholder;
@@ -64,25 +77,23 @@ export component TextField inherits Rectangle {
                 height: parent.height;
             }
         }
-        if root.password: Focusable {
-            width: 28px;
-            height: 28px;
+        if root.password: IconButton {
+            icon: root.shown ? "eye-off" : "eye";
+            label: root.shown ? "Hide password" : "Show password";
+            flat: true;
+            size: 28px;
             y: (parent.height - self.height) / 2;
-            border-radius: 6px;
-            background: self.has-hover ? Theme.hover : transparent;
-            accessible-role: button;
-            accessible-label: root.shown ? "Hide password" : "Show password";
-            accessible-action-default => { root.shown = !root.shown; }
-            activated => { root.shown = !root.shown; }
-            Icon { name: root.shown ? "eye-off" : "eye"; tint: Theme.icon-soft; }
+            clicked => { root.shown = !root.shown; }
         }
     }
 }
 
-/// A row of mutually exclusive choices ("For me only", "All users", "Ask each time"). One stop
-/// for Tab; the arrow keys move the choice.
+/// A row of mutually exclusive choices, a value ("For me only", "All users", "Ask each time");
+/// the views of a page are a ViewSwitcher. One stop for Tab; the arrow keys move the choice.
 export component Segmented inherits Focusable {
     in property <[string]> options;
+    /// A second, smaller line under each option, if given (the Bluetooth audio choice).
+    in property <[string]> details;
     in property <string> label;
     in-out property <int> selected;
     /// Also called when the user picks one (for a choice that isn't bound two-way).
@@ -95,12 +106,12 @@ export component Segmented inherits Focusable {
         if event.text == Key.LeftArrow || event.text == Key.RightArrow { return accept; }
         reject
     }
-    height: 40px;
+    height: root.details.length > 0 ? 52px : 40px;
     opacity: root.enabled ? 1 : 0.5;
     border-radius: 9px;
     border-width: 1px;
     border-color: Theme.border2;
-    accessible-role: tab-list;
+    accessible-role: radio-group;
     accessible-label: label;
     HorizontalLayout {
         padding: 3px;
@@ -111,19 +122,31 @@ export component Segmented inherits Focusable {
             min-width: widest.preferred-width + 24px;
             border-radius: 7px;
             background: i == root.selected ? Theme.accent-soft-bg : option-touch.has-hover && root.enabled ? Theme.hover : transparent;
-            accessible-role: tab;
+            accessible-role: radio-button;
             accessible-label: option;
-            accessible-item-selected: i == root.selected;
+            accessible-checked: i == root.selected;
             accessible-enabled: root.enabled;
             accessible-action-default => { if root.enabled { root.selected = i; root.changed(i); } }
-            label := Text {
-                text: option;
-                color: i == root.selected ? Theme.text : Theme.muted;
-                font-size: 13px;
-                font-weight: i == root.selected ? 500 : 400;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                overflow: elide;
+            VerticalLayout {
+                alignment: center;
+                spacing: root.details.length > 0 ? 2px : 0;
+                Text {
+                    text: option;
+                    color: i == root.selected ? Theme.text : Theme.muted;
+                    font-size: 13px;
+                    font-weight: i == root.selected ? 500 : 400;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+                // Nothing (and no height) without details.
+                Text {
+                    text: root.details.length > i ? root.details[i] : "";
+                    height: root.details.length > 0 ? self.preferred-height : 0;
+                    color: Theme.faint;
+                    font-size: 11px;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
             }
             widest := Text { text: option; font-size: 13px; font-weight: 500; visible: false; }
             option-touch := TouchArea { enabled: root.enabled; mouse-cursor: root.enabled ? pointer : default; clicked => { root.selected = i; root.changed(i); } }
@@ -131,16 +154,128 @@ export component Segmented inherits Focusable {
     }
 }
 
+/// The views of a page, top right in its hero (Displays: Monitor, Workspaces, Profiles). Drawn
+/// like a Segmented, but they're tabs, which is what a screen reader hears. One stop for Tab; the
+/// arrow keys move it.
+export component ViewSwitcher inherits Focusable {
+    in property <[string]> options;
+    in property <string> label;
+    in-out property <int> selected;
+    clickable: false;
+    key(event) => {
+        if event.text == Key.LeftArrow && root.selected > 0 { root.selected -= 1; return accept; }
+        if event.text == Key.RightArrow && root.selected < root.options.length - 1 { root.selected += 1; return accept; }
+        if event.text == Key.LeftArrow || event.text == Key.RightArrow { return accept; }
+        reject
+    }
+    height: 34px;
+    border-radius: 9px;
+    border-width: 1px;
+    border-color: Theme.border2;
+    accessible-role: tab-list;
+    accessible-label: label;
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 3px;
+        for option[i] in root.options: Rectangle {
+            min-width: widest.preferred-width + 24px;
+            border-radius: 7px;
+            background: i == root.selected ? Theme.accent-soft-bg : view-touch.has-hover ? Theme.hover : transparent;
+            accessible-role: tab;
+            accessible-label: option;
+            accessible-item-selected: i == root.selected;
+            accessible-action-default => { root.selected = i; }
+            Text {
+                text: option;
+                color: i == root.selected ? Theme.text : Theme.muted;
+                font-size: 13px;
+                font-weight: i == root.selected ? 500 : 400;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            widest := Text { text: option; font-size: 13px; font-weight: 500; visible: false; }
+            view-touch := TouchArea { mouse-cursor: pointer; clicked => { root.selected = i; } }
+        }
+    }
+}
+
+/// The views of a card (the selected monitor's Display, Colour and Advanced): underlined
+/// labels on the card's line, so they don't look like the page's views. One stop for Tab; the
+/// arrow keys move it.
+export component Tabs inherits Focusable {
+    in property <[string]> options;
+    in property <string> label;
+    in-out property <int> selected;
+    clickable: false;
+    key(event) => {
+        if event.text == Key.LeftArrow && root.selected > 0 { root.selected -= 1; return accept; }
+        if event.text == Key.RightArrow && root.selected < root.options.length - 1 { root.selected += 1; return accept; }
+        if event.text == Key.LeftArrow || event.text == Key.RightArrow { return accept; }
+        reject
+    }
+    height: 38px;
+    border-radius: 6px;
+    accessible-role: tab-list;
+    accessible-label: label;
+    HorizontalLayout {
+        spacing: 4px;
+        alignment: start;
+        for option[i] in root.options: Rectangle {
+            width: widest.preferred-width + 24px;
+            accessible-role: tab;
+            accessible-label: option;
+            accessible-item-selected: i == root.selected;
+            accessible-action-default => { root.selected = i; }
+            Text {
+                text: option;
+                color: i == root.selected || tab-touch.has-hover ? Theme.text : Theme.muted;
+                font-size: 13px;
+                font-weight: i == root.selected ? 600 : 400;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            widest := Text { text: option; font-size: 13px; font-weight: 600; visible: false; }
+            Rectangle { y: parent.height - 2px; height: 2px; background: i == root.selected ? Theme.accent : transparent; }
+            tab-touch := TouchArea { mouse-cursor: pointer; clicked => { root.selected = i; } }
+        }
+    }
+}
+
+/// A field in a form (the editor, the hotspot, a dialog with fields): its label in a 168 px
+/// column, the control and the hints under it on the right. `label-top` lines the label up with
+/// the text in the control: 10 px beside a field, 0 beside a switch or plain text.
+export component FormRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <length> label-top: 10px;
+    VerticalLayout {
+        width: 168px;
+        alignment: start;
+        padding-top: root.label-top;
+        padding-right: 12px;
+        Text { text: root.label; color: Theme.text; font-size: 13px; wrap: word-wrap; }
+    }
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: 6px;
+        alignment: start;
+        @children
+    }
+}
+
+/// A check box and its text; `label` names it for screen readers when it has no text (a column
+/// heading names it on the screen).
 export component CheckBox inherits Focusable {
     in-out property <bool> checked;
     in property <string> text;
+    in property <string> label: text;
     callback toggled(bool);
     height: 24px;
     border-radius: 4px;
     accessible-role: checkbox;
-    accessible-label: text;
+    accessible-label: label;
     accessible-checked: checked;
-    accessible-action-default => { checked = !checked; toggled(checked); }
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { checked = !checked; toggled(checked); } }
     activated => { root.checked = !root.checked; root.toggled(root.checked); }
     HorizontalLayout {
         spacing: 10px;
@@ -152,10 +287,13 @@ export component CheckBox inherits Focusable {
             border-radius: 4px;
             border-width: root.checked ? 0 : 1.5px;
             border-color: Theme.ctrl-border;
-            background: root.checked ? Theme.accent : transparent;
-            if root.checked: Icon { name: "check"; tint: Theme.on-accent; size: 14px; stroke-width: 2px; }
+            // Turned off: faint, and not the accent even when checked.
+            background: !root.checked ? transparent : root.enabled ? Theme.accent : Theme.faint;
+            // Hidden rather than an `if`, and no opacity layer for turned off: one of either per
+            // check box makes the generated code too big to compile in 8 GB.
+            Icon { name: "check"; tint: Theme.on-accent; size: 14px; stroke-width: 2px; visible: root.checked; }
         }
-        Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+        Text { text: root.text; color: root.enabled ? Theme.text : Theme.faint; font-size: 13px; vertical-alignment: center; }
     }
 }
 
@@ -271,6 +409,7 @@ export component Modal inherits Rectangle {
         background: Theme.surface;
         drop-shadow-blur: 40px;
         drop-shadow-color: #00000080;
+        // Slint (1.18) has no dialog role; this is the nearest, and the one place to change.
         accessible-role: groupbox;
         accessible-label: root.label;
         TouchArea {}

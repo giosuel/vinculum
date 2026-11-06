@@ -1,7 +1,6 @@
 // The details pane next to a list (Wi-Fi, Wired, VPN, Saved, Bluetooth) and the data it shows.
 import { Theme } from "theme.slint";
-import { Icon } from "icons.slint";
-import { Button, Switch, Scroll, Focusable } from "controls.slint";
+import { Button, IconButton, Switch, Scroll } from "controls.slint";
 
 /// kind: "primary", "secondary", "danger".
 export struct Action { id: string, label: string, kind: string, enabled: bool }
@@ -61,17 +60,14 @@ export component DetailsPane inherits Rectangle {
                     spacing: 8px;
                     alignment: start;
                     Text { text: root.details.title; color: Theme.text; font-size: 22px; font-weight: 600; wrap: word-wrap; }
-                    if root.details.renamable: Focusable {
-                        width: 24px;
-                        height: 24px;
+                    if root.details.renamable: IconButton {
+                        icon: "pencil";
+                        label: "Rename";
+                        flat: true;
+                        size: 24px;
+                        icon-size: 14px;
                         y: (parent.height - self.height) / 2;
-                        border-radius: 6px;
-                        background: self.has-hover ? Theme.hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Rename";
-                        accessible-action-default => { root.rename(); }
-                        activated => { root.rename(); }
-                        Icon { name: "pencil"; tint: Theme.muted; size: 14px; }
+                        clicked => { root.rename(); }
                     }
                 }
                 HorizontalLayout {

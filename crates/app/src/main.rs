@@ -16,6 +16,7 @@ mod editing;
 mod editor;
 mod files;
 mod hotspot;
+mod input;
 mod instance;
 mod nav;
 mod notify;
@@ -32,6 +33,7 @@ mod tray;
 mod view;
 mod virt;
 mod wireguard;
+mod xkb;
 
 slint::include_modules!();
 
@@ -78,12 +80,14 @@ fn key_mgmt_at(index: i32) -> Option<lituus_nm::KeyMgmt> {
     }
 }
 
-/// The confirmation dialog: its title, text and button, and what accepting it does.
+/// The confirmation dialog: its title, text and button, and what accepting it does. The button
+/// is red when the action can't be undone (Forget, Delete), else the usual primary (Update).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Confirm {
     pub title: String,
     pub text: String,
     pub button: String,
+    pub destructive: bool,
     pub then: Confirmed,
 }
 
@@ -173,6 +177,9 @@ struct App {
     displays: displays::State,
     /// The Sound page.
     sound: sound::State,
+    /// The Input pages, and which of them was open last (for the Input item).
+    input: input::State,
+    input_page: Option<view::Page>,
     /// Airplane mode, from when it's turned on until it ends.
     airplane: Option<airplane::Airplane>,
     /// The sidebar's search.
@@ -278,6 +285,7 @@ fn main() -> Result<(), slint::PlatformError> {
     sound::spawn(window.as_weak());
     files::spawn(window.as_weak(), config::load(&config::path()).bluetooth.accept_files_from);
     displays::refresh(&window.as_weak());
+    input::refresh(&window.as_weak());
     spawn_hyprland_watcher(window.as_weak());
     // The Displays page's countdown after Apply.
     let weak = window.as_weak();
@@ -588,7 +596,13 @@ fn connect_focus(window: &MainWindow) {
 
 fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
-    window.on_navigate(move |id| update(&weak, |app| go(app, &id)));
+    window.on_navigate(move |id| {
+        update(&weak, |app| go(app, &id));
+        // Devices come and go without Hyprland saying so: read them again.
+        if APP.with(|app| matches!(app.borrow().ui.page, view::Page::Keyboard | view::Page::Mouse)) {
+            input::refresh(&weak);
+        }
+    });
     let weak = window.as_weak();
     window.on_nav_search(move |text| update(&weak, |app| app.nav_query = text.to_string()));
     let weak = window.as_weak();
@@ -630,8 +644,11 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_move_selection(move |delta| {
         update(&weak, |app| {
-            if app.ui.page == view::Page::Bluetooth {
-                return bluetooth::move_selection(&mut app.bt, delta);
+            match app.ui.page {
+                view::Page::Bluetooth => return bluetooth::move_selection(&mut app.bt, delta),
+                view::Page::Keyboard => return input::move_layout_selection(&mut app.input, delta),
+                view::Page::Mouse => return input::move_selection(&mut app.input, delta),
+                _ => {}
             }
             let ids = &app.row_ids;
             if ids.is_empty() {
@@ -648,6 +665,7 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_activate_selected(move || {
         update(&weak, |app| match app.ui.page {
             view::Page::Bluetooth => bluetooth::activate(&mut app.bt),
+            view::Page::Keyboard | view::Page::Mouse => {}
             _ => act(app, "connect"),
         })
     });
@@ -714,8 +732,20 @@ fn connect_callbacks(window: &MainWindow) {
         })
     });
     let weak = window.as_weak();
-    window.on_displays_drag(move |i, x, y, done| {
-        update(&weak, |app| displays::drag(&mut app.displays, i.max(0) as usize, x, y, done))
+    window.on_displays_drop(move |i, x, y| {
+        update(&weak, |app| displays::drop(&mut app.displays, i.max(0) as usize, x, y))
+    });
+    // Asked on every move of a drag: it only reads.
+    window.on_displays_snap(|i, x, y, threshold, free| {
+        APP.with(|app| match app.try_borrow() {
+            Ok(app) => displays::snap(&app.displays, i.max(0) as usize, x, y, threshold, free),
+            Err(_) => DragSnap { x, y, ..DragSnap::default() },
+        })
+    });
+    let weak = window.as_weak();
+    window.on_input_act(move |verb, arg, value| {
+        let w = weak.clone();
+        update(&weak, |app| input::act(&w, &mut app.input, &verb, &arg, value))
     });
     let weak = window.as_weak();
     window.on_sound_act(move |verb, id, value| {
@@ -961,10 +991,16 @@ fn hostname_problem(name: &str) -> Option<&'static str> {
     if name.split('.').all(label_ok) { None } else { Some("Letters, digits and hyphens only, such as thinkpad-x1.") }
 }
 
-/// Goes to a page (a sidebar item's id); Network opens its sub-page used last.
+/// Goes to a page (a sidebar item's id); Network and Input open their sub-page used last.
 fn go(app: &mut App, id: &str) {
-    if view::navigate(&mut app.ui, &mut app.net_page, id) == Some(view::Page::Hotspot) {
-        open_hotspot(app);
+    let id = match (id, app.input_page) {
+        ("input", Some(page)) => page.id(),
+        _ => id,
+    };
+    match view::navigate(&mut app.ui, &mut app.net_page, id) {
+        Some(view::Page::Hotspot) => open_hotspot(app),
+        Some(page @ (view::Page::Keyboard | view::Page::Mouse)) => app.input_page = Some(page),
+        _ => {}
     }
 }
 
@@ -1095,7 +1131,7 @@ fn act(app: &mut App, action: &str) {
         }
         Some(view::Intent::Join(target)) => open_dialog(app, Dialog::Join(target)),
         Some(view::Intent::Confirm { title, text, button, command }) => {
-            app.confirm = Some(Confirm { title, text, button, then: Confirmed::Network(command) });
+            app.confirm = Some(Confirm { title, text, button, destructive: true, then: Confirmed::Network(command) });
         }
         None => {}
     }
@@ -1141,7 +1177,12 @@ fn spawn_hyprland_watcher(weak: slint::Weak<MainWindow>) {
                 let _ = h.events(|name, _| {
                     match name {
                         "monitoraddedv2" | "monitorremovedv2" => displays::hotplugged(&weak),
-                        "configreloaded" => displays::refresh(&weak),
+                        "configreloaded" => {
+                            displays::refresh(&weak);
+                            input::refresh(&weak);
+                        }
+                        // A keyboard switched layouts (Super+Space, say).
+                        "activelayout" => input::refresh(&weak),
                         _ => {}
                     }
                     true
@@ -1239,6 +1280,7 @@ fn tether_offers(snapshot: Option<&lituus_nm::Snapshot>) -> std::collections::Ha
 
 /// The sidebar's pages; Network's statuses are filled in from the view.
 fn nav_entries(app: &App) -> Vec<nav::Entry> {
+    let (keyboard, mouse) = input::status(&app.input);
     vec![
         nav::Entry {
             id: "network",
@@ -1311,6 +1353,35 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "audio volume speakers headphones microphone input output pipewire mute apps",
             status: sound::status(&app.sound),
             parent: None,
+        },
+        nav::Entry {
+            id: "input",
+            label: "Input",
+            icon: "keyboard",
+            group: "DEVICES",
+            keywords: "keyboard mouse touchpad trackpad pointer devices",
+            status: keyboard.clone(),
+            parent: None,
+        },
+        nav::Entry {
+            id: "keyboard",
+            label: "Keyboard",
+            icon: "keyboard",
+            group: "DEVICES",
+            keywords: "keyboard layout layouts language switch xkb repeat delay rate caps lock compose num lock numlock \
+                       typing keys dvorak qwertz azerty",
+            status: keyboard,
+            parent: Some("input"),
+        },
+        nav::Entry {
+            id: "mouse",
+            label: "Mouse & touchpad",
+            icon: "mouse",
+            group: "DEVICES",
+            keywords: "mouse mice touchpad trackpad trackpoint pointer speed sensitivity acceleration natural scrolling \
+                       scroll speed left-handed tap to click disable while typing clickfinger",
+            status: mouse,
+            parent: Some("input"),
         },
         // Lituus's own look is in Settings; "Appearance" is kept for the desktop's (GTK) later.
         nav::Entry {
@@ -1408,6 +1479,7 @@ fn render(window: &MainWindow) {
             window.set_confirm_title(confirm.title.as_str().into());
             window.set_confirm_text(confirm.text.as_str().into());
             window.set_confirm_button(confirm.button.as_str().into());
+            window.set_confirm_destructive(confirm.destructive);
         }
         window.set_message_title(if app.message.is_some() { app.message_title.as_str().into() } else { "".into() });
         window.set_message_action(if app.retry.is_some() { "Try again".into() } else { "".into() });
@@ -1451,6 +1523,8 @@ fn render(window: &MainWindow) {
         render_appearance(window, &app);
         sound::render(window, &app.sound);
         displays::render(window, &app.displays);
+        let state = &mut *app;
+        input::render(window, &mut state.input, state.bt.snapshot.as_ref());
         files::render(window, &app.files);
         render_quick(&mut app, airplane);
     });
@@ -2584,6 +2658,7 @@ mod dialog_tests {
                     "add-cancelled" => w.set_add_open(false),
                     "share-closed" => w.set_share_open(false),
                     "join-cancelled" | "join-accepted" => w.set_join_open(false),
+                    "confirm-cancelled" => w.set_confirm_open(false),
                     _ => {}
                 }
             }
@@ -2594,6 +2669,7 @@ mod dialog_tests {
         window.on_share_closed(note("share-closed"));
         window.on_join_cancelled(note("join-cancelled"));
         window.on_join_accepted(note("join-accepted"));
+        window.on_confirm_cancelled(note("confirm-cancelled"));
         window.on_join_check(|_, _, _, password| !password.is_empty());
         let w = window.as_weak();
         let l = log.clone();
@@ -2680,6 +2756,7 @@ mod dialog_tests {
             "bt rename-cancel",
         );
         esc(&|| window.set_add_open(true), "add-cancelled");
+        esc(&|| window.set_confirm_open(true), "confirm-cancelled");
         esc(&|| window.set_share_open(true), "share-closed");
         esc(
             &|| {
@@ -2706,6 +2783,9 @@ mod dialog_tests {
         window.set_share_open(true);
         click_beside(&window);
         assert_eq!(taken(), ["share-closed"]);
+        window.set_confirm_open(true);
+        click_beside(&window);
+        assert_eq!(taken(), ["confirm-cancelled"]);
         window.set_page("displays".into());
         window.set_displays(DisplaysView { config_open: true, ..Default::default() });
         click_beside(&window);
@@ -3160,6 +3240,49 @@ mod tests {
         assert!(list.size().width > 1600.0, "{}", list.size().width);
     }
 
+    /// Sound chooses the output and the input from a list each, with no button per device; in
+    /// the owner's window the volume slider and the lists keep their own widths.
+    #[test]
+    fn sound_devices_are_chosen_from_a_list() {
+        i_slint_backend_testing::init_no_event_loop();
+        let window = MainWindow::new().unwrap();
+        window.set_page("sound".into());
+        let names = |n: &[&str]| super::model(n.iter().map(|&n| SharedString::from(n)).collect());
+        window.set_sound(super::SoundView {
+            state: "list".into(),
+            outputs_names: names(&["Speakers", "Samsung TV (HDMI)", "Sony WH-1000XM5"]),
+            outputs_details: names(&["Built in · Speakers", "TV or monitor", "Bluetooth"]),
+            output: 1,
+            inputs_names: names(&["Blue Yeti"]),
+            inputs_details: names(&["USB"]),
+            input: 0,
+            out_volume: 0.5,
+            has_balance: true,
+            max: 1.0,
+            ..super::SoundView::default()
+        });
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        window.show().unwrap();
+        // The control, not its label's text.
+        let control = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() != Some(AccessibleRole::Text))
+                .expect(label)
+        };
+        let width = |label: &str| control(label).size().width;
+        assert!(width("Output device") <= 240.0, "{}", width("Output device"));
+        assert!(width("Input device") <= 240.0, "{}", width("Input device"));
+        assert!(width("Output volume") <= 640.0, "{}", width("Output volume"));
+        assert!(ElementHandle::find_by_accessible_label(&window, "Use").next().is_none());
+        assert_eq!(control("Output device").accessible_role(), Some(AccessibleRole::Combobox));
+        assert_eq!(control("Output device").accessible_value().as_deref(), Some("Samsung TV (HDMI)"));
+
+        // With no card left, the Cards tab goes and the page shows the devices.
+        window.set_sound_tab(2);
+        super::sound::render(&window, &super::sound::State::default());
+        assert_eq!(window.get_sound_tab(), 0);
+    }
+
     /// With Network's sub-items open, the sidebar's pages scroll in the smallest window instead
     /// of pushing Settings and Airplane mode out of it.
     #[test]
@@ -3228,10 +3351,10 @@ mod tests {
         acts.borrow_mut().clear();
         window.set_bt_adapter_open(true);
         let choices: Vec<String> = ElementHandle::find_by_accessible_label(&window, "Visible switch")
-            .find(|e| e.accessible_role() == Some(AccessibleRole::TabList))
+            .find(|e| e.accessible_role() == Some(AccessibleRole::RadioGroup))
             .expect("the Visible switch's time")
             .query_descendants()
-            .match_accessible_role(AccessibleRole::Tab)
+            .match_accessible_role(AccessibleRole::RadioButton)
             .find_all()
             .iter()
             .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
@@ -3486,6 +3609,144 @@ mod tests {
 
     /// Network's chevron says whether its pages are shown, and folds them without going to a
     /// page.
+    /// A press and release at a point of the window.
+    fn click(window: &MainWindow, x: f32, y: f32) {
+        let position = LogicalPosition::new(x, y);
+        window.window().dispatch_event(WindowEvent::PointerMoved { position });
+        window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+    }
+
+    /// The Wi-Fi and Hotspot switches are pills like Bluetooth's, switched by a click anywhere
+    /// on them; the hotspot's fields are a form with its labels in their own column.
+    #[test]
+    fn the_network_switches_are_pills() {
+        let window = window();
+        let switched = Rc::new(RefCell::new(Vec::new()));
+        let s = switched.clone();
+        window.on_wifi_switched(move || s.borrow_mut().push("wifi"));
+        let s = switched.clone();
+        window.on_hotspot_toggled(move || s.borrow_mut().push("hotspot"));
+        window.set_wifi_available(true);
+        window.set_hotspot_available(true);
+        for (page, label) in [("wifi", "Wi-Fi"), ("hotspot", "Hotspot")] {
+            window.set_page(page.into());
+            let switch = ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Switch))
+                .expect(label);
+            // On the label, beside the switch itself.
+            let (at, size) = (switch.absolute_position(), switch.size());
+            click(&window, at.x - 20.0, at.y + size.height / 2.0);
+        }
+        assert_eq!(*switched.borrow(), ["wifi", "hotspot"]);
+
+        let x = |role: AccessibleRole| {
+            ElementHandle::find_by_accessible_label(&window, "Network name")
+                .find(|e| e.accessible_role() == Some(role))
+                .map(|e| e.absolute_position().x)
+                .expect("the network name")
+        };
+        // The label's column is 168 px; the text starts 12 px into its field.
+        assert_eq!(x(AccessibleRole::TextInput) - x(AccessibleRole::Text), 168.0 + 12.0);
+    }
+
+    /// The views of a page are tabs, top right in its hero, and a card's views are tabs too; a
+    /// value chosen from a few (Rotation, Mode) is a radio group.
+    #[test]
+    fn views_are_tabs_and_values_are_radio_groups() {
+        let window = window();
+        let roles = |label: &str| {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .filter_map(|e| e.accessible_role())
+                .collect::<Vec<_>>()
+        };
+        let tabs = |label: &str| -> Vec<String> {
+            ElementHandle::find_by_accessible_label(&window, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::TabList))
+                .expect(label)
+                .query_descendants()
+                .match_accessible_role(AccessibleRole::Tab)
+                .find_all()
+                .iter()
+                .filter_map(|e| e.accessible_label().map(|l| l.to_string()))
+                .collect()
+        };
+        window.set_page("displays".into());
+        window.set_displays(super::DisplaysView { state: "list".into(), ..Default::default() });
+        assert_eq!(tabs("Displays"), ["Monitor", "Workspaces", "Profiles"]);
+        assert_eq!(tabs("Monitor settings"), ["Display", "Colour and HDR", "Advanced"]);
+        assert!(roles("Rotation").contains(&AccessibleRole::RadioGroup));
+        assert!(!roles("Rotation").contains(&AccessibleRole::TabList));
+
+        window.set_page("sound".into());
+        window.set_sound(super::SoundView { state: "list".into(), max: 1.0, ..Default::default() });
+        assert_eq!(tabs("Sound"), ["Devices", "Apps"]);
+        let views = ElementHandle::find_by_accessible_label(&window, "Sound")
+            .find(|e| e.accessible_role() == Some(AccessibleRole::TabList))
+            .unwrap();
+        let volume = ElementHandle::find_by_accessible_label(&window, "Output volume").next().unwrap();
+        // Above the hero's slider, at the right.
+        assert!(views.absolute_position().y < volume.absolute_position().y);
+        assert!(views.absolute_position().x > 1200.0 - 260.0, "{:?}", views.absolute_position());
+
+        window.set_page("settings".into());
+        assert!(roles("Mode").contains(&AccessibleRole::RadioGroup));
+    }
+
+    /// The audio choice of a connected headset is a segmented control with a line under each
+    /// option, and a choice goes to Rust.
+    #[test]
+    fn the_bluetooth_audio_choice_is_segmented() {
+        let window = window();
+        window.set_page("bluetooth".into());
+        let acts = Rc::new(RefCell::new(Vec::new()));
+        let seen = acts.clone();
+        window.on_bt_act(move |verb, argument| seen.borrow_mut().push(format!("{verb} {argument}")));
+        let strings = |v: &[&str]| super::model(v.iter().map(|&t| SharedString::from(t)).collect());
+        window.set_bt(BtPage {
+            state: "list".into(),
+            powered: true,
+            has_details: true,
+            audio_labels: strings(&["High quality", "Headset", "Off"]),
+            audio_details: strings(&["A2DP · LDAC", "HFP · microphone on", "Controls only"]),
+            audio_selected: 1,
+            ..BtPage::default()
+        });
+        let options = ElementHandle::find_by_accessible_label(&window, "Audio")
+            .find(|e| e.accessible_role() == Some(AccessibleRole::RadioGroup))
+            .expect("the audio choice")
+            .query_descendants()
+            .match_accessible_role(AccessibleRole::RadioButton)
+            .find_all();
+        let labels: Vec<_> = options.iter().filter_map(|e| e.accessible_label()).collect();
+        assert_eq!(labels, ["High quality", "Headset", "Off"]);
+        assert_eq!(options[1].accessible_checked(), Some(true));
+        assert!(ElementHandle::find_by_accessible_label(&window, "HFP · microphone on").next().is_some());
+        options[2].invoke_accessible_default_action();
+        assert_eq!(*acts.borrow(), ["audio 2"]);
+    }
+
+    /// The message above a list is one banner: its title and text read together, and its
+    /// button and Dismiss work.
+    #[test]
+    fn the_message_banner_has_its_button_and_dismiss() {
+        let window = window();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let l = log.clone();
+        window.on_message_action_clicked(move || l.borrow_mut().push("action"));
+        let l = log.clone();
+        window.on_dismiss_message(move || l.borrow_mut().push("dismiss"));
+        window.set_message_tone("danger".into());
+        window.set_message_title("Couldn't connect to Aster Café".into());
+        window.set_message("The network rejected the password.".into());
+        window.set_message_action("Try again".into());
+        let found = |label: &str| ElementHandle::find_by_accessible_label(&window, label).next().expect(label);
+        found("Couldn't connect to Aster Café The network rejected the password.");
+        found("Try again").invoke_accessible_default_action();
+        found("Dismiss").invoke_accessible_default_action();
+        assert_eq!(*log.borrow(), ["action", "dismiss"]);
+    }
+
     #[test]
     fn the_network_chevron_folds_its_pages() {
         i_slint_backend_testing::init_no_event_loop();
