@@ -730,8 +730,15 @@ fn connect_callbacks(window: &MainWindow) {
         })
     });
     let weak = window.as_weak();
-    window.on_displays_drag(move |i, x, y, done| {
-        update(&weak, |app| displays::drag(&mut app.displays, i.max(0) as usize, x, y, done))
+    window.on_displays_drop(move |i, x, y| {
+        update(&weak, |app| displays::drop(&mut app.displays, i.max(0) as usize, x, y))
+    });
+    // Asked on every move of a drag: it only reads.
+    window.on_displays_snap(|i, x, y, threshold, free| {
+        APP.with(|app| match app.try_borrow() {
+            Ok(app) => displays::snap(&app.displays, i.max(0) as usize, x, y, threshold, free),
+            Err(_) => DragSnap { x, y, ..DragSnap::default() },
+        })
     });
     let weak = window.as_weak();
     window.on_input_act(move |verb, arg, value| {
