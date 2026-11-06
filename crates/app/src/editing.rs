@@ -70,7 +70,7 @@ pub struct EditorState {
     /// A DNS server that couldn't be added, by family (v4, v6).
     dns_error: (String, String),
     pub busy: bool,
-    /// Shown instead of "No changes." until the next edit ("Saved.").
+    /// Shown instead of "No changes" until the next edit ("Saved.").
     pub note: Option<(String, &'static str)>,
     /// Why the last save didn't work, until the next edit.
     pub failure: Option<String>,
@@ -907,7 +907,7 @@ pub fn render(window: &MainWindow, app: &mut App) {
     } else if dirty {
         ("Applying saves the changes.".to_owned(), "muted")
     } else {
-        ("No changes.".to_owned(), "muted")
+        ("No changes".to_owned(), "muted")
     };
     window.set_editor_footer(footer.into());
     window.set_editor_footer_tone(tone.into());
@@ -1117,18 +1117,11 @@ pub fn connect(window: &MainWindow) {
             return;
         }
         edit_rows(&weak, |state| {
-            if let Some(p) = state.form.wg.peers.get_mut(peer.max(0) as usize)
-                && !p.allowed_ips.contains(&input)
-            {
-                // A bare address is one host.
-                let range = if input.contains('/') {
-                    input.clone()
-                } else if input.contains(':') {
-                    format!("{input}/128")
-                } else {
-                    format!("{input}/32")
-                };
-                p.allowed_ips.push(range);
+            if let Some(p) = state.form.wg.peers.get_mut(peer.max(0) as usize) {
+                let range = allowed_range(&input);
+                if !p.allowed_ips.contains(&range) {
+                    p.allowed_ips.push(range);
+                }
             }
         });
     });
@@ -1163,11 +1156,43 @@ pub fn connect(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_editor_apply(move || {
         let Some(window) = weak.upgrade() else { return };
+        let ui = window.get_editor_form();
         update(&weak, |app| {
             read_form(&window, app);
+            if let Some(state) = app.editor.as_mut() {
+                take_typed(&mut state.form, &ui);
+            }
             apply(app);
         });
     });
+}
+
+/// An allowed range as WireGuard takes it: a bare address is one host.
+fn allowed_range(input: &str) -> String {
+    if input.contains('/') {
+        input.to_owned()
+    } else if input.contains(':') {
+        format!("{input}/128")
+    } else {
+        format!("{input}/32")
+    }
+}
+
+/// A DNS server or an allowed range still in its field when Apply is pressed counts, as Enter or
+/// leaving the field would have added it (a click on Apply leaves the focus where it is).
+fn take_typed(form: &mut Form, ui: &EditorForm) {
+    for (v6, input) in [(false, ui.ip4.dns_input.trim()), (true, ui.ip6.dns_input.trim())] {
+        let list = if v6 { &mut form.ip6.dns } else { &mut form.ip4.dns };
+        if input.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_ipv6() == v6) && !list.iter().any(|d| d == input) {
+            list.push(input.to_owned());
+        }
+    }
+    for (peer, typed) in form.wg.peers.iter_mut().zip(ui.wg.peers.iter()) {
+        let input = typed.allowed_input.trim();
+        if !input.is_empty() && !peer.allowed_ips.contains(&allowed_range(input)) {
+            peer.allowed_ips.push(allowed_range(input));
+        }
+    }
 }
 
 /// Adds or removes a row (an address, a route, a DNS server) and shows the form again.
@@ -1357,5 +1382,24 @@ mod tests {
         };
         let ui = to_ui(&state, (SharedString::new(), SharedString::new()));
         assert_eq!(from_ui(&state, &ui).oc, state.form.oc);
+    }
+
+    /// A DNS server still in its field when Apply is pressed is added, as Enter would; one of the
+    /// other family, or no address at all, isn't.
+    #[test]
+    fn apply_takes_what_is_still_typed() {
+        let snap = home();
+        let state = EditorState::new(None, Settings::new(), Vec::new(), Some(&snap), Some(Kind::Wifi));
+        let ui = to_ui(&state, (" 9.9.9.9 ".into(), "9.9.9.9".into()));
+        let mut form = state.form.clone();
+        take_typed(&mut form, &ui);
+        assert_eq!(form.ip4.dns, ["9.9.9.9"]);
+        assert!(form.ip6.dns.is_empty());
+        take_typed(&mut form, &ui);
+        assert_eq!(form.ip4.dns, ["9.9.9.9"]);
+        assert_eq!(
+            (allowed_range("10.0.0.0/8"), allowed_range("10.0.0.1"), allowed_range("fd00::1")),
+            ("10.0.0.0/8".to_owned(), "10.0.0.1/32".to_owned(), "fd00::1/128".to_owned())
+        );
     }
 }

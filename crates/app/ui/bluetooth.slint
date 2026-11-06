@@ -3,17 +3,15 @@
 // user does goes back through one callback, `act(verb, argument)`.
 import { Theme } from "theme.slint";
 import { Icon, SignalBars, Battery, Spinner } from "icons.slint";
-import { Button, IconButton, Switch, SectionLabel, Scroll, Focusable, Focus } from "controls.slint";
-import { TextField, Segmented, CheckBox, Modal } from "dialogs.slint";
+import { Button, IconButton, Switch, SectionLabel, FieldLabel, Banner, Scroll, Focusable, Focus } from "controls.slint";
+import { TextField, Segmented, CheckBox, FormRow, Modal } from "dialogs.slint";
 import { Details, DetailsPane } from "details.slint";
-import { HeroInfo } from "shell.slint";
+import { HeroInfo, EmptyState } from "shell.slint";
 
 /// battery and bars: -1 when not shown. button: the label of the button on the row, if any.
 export struct BtRow { id: string, name: string, meta: string, tone: string, icon: string, battery: int, bars: int, button: string, selected: bool }
 /// busy: the spinner and its label on the right of the title ("Looking for devices").
 /// empty: a line shown when there are no rows.
-/// One choice of a headset's audio: "High quality", "A2DP · LDAC".
-export struct BtAudio { label: string, sub: string }
 export struct BtSection { title: string, rows: [BtRow], busy: string, empty: string }
 /// state: "list", "loading", "off", "blocked", "no-adapter" or "no-service"; everything but
 /// "list" shows the empty-* fields instead of the list.
@@ -29,8 +27,10 @@ export struct BtPage {
     sections: [BtSection],
     has-details: bool,
     details: Details,
-    /// The audio choice for a connected headset or speaker, when PipeWire has its card.
-    audio: [BtAudio],
+    /// The audio choice for a connected headset or speaker, when PipeWire has its card: "High
+    /// quality", with "A2DP · LDAC" under it.
+    audio-labels: [string],
+    audio-details: [string],
     audio-selected: int,
     message: string,
     message-title: string,
@@ -138,11 +138,11 @@ export component BluetoothPage inherits HorizontalLayout {
     callback act(string, string);
 
     Rectangle {
-        // The command in the "service not running" state, for Copy.
-        copy-field := TextInput { visible: false; text: root.page.empty-command; read-only: true; }
-        // As the Network lists: a card beside the details card.
+        // As the Network lists: a card beside the details card, up to 520 px; alone, it fills the
+        // row.
         min-width: 330px;
         preferred-width: 440px;
+        max-width: root.page.state == "list" && root.page.has-details ? 520px : 100000px;
         horizontal-stretch: 1;
         background: Theme.surface;
         border-radius: 16px;
@@ -152,44 +152,13 @@ export component BluetoothPage inherits HorizontalLayout {
         VerticalLayout {
             padding: 10px;
             spacing: 10px;
-            if root.page.state == "list" && root.page.message != "": Rectangle {
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: root.page.message-tone == "danger" ? Theme.danger : root.page.message-tone == "warn" ? Theme.warn-border : Theme.ctrl-border;
-                background: root.page.message-tone == "warn" ? Theme.warn-bg : transparent;
-                accessible-role: text;
-                accessible-label: root.page.message-title + " " + root.page.message;
-                HorizontalLayout {
-                    padding: 10px;
-                    padding-right: 6px;
-                    spacing: 10px;
-                    // On the first line of the text.
-                    VerticalLayout { alignment: start; Icon { name: root.page.message-tone == "warn" ? "warning" : "error"; tint: root.page.message-tone == "danger" ? Theme.danger : root.page.message-tone == "warn" ? Theme.warn-text : Theme.muted; } }
-                    VerticalLayout {
-                        spacing: 2px;
-                        horizontal-stretch: 1;
-                        if root.page.message-title != "": Text { text: root.page.message-title; color: root.page.message-tone == "danger" ? Theme.danger : Theme.text; font-size: 13px; font-weight: 600; wrap: word-wrap; }
-                        Text { text: root.page.message; color: root.page.message-title != "" ? Theme.muted : Theme.text; font-size: 13px; wrap: word-wrap; }
-                    }
-                    if root.page.message-action != "": Button {
-                        label: root.page.message-action;
-                        button-height: 28px;
-                        min-width: self.preferred-width;
-                        y: (parent.height - self.height) / 2;
-                        clicked => { root.act("message-action", ""); }
-                    }
-                    Focusable {
-                        width: 24px;
-                        height: 24px;
-                        border-radius: 6px;
-                        background: self.has-hover ? Theme.hover : transparent;
-                        accessible-role: button;
-                        accessible-label: "Dismiss";
-                        accessible-action-default => { root.act("dismiss", ""); }
-                        activated => { root.act("dismiss", ""); }
-                        Icon { name: "close"; tint: Theme.faint; size: 12px; }
-                    }
-                }
+            if root.page.state == "list" && root.page.message != "": Banner {
+                tone: root.page.message-tone;
+                title: root.page.message-title;
+                text: root.page.message;
+                action: root.page.message-action;
+                action-clicked => { root.act("message-action", ""); }
+                dismissed => { root.act("dismiss", ""); }
             }
             // At least three rows before the page itself scrolls.
             if root.page.state == "list": list := Scroll {
@@ -226,51 +195,17 @@ export component BluetoothPage inherits HorizontalLayout {
                     }
                 }
             }
-            if root.page.state != "list": VerticalLayout {
+            if root.page.state != "list": EmptyState {
                 vertical-stretch: 1;
-                alignment: center;
-                spacing: 14px;
                 padding-bottom: 40px;
-                if root.page.state == "loading": HorizontalLayout { alignment: center; Spinner { size: 20px; } }
-                if root.page.empty-icon != "": HorizontalLayout { alignment: center; Icon { name: root.page.empty-icon; tint: Theme.faint; size: 44px; stroke-width: 1px; } }
-                Text { text: root.page.empty-title; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
-                if root.page.empty-text != "": HorizontalLayout {
-                    alignment: center;
-                    Text { text: root.page.empty-text; color: Theme.muted; font-size: 13px; horizontal-alignment: center; wrap: word-wrap; max-width: 460px; }
-                }
-                if root.page.empty-command != "": HorizontalLayout {
-                    alignment: center;
-                    Rectangle {
-                        border-radius: 8px;
-                        border-width: 1px;
-                        border-color: Theme.border2;
-                        background: Theme.surface;
-                        width: command.preferred-width;
-                        height: 46px;
-                        command := HorizontalLayout {
-                            padding-left: 14px;
-                            padding-right: 8px;
-                            spacing: 12px;
-                            Text { text: root.page.empty-command; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; }
-                            Button {
-                                label: "Copy";
-                                button-height: 28px;
-                                min-width: self.preferred-width;
-                                y: (parent.height - self.height) / 2;
-                                clicked => { copy-field.select-all(); copy-field.copy(); root.act("copied", ""); }
-                            }
-                        }
-                    }
-                }
-                if root.page.empty-action != "": HorizontalLayout {
-                    alignment: center;
-                    Button {
-                        label: root.page.empty-action;
-                        kind: root.page.state == "no-service" ? "secondary" : "primary";
-                        button-height: 34px;
-                        clicked => { root.act("empty-action", ""); }
-                    }
-                }
+                icon: root.page.empty-icon;
+                loading: root.page.state == "loading";
+                title: root.page.empty-title;
+                text: root.page.empty-text;
+                command: root.page.empty-command;
+                action: root.page.empty-action;
+                copied => { root.act("copied", ""); }
+                action-clicked => { root.act("empty-action", ""); }
             }
         }
     }
@@ -280,49 +215,15 @@ export component BluetoothPage inherits HorizontalLayout {
         action(id) => { root.act("detail", id); }
         toggle(id) => { root.act("toggle", id); }
         rename => { root.act("rename", ""); }
-        if root.page.audio.length > 0: VerticalLayout {
-            spacing: 8px;
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: start;
-                Text { text: "Audio"; color: Theme.text; font-weight: 600; vertical-alignment: center; }
-                Text { text: "through PipeWire"; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
-            }
-            // Drawn like a segmented control, and the arrow keys move it as they move one.
-            Focusable {
-                height: 52px;
-                border-radius: 9px;
-                border-width: 1px;
-                border-color: Theme.border2;
-                clickable: false;
-                accessible-role: tab-list;
-                accessible-label: "Audio";
-                key(event) => {
-                    if event.text == Key.LeftArrow && root.page.audio-selected > 0 { root.act("audio", "" + (root.page.audio-selected - 1)); return accept; }
-                    if event.text == Key.RightArrow && root.page.audio-selected < root.page.audio.length - 1 { root.act("audio", "" + (root.page.audio-selected + 1)); return accept; }
-                    if event.text == Key.LeftArrow || event.text == Key.RightArrow { return accept; }
-                    reject
-                }
-                HorizontalLayout {
-                    padding: 3px;
-                    spacing: 3px;
-                    for option[i] in root.page.audio: Rectangle {
-                        horizontal-stretch: 1;
-                        border-radius: 7px;
-                        background: i == root.page.audio-selected ? Theme.accent-soft-bg : audio-touch.has-hover ? Theme.hover : transparent;
-                        accessible-role: tab;
-                        accessible-label: option.label;
-                        accessible-item-selected: i == root.page.audio-selected;
-                        accessible-action-default => { root.act("audio", "" + i); }
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 2px;
-                            Text { text: option.label; color: i == root.page.audio-selected ? Theme.text : Theme.muted; font-size: 13px; font-weight: i == root.page.audio-selected ? 600 : 500; horizontal-alignment: center; overflow: elide; }
-                            Text { text: option.sub; color: Theme.faint; font-size: 11px; horizontal-alignment: center; overflow: elide; }
-                        }
-                        audio-touch := TouchArea { mouse-cursor: pointer; clicked => { root.act("audio", "" + i); } }
-                    }
-                }
+        if root.page.audio-labels.length > 0: VerticalLayout {
+            spacing: 6px;
+            FieldLabel { text: "Audio, through PipeWire"; }
+            Segmented {
+                label: "Audio";
+                options: root.page.audio-labels;
+                details: root.page.audio-details;
+                selected: root.page.audio-selected;
+                changed(i) => { root.act("audio", "" + i); }
             }
         }
     }
@@ -405,7 +306,7 @@ export component BtPairDialog inherits Modal {
     }
     if root.pair.mode == "pin" || root.pair.mode == "passkey": VerticalLayout {
         spacing: 6px;
-        Text { text: root.pair.mode == "pin" ? "PIN" : "Code"; color: Theme.text; font-size: 13px; font-weight: 500; }
+        FieldLabel { text: root.pair.mode == "pin" ? "PIN" : "Code"; }
         TextField {
             text <=> root.code;
             mono: true;
@@ -435,61 +336,52 @@ export component BtPairDialog inherits Modal {
     }
 }
 
+// Its settings apply together when Save is pressed, as a dialog's do; Cancel (or Esc) leaves the
+// adapter as it was. Something may be typed in it, so a click beside it doesn't close it.
 export component BtAdapterDialog inherits Modal {
     in property <string> adapter;
-    in property <bool> pairable;
+    in-out property <bool> pairable;
     in-out property <string> name;
     /// How long the Visible switch keeps the computer visible: 0 "3 minutes", 1 "Always".
     in-out property <int> visible-choice;
-    callback name-saved();
-    callback visible-chosen(int);
-    callback pairable-toggled();
-    callback closed();
+    callback saved();
+    callback cancelled();
     card-width: 560px;
     label: "Bluetooth adapter";
-    // Its settings apply at once and the name is saved on the way out, so nothing typed is lost.
-    backdrop-dismisses: true;
-    dismissed => { root.name-saved(); root.closed(); }
+    dismissed => { root.cancelled(); }
     Text { text: "Bluetooth adapter"; color: Theme.text; font-size: 17px; font-weight: 600; }
-    GridLayout {
-        spacing-horizontal: 16px;
-        spacing-vertical: 12px;
-        Row {
-            Text { text: "Adapter"; color: Theme.text; font-size: 13px; width: 136px; vertical-alignment: center; }
-            Text { text: root.adapter; color: Theme.text; font-size: 13px; vertical-alignment: center; height: 24px; }
+    VerticalLayout {
+        spacing: 12px;
+        FormRow {
+            label: "Adapter";
+            label-top: 0;
+            Text { text: root.adapter; color: Theme.text; font-size: 13px; }
         }
-        Row {
-            Text { text: "Name"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
-            VerticalLayout {
-                spacing: 4px;
-                TextField { text <=> root.name; mono: true; label: "Name"; accepted => { root.name-saved(); } }
-                Text { text: "What other devices see when they look for this computer"; color: Theme.muted; font-size: 12px; }
-            }
+        FormRow {
+            label: "Name";
+            TextField { text <=> root.name; mono: true; label: "Name"; accepted => { root.saved(); } }
+            Text { text: "What other devices see when they look for this computer"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
         }
-        Row {
-            Text { text: "Visible switch"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
-            VerticalLayout {
-                spacing: 4px;
-                HorizontalLayout {
-                    alignment: start;
-                    Segmented { options: ["3 minutes", "Always"]; selected <=> root.visible-choice; label: "Visible switch"; changed(i) => { root.visible-chosen(i); } }
-                }
-                Text { text: "How long the Visible switch keeps the computer visible"; color: Theme.muted; font-size: 12px; }
-            }
-        }
-        Row {
-            Text { text: "Pairable"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+        FormRow {
+            label: "Visible for";
             HorizontalLayout {
-                spacing: 10px;
-                Switch { on: root.pairable; label: "Pairable"; y: (parent.height - self.height) / 2; toggled => { root.pairable-toggled(); } }
-                Text { text: "New devices can ask to pair"; color: Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                alignment: start;
+                Segmented { options: ["3 minutes", "Always"]; selected <=> root.visible-choice; label: "Visible for"; height: 38px; }
             }
+            Text { text: "How long the Visible switch keeps the computer visible"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+        }
+        FormRow {
+            label: "Pairable";
+            label-top: 0;
+            CheckBox { checked <=> root.pairable; text: "New devices can ask to pair"; label: "Pairable"; }
         }
     }
     HorizontalLayout {
         padding-top: 6px;
+        spacing: 8px;
         alignment: end;
-        Button { label: "Close"; button-height: 36px; clicked => { root.name-saved(); root.closed(); } }
+        Button { label: "Cancel"; button-height: 36px; clicked => { root.cancelled(); } }
+        Button { label: "Save"; kind: "primary"; button-height: 36px; clicked => { root.saved(); } }
     }
 }
 
