@@ -16,6 +16,7 @@ mod editing;
 mod editor;
 mod files;
 mod hotspot;
+mod input;
 mod instance;
 mod nav;
 mod notify;
@@ -32,6 +33,7 @@ mod tray;
 mod view;
 mod virt;
 mod wireguard;
+mod xkb;
 
 slint::include_modules!();
 
@@ -173,6 +175,9 @@ struct App {
     displays: displays::State,
     /// The Sound page.
     sound: sound::State,
+    /// The Input pages, and which of them was open last (for the Input item).
+    input: input::State,
+    input_page: Option<view::Page>,
     /// Airplane mode, from when it's turned on until it ends.
     airplane: Option<airplane::Airplane>,
     /// The sidebar's search.
@@ -278,6 +283,7 @@ fn main() -> Result<(), slint::PlatformError> {
     sound::spawn(window.as_weak());
     files::spawn(window.as_weak(), config::load(&config::path()).bluetooth.accept_files_from);
     displays::refresh(&window.as_weak());
+    input::refresh(&window.as_weak());
     spawn_hyprland_watcher(window.as_weak());
     // The Displays page's countdown after Apply.
     let weak = window.as_weak();
@@ -588,7 +594,13 @@ fn connect_focus(window: &MainWindow) {
 
 fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
-    window.on_navigate(move |id| update(&weak, |app| go(app, &id)));
+    window.on_navigate(move |id| {
+        update(&weak, |app| go(app, &id));
+        // Devices come and go without Hyprland saying so: read them again.
+        if APP.with(|app| matches!(app.borrow().ui.page, view::Page::Keyboard | view::Page::Mouse)) {
+            input::refresh(&weak);
+        }
+    });
     let weak = window.as_weak();
     window.on_nav_search(move |text| update(&weak, |app| app.nav_query = text.to_string()));
     let weak = window.as_weak();
@@ -630,8 +642,11 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_move_selection(move |delta| {
         update(&weak, |app| {
-            if app.ui.page == view::Page::Bluetooth {
-                return bluetooth::move_selection(&mut app.bt, delta);
+            match app.ui.page {
+                view::Page::Bluetooth => return bluetooth::move_selection(&mut app.bt, delta),
+                view::Page::Keyboard => return input::move_layout_selection(&mut app.input, delta),
+                view::Page::Mouse => return input::move_selection(&mut app.input, delta),
+                _ => {}
             }
             let ids = &app.row_ids;
             if ids.is_empty() {
@@ -648,6 +663,7 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_activate_selected(move || {
         update(&weak, |app| match app.ui.page {
             view::Page::Bluetooth => bluetooth::activate(&mut app.bt),
+            view::Page::Keyboard | view::Page::Mouse => {}
             _ => act(app, "connect"),
         })
     });
@@ -716,6 +732,11 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_displays_drag(move |i, x, y, done| {
         update(&weak, |app| displays::drag(&mut app.displays, i.max(0) as usize, x, y, done))
+    });
+    let weak = window.as_weak();
+    window.on_input_act(move |verb, arg, value| {
+        let w = weak.clone();
+        update(&weak, |app| input::act(&w, &mut app.input, &verb, &arg, value))
     });
     let weak = window.as_weak();
     window.on_sound_act(move |verb, id, value| {
@@ -961,10 +982,16 @@ fn hostname_problem(name: &str) -> Option<&'static str> {
     if name.split('.').all(label_ok) { None } else { Some("Letters, digits and hyphens only, such as thinkpad-x1.") }
 }
 
-/// Goes to a page (a sidebar item's id); Network opens its sub-page used last.
+/// Goes to a page (a sidebar item's id); Network and Input open their sub-page used last.
 fn go(app: &mut App, id: &str) {
-    if view::navigate(&mut app.ui, &mut app.net_page, id) == Some(view::Page::Hotspot) {
-        open_hotspot(app);
+    let id = match (id, app.input_page) {
+        ("input", Some(page)) => page.id(),
+        _ => id,
+    };
+    match view::navigate(&mut app.ui, &mut app.net_page, id) {
+        Some(view::Page::Hotspot) => open_hotspot(app),
+        Some(page @ (view::Page::Keyboard | view::Page::Mouse)) => app.input_page = Some(page),
+        _ => {}
     }
 }
 
@@ -1141,7 +1168,12 @@ fn spawn_hyprland_watcher(weak: slint::Weak<MainWindow>) {
                 let _ = h.events(|name, _| {
                     match name {
                         "monitoraddedv2" | "monitorremovedv2" => displays::hotplugged(&weak),
-                        "configreloaded" => displays::refresh(&weak),
+                        "configreloaded" => {
+                            displays::refresh(&weak);
+                            input::refresh(&weak);
+                        }
+                        // A keyboard switched layouts (Super+Space, say).
+                        "activelayout" => input::refresh(&weak),
                         _ => {}
                     }
                     true
@@ -1239,6 +1271,7 @@ fn tether_offers(snapshot: Option<&lituus_nm::Snapshot>) -> std::collections::Ha
 
 /// The sidebar's pages; Network's statuses are filled in from the view.
 fn nav_entries(app: &App) -> Vec<nav::Entry> {
+    let (keyboard, mouse) = input::status(&app.input);
     vec![
         nav::Entry {
             id: "network",
@@ -1311,6 +1344,35 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "audio volume speakers headphones microphone input output pipewire mute apps",
             status: sound::status(&app.sound),
             parent: None,
+        },
+        nav::Entry {
+            id: "input",
+            label: "Input",
+            icon: "keyboard",
+            group: "DEVICES",
+            keywords: "keyboard mouse touchpad trackpad pointer devices",
+            status: keyboard.clone(),
+            parent: None,
+        },
+        nav::Entry {
+            id: "keyboard",
+            label: "Keyboard",
+            icon: "keyboard",
+            group: "DEVICES",
+            keywords: "keyboard layout layouts language switch xkb repeat delay rate caps lock compose num lock numlock \
+                       typing keys dvorak qwertz azerty",
+            status: keyboard,
+            parent: Some("input"),
+        },
+        nav::Entry {
+            id: "mouse",
+            label: "Mouse & touchpad",
+            icon: "mouse",
+            group: "DEVICES",
+            keywords: "mouse mice touchpad trackpad trackpoint pointer speed sensitivity acceleration natural scrolling \
+                       scroll speed left-handed tap to click disable while typing clickfinger",
+            status: mouse,
+            parent: Some("input"),
         },
         // Lituus's own look is in Settings; "Appearance" is kept for the desktop's (GTK) later.
         nav::Entry {
@@ -1451,6 +1513,8 @@ fn render(window: &MainWindow) {
         render_appearance(window, &app);
         sound::render(window, &app.sound);
         displays::render(window, &app.displays);
+        let state = &mut *app;
+        input::render(window, &mut state.input, state.bt.snapshot.as_ref());
         files::render(window, &app.files);
         render_quick(&mut app, airplane);
     });

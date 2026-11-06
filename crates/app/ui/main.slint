@@ -18,10 +18,11 @@ import { SettingsHero, AppearanceSettings, ColourFiles, ThemeSwatch, ColourChip,
 import { SendFilesDialog, IncomingFileDialog, FilesView, FileRow } from "files.slint";
 import { DisplaysPage, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, KeepDialog, ConfigDialog } from "displays.slint";
 import { SoundPage, SoundView, SoundDevice, SoundApp, SoundCard } from "sound.slint";
+import { KeyboardPage, MousePage, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, AddLayoutDialog, OwnSettingsDialog } from "input.slint";
 import { BluetoothPage, BtAudio, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, Focus, FilesView, FileRow, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, Focus, FilesView, FileRow, DisplaysView, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundDevice, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtAudio, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, QuickToggle, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -129,6 +130,11 @@ export component MainWindow inherits Window {
     in-out property <int> sound-tab;
     /// Everything done on the Sound page: (verb, id, value).
     callback sound-act(string, string, float);
+    // The Input pages, Keyboard and Mouse & touchpad (see input.slint).
+    in property <KeyboardView> keyboard;
+    in property <MouseView> mouse;
+    /// Everything done on them: (verb, argument, value).
+    callback input-act(string, string, float);
     // Settings' Appearance section and hero (see appearance.slint).
     in property <[SourceRow]> sources;
     in property <bool> ap-follow;
@@ -317,6 +323,10 @@ export component MainWindow inherits Window {
             if root.confirm-open && event.text == Key.Escape { root.confirm-cancelled(); return accept; }
             if root.confirm-open { return reject; }
             if event.modifiers.control && (event.text == "k" || event.text == "K") { root.nav-focus-requests += 1; return accept; }
+            // The Keyboard page: Alt+↑↓ moves the selected layout, Del removes it.
+            if root.page == "keyboard" && event.modifiers.alt && event.text == Key.UpArrow { root.input-act("layout-up", "", 0); return accept; }
+            if root.page == "keyboard" && event.modifiers.alt && event.text == Key.DownArrow { root.input-act("layout-down", "", 0); return accept; }
+            if root.page == "keyboard" && event.text == Key.Delete { root.input-act("layout-remove-selected", "", 0); return accept; }
             if event.text == "/" && root.show-search { root.search-focus-requests += 1; return accept; }
             if event.text == Key.DownArrow { root.follow-selection = true; root.move-selection(1); return accept; }
             if event.text == Key.UpArrow { root.follow-selection = true; root.move-selection(-1); return accept; }
@@ -784,6 +794,18 @@ export component MainWindow inherits Window {
                         act(verb, arg, value) => { root.displays-act(verb, arg, value); }
                         drag(i, x, y, done) => { root.displays-drag(i, x, y, done); }
                     }
+                    if root.page == "keyboard": KeyboardPage {
+                        vertical-stretch: 1;
+                        compact: root.compact;
+                        view: root.keyboard;
+                        act(verb, arg, value) => { root.input-act(verb, arg, value); }
+                    }
+                    if root.page == "mouse": MousePage {
+                        vertical-stretch: 1;
+                        compact: root.compact;
+                        view: root.mouse;
+                        act(verb, arg, value) => { root.input-act(verb, arg, value); }
+                    }
                     if root.page == "sound": SoundPage {
                         vertical-stretch: 1;
                         compact: root.compact;
@@ -875,7 +897,9 @@ export component MainWindow inherits Window {
                         Kbd { key: "Ctrl K"; label: "Find a setting"; }
                         if root.network-page && root.show-search: Kbd { key: "/"; label: "Search"; }
                         if root.page != "hotspot": Kbd { key: "↑↓"; label: "Select"; }
-                        if root.page != "hotspot": Kbd { key: "↵"; label: "Connect"; }
+                        if root.page == "keyboard": Kbd { key: "Alt ↑↓"; label: "Move layout"; }
+                        if root.page == "keyboard": Kbd { key: "Del"; label: "Remove"; }
+                        if root.page != "hotspot" && root.page != "keyboard" && root.page != "mouse": Kbd { key: "↵"; label: "Connect"; }
                         if root.page == "bluetooth": Kbd { key: "p"; label: "Pair"; }
                         if root.page == "bluetooth": Kbd { key: "s"; label: "Look for devices"; }
                         // Lets the bar (and so the window) grow wider than its hints.
@@ -892,7 +916,8 @@ export component MainWindow inherits Window {
     // control that had the focus before the dialog opened, if there was one.
     property <bool> modal-open: root.confirm-open || root.join-open || root.add-open || root.hostname-open || root.share-open
         || root.bt-pair-open || root.bt-adapter-open || root.bt-rename-open || root.files.sending || root.files.incoming
-        || (root.page == "displays" && (root.displays.keep-open || root.displays.config-open));
+        || (root.page == "displays" && (root.displays.keep-open || root.displays.config-open))
+        || (root.page == "keyboard" && root.keyboard.add-open) || (root.page == "mouse" && root.mouse.own-open);
     changed modal-open => { if !self.modal-open { keys.focus(); Focus.give-back(); } }
 
     // The control with the focus can go away (a dialog closes, a button isn't offered any more),
@@ -1139,6 +1164,17 @@ export component MainWindow inherits Window {
         view: root.displays;
         closed => { root.displays-act("close-config", "", 0); keys.focus(); }
         name-by-description => { root.displays-act("name-by-description", "", 0); }
+    }
+    if root.page == "keyboard" && root.keyboard.add-open: AddLayoutDialog {
+        view: root.keyboard;
+        query(text) => { root.input-act("add-query", text, 0); }
+        add(i) => { root.input-act("add", "" + i, 0); keys.focus(); }
+        closed => { root.input-act("add-close", "", 0); keys.focus(); }
+    }
+    if root.page == "mouse" && root.mouse.own-open: OwnSettingsDialog {
+        view: root.mouse;
+        pick(name) => { root.input-act("own", name, 0); keys.focus(); }
+        closed => { root.input-act("own-close", "", 0); keys.focus(); }
     }
     if root.files.sending: SendFilesDialog {
         view: root.files;
