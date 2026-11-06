@@ -80,12 +80,14 @@ fn key_mgmt_at(index: i32) -> Option<lituus_nm::KeyMgmt> {
     }
 }
 
-/// The confirmation dialog: its title, text and button, and what accepting it does.
+/// The confirmation dialog: its title, text and button, and what accepting it does. The button
+/// is red when the action can't be undone (Forget, Delete), else the usual primary (Update).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Confirm {
     pub title: String,
     pub text: String,
     pub button: String,
+    pub destructive: bool,
     pub then: Confirmed,
 }
 
@@ -1129,7 +1131,7 @@ fn act(app: &mut App, action: &str) {
         }
         Some(view::Intent::Join(target)) => open_dialog(app, Dialog::Join(target)),
         Some(view::Intent::Confirm { title, text, button, command }) => {
-            app.confirm = Some(Confirm { title, text, button, then: Confirmed::Network(command) });
+            app.confirm = Some(Confirm { title, text, button, destructive: true, then: Confirmed::Network(command) });
         }
         None => {}
     }
@@ -1477,6 +1479,7 @@ fn render(window: &MainWindow) {
             window.set_confirm_title(confirm.title.as_str().into());
             window.set_confirm_text(confirm.text.as_str().into());
             window.set_confirm_button(confirm.button.as_str().into());
+            window.set_confirm_destructive(confirm.destructive);
         }
         window.set_message_title(if app.message.is_some() { app.message_title.as_str().into() } else { "".into() });
         window.set_message_action(if app.retry.is_some() { "Try again".into() } else { "".into() });

@@ -1221,6 +1221,7 @@ fn forget(adapter: String, device: &Device) -> Confirm {
         title: format!("Forget {}?", device.alias),
         text: "You'll need to pair it again to use it with this computer.".into(),
         button: "Forget".into(),
+        destructive: true,
         then: Confirmed::Bluetooth(Command::Forget { adapter, device: device.path.clone() }),
     }
 }
