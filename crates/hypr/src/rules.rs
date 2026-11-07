@@ -255,7 +255,7 @@ fn lua_unquote(s: &str) -> Option<String> {
 }
 
 /// A Lua string literal.
-fn lua_string(s: &str) -> String {
+pub(crate) fn lua_string(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
         match c {
@@ -270,7 +270,7 @@ fn lua_string(s: &str) -> String {
 }
 
 /// 1.5, 1, 1.333333: as short as it goes.
-fn number(n: f64) -> String {
+pub(crate) fn number(n: f64) -> String {
     let s = format!("{n:.6}");
     s.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
