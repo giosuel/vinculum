@@ -18,6 +18,8 @@ pub struct Entry {
     pub status: String,
     /// The item it's a sub-item of.
     pub parent: Option<&'static str>,
+    /// Why it can't be opened now ("Needs Hyprland…"); empty when it can.
+    pub off: &'static str,
 }
 
 const GROUPS: [&str; 3] = ["CONNECTIONS", "DEVICES", LITUUS];
@@ -75,7 +77,7 @@ pub fn groups(entries: &[Entry], query: &str, current: &str, folded: &[String]) 
                     // An item showing sub-items leaves the statuses to them.
                     let subs_shown = shown.iter().any(|s| s.parent == Some(e.id));
                     let on_sub = current_parent == Some(e.id);
-                    let sub = if subs_shown { "" } else { e.status.as_str() };
+                    let sub = if subs_shown || !e.off.is_empty() { "" } else { e.status.as_str() };
                     NavItem {
                         id: SharedString::from(e.id),
                         label: SharedString::from(e.label),
@@ -90,6 +92,7 @@ pub fn groups(entries: &[Entry], query: &str, current: &str, folded: &[String]) 
                         stop: place(e.id) == stop,
                         place: place(e.id),
                         parent: e.parent.map_or(-1, place),
+                        off: SharedString::from(e.off),
                     }
                 })
                 .collect();
@@ -112,6 +115,7 @@ pub fn spoken(status: &str) -> String {
 pub fn first_match<'a>(entries: &'a [Entry], query: &str) -> Option<&'a str> {
     let shown = shown(entries, query, &[]);
     let query = query.trim().to_lowercase();
+    let shown: Vec<&Entry> = shown.into_iter().filter(|e| e.off.is_empty()).collect();
     let by_name = shown.iter().find(|e| e.label.to_lowercase().contains(&query));
     by_name.or_else(|| shown.iter().find(|e| matches(e, &query))).map(|e| e.id)
 }
@@ -131,6 +135,7 @@ mod tests {
                 keywords: "internet connections",
                 status: "Home".into(),
                 parent: None,
+                off: "",
             },
             Entry {
                 id: "wifi",
@@ -140,6 +145,7 @@ mod tests {
                 keywords: "wifi wireless",
                 status: "Home".into(),
                 parent: Some("network"),
+                off: "",
             },
             Entry {
                 id: "wired",
@@ -149,6 +155,7 @@ mod tests {
                 keywords: "ethernet",
                 status: "unplugged".into(),
                 parent: Some("network"),
+                off: "",
             },
             Entry {
                 id: "vpn",
@@ -158,6 +165,7 @@ mod tests {
                 keywords: "wireguard",
                 status: "off".into(),
                 parent: Some("network"),
+                off: "",
             },
             Entry {
                 id: "bluetooth",
@@ -167,6 +175,7 @@ mod tests {
                 keywords: "pair headphones",
                 status: "2 on".into(),
                 parent: None,
+                off: "",
             },
             Entry {
                 id: "mouse",
@@ -176,6 +185,7 @@ mod tests {
                 keywords: "natural scrolling tap to click",
                 status: "1 on".into(),
                 parent: None,
+                off: "",
             },
             Entry {
                 id: "settings",
@@ -185,6 +195,7 @@ mod tests {
                 keywords: "appearance theme colours dark light",
                 status: String::new(),
                 parent: None,
+                off: "",
             },
         ]
     }
@@ -197,6 +208,19 @@ mod tests {
         assert_eq!(titles, ["CONNECTIONS", "DEVICES"]);
         assert!(g[0].items.row_data(4).unwrap().current);
         assert_eq!(g[0].items.row_data(4).unwrap().sub, "2 on");
+    }
+
+    /// A page that needs Hyprland, while it isn't running: still listed (and found by the search),
+    /// but turned off, with no status, and Enter in the search doesn't go to it.
+    #[test]
+    fn a_page_turned_off() {
+        let mut e = entries();
+        e.iter_mut().find(|e| e.id == "mouse").unwrap().off = "Needs Hyprland";
+        let g = groups(&e, "", "wifi", &[]);
+        let item = g[1].items.row_data(0).unwrap();
+        assert_eq!((item.id.as_str(), item.off.as_str(), item.sub.as_str()), ("mouse", "Needs Hyprland", ""));
+        assert_eq!(groups(&e, "touchpad", "wifi", &[]).len(), 1);
+        assert_eq!(first_match(&e, "touchpad"), None);
     }
 
     #[test]

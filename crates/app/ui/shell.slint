@@ -10,8 +10,8 @@ import { Button, Switch, SectionLabel, Banner, Focusable, Scroll, Focus } from "
 /// indent: a sub-item. foldable: an item with sub-items, which its chevron folds away (folded).
 /// The pages are one Tab stop, the `stop` (the current page, else the first); the arrow keys
 /// move between them by `place` (top to bottom, from 0), and from a sub-item to its item's
-/// place, `parent`.
-export struct NavItem { id: string, label: string, sub: string, spoken: string, icon: string, current: bool, open: bool, indent: bool, foldable: bool, folded: bool, stop: bool, place: int, parent: int }
+/// place, `parent`. off: why the page can't be opened now (it needs Hyprland); empty when it can.
+export struct NavItem { id: string, label: string, sub: string, spoken: string, icon: string, current: bool, open: bool, indent: bool, foldable: bool, folded: bool, stop: bool, place: int, parent: int, off: string }
 export struct NavGroup { title: string, items: [NavItem] }
 /// What a page's hero shows: a big icon, a name, a line under it and a monospaced line.
 /// tone: the colour of `meta` ("accent", "muted", "danger", "faint").
@@ -31,8 +31,16 @@ component NavButton inherits Rectangle {
     callback fold-clicked();
     /// An arrow key: the page at this place is to take the focus.
     callback want(int);
+    /// A page that can't be opened is pointed at, or reached with the keyboard (true), or no
+    /// longer (false): the tooltip saying why goes beside it, at `y` in the window.
+    callback tip(bool, length);
+    property <bool> is-off: root.item.off != "";
+    property <bool> pointed: root.is-off && (body.has-hover || (body.has-focus && Focus.keyboard));
+    changed pointed => { root.tip(self.pointed, self.absolute-position.y); }
     height: item.indent ? 32px : 36px;
     accessible-role: button;
+    accessible-enabled: !root.is-off;
+    accessible-description: root.item.off;
     accessible-label: item.sub == "" ? item.label : item.label + ", " + (item.spoken != "" ? item.spoken : item.sub);
     accessible-expandable: item.foldable;
     accessible-expanded: !item.folded;
@@ -53,8 +61,9 @@ component NavButton inherits Rectangle {
         // The sidebar's list would cut off a ring outside it.
         ring-gap: -2px;
         border-radius: root.item.indent ? 9px : 10px;
-        background: root.item.current ? Theme.accent-soft-bg : self.has-hover ? Theme.hover : transparent;
-        activated => { root.clicked(); }
+        background: root.item.current ? Theme.accent-soft-bg : self.has-hover && !root.is-off ? Theme.hover : transparent;
+        // Turned off, it stays reachable (so its tooltip can be read) but does nothing.
+        activated => { if !root.is-off { root.clicked(); } }
         key(event) => {
             if event.modifiers.control || event.modifiers.alt || event.modifiers.meta { return reject; }
             if event.text == Key.DownArrow { root.want(root.item.place + 1); return accept; }
@@ -75,13 +84,13 @@ component NavButton inherits Rectangle {
             spacing: root.item.indent ? 10px : 11px;
             Icon {
                 name: root.item.icon;
-                tint: root.item.current || root.item.open ? Theme.accent : root.item.indent ? Theme.faint : Theme.muted;
+                tint: root.is-off ? Theme.faint.transparentize(0.45) : root.item.current || root.item.open ? Theme.accent : root.item.indent ? Theme.faint : Theme.muted;
                 size: root.item.indent ? 15px : 17px;
                 y: (parent.height - self.size) / 2;
             }
             Text {
                 text: root.item.label;
-                color: root.item.indent && !root.item.current ? Theme.muted : Theme.text;
+                color: root.is-off ? Theme.faint.transparentize(0.3) : root.item.indent && !root.item.current ? Theme.muted : Theme.text;
                 font-size: root.item.indent ? 13px : 14px;
                 font-weight: root.item.current || root.item.open ? 600 : 400;
                 vertical-alignment: center;
@@ -116,7 +125,7 @@ component NavButton inherits Rectangle {
                 Icon {
                     name: "chevron";
                     size: 16px;
-                    tint: parent.has-hover ? Theme.text : Theme.muted;
+                    tint: root.is-off ? Theme.faint.transparentize(0.45) : parent.has-hover ? Theme.text : Theme.muted;
                     // Down when unfolded, right when folded.
                     transform-rotation: root.item.folded ? -90deg : 0deg;
                     animate transform-rotation { duration: 120ms; easing: ease-out; }
@@ -147,6 +156,10 @@ export component Sidebar inherits Rectangle {
     callback search-left();
     callback airplane-toggled();
     callback hostname-clicked();
+    /// Why the page pointed at can't be opened, and where it is (y in the window), for the
+    /// tooltip the window shows beside the sidebar.
+    out property <string> tip;
+    out property <length> tip-y;
     width: 250px;
     background: Theme.panel;
     // The page the arrow keys (or F6) send the focus to; see NavButton.
@@ -240,6 +253,14 @@ export component Sidebar inherits Rectangle {
                         clicked => { root.navigate(item.id); }
                         fold-clicked => { root.fold(item.id); }
                         want(place) => { root.want-place = place; root.want-serial += 1; }
+                        tip(shown, y) => {
+                            if shown {
+                                root.tip = item.off;
+                                root.tip-y = y;
+                            } else if root.tip-y == y {
+                                root.tip = "";
+                            }
+                        }
                     }
                 }
                 if root.groups.length == 0: HorizontalLayout {
@@ -252,7 +273,7 @@ export component Sidebar inherits Rectangle {
             Rectangle { height: 1px; background: page-list.overflows ? Theme.border : transparent; }
             // A Tab stop of its own, below the list.
             NavButton {
-                item: { id: "settings", label: "Settings", sub: "", icon: "settings", current: root.settings-current, stop: true, place: -1, parent: -1 };
+                item: { id: "settings", label: "Settings", sub: "", icon: "settings", current: root.settings-current, stop: true, place: -1, parent: -1, off: "" };
                 clicked => { root.navigate("settings"); }
             }
             HorizontalLayout {
@@ -407,6 +428,32 @@ export component SettingRow inherits Rectangle {
             alignment: center;
             @children
         }
+    }
+}
+
+/// A small note beside what it's about (a page in the sidebar that can't be opened): Select's
+/// popup look, smaller.
+export component Tooltip inherits Rectangle {
+    in property <string> text;
+    width: 250px;
+    height: label.preferred-height + 16px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border2;
+    background: Theme.ctrl-bg;
+    drop-shadow-blur: 22px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: #00000073;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+    label := Text {
+        x: 11px;
+        y: 8px;
+        width: parent.width - 22px;
+        text: root.text;
+        color: Theme.text;
+        font-size: 12px;
+        wrap: word-wrap;
     }
 }
 
