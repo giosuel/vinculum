@@ -6,6 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::binds::LiveBind;
 use crate::input::{Devices, Value, option_value};
 use crate::model::{Monitor, Version, Workspace};
 
@@ -59,6 +60,11 @@ impl Hyprland {
 
     fn json<T: serde::de::DeserializeOwned>(&self, request: &str) -> Result<T, Error> {
         Ok(serde_json::from_str(&self.request(&format!("j/{request}"))?)?)
+    }
+
+    /// The binds Hyprland has now.
+    pub fn binds(&self) -> Result<Vec<LiveBind>, Error> {
+        self.json("binds")
     }
 
     /// All monitors, disabled ones too.

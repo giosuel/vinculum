@@ -1,13 +1,15 @@
 //! Hyprland over its sockets, in pure Rust: the monitors and workspaces, keyboards and pointers,
-//! live events, and the monitor, workspace and input settings Lituus writes to its own config
-//! file and applies live.
+//! live events, the monitor, workspace and input settings Lituus writes to its own config file
+//! and applies live, and the keyboard shortcuts in the user's config.
 
+mod binds;
 mod config;
 mod input;
 mod ipc;
 mod model;
 mod rules;
 
+pub use binds::{Action, Bind, Flags, LiveBind, Value as LuaValue, modifier_bit, read as read_binds};
 pub use config::{ConfigFile, config_dir, section, with_section};
 pub use input::{
     Device, DeviceSettings, Devices, InputSettings, Keyboard, KeyboardSettings, Layout, MouseSettings, OPTIONS,
