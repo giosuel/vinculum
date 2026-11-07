@@ -1,7 +1,7 @@
 //! The Displays page: Hyprland's monitors (lituus-hypr), edited on a copy of their rules; Apply
-//! sets them live and asks to keep them, and only then writes ~/.config/hypr/lituus.lua.
-//! Without an answer within 15 seconds the old settings come back, so a black screen fixes
-//! itself.
+//! sets them live and asks to keep them, and only then writes the Displays part of
+//! ~/.config/hypr/lituus.lua. Without an answer within 15 seconds the old settings come back,
+//! so a black screen fixes itself.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -21,6 +21,9 @@ const WORKSPACES: usize = 10;
 /// How long Apply waits for Keep.
 pub const KEEP_FOR: Duration = Duration::from_secs(15);
 
+/// The name of the Displays part of Lituus's file.
+const SECTION: &str = "Displays";
+
 #[derive(Default)]
 pub struct State {
     hypr: Option<Hyprland>,
@@ -36,7 +39,7 @@ pub struct State {
     /// After Apply: until when to wait for Keep, and what to go back to.
     keep: Option<(Instant, Vec<MonitorRule>)>,
     pub config_open: bool,
-    /// The file as last written or read.
+    /// The page's part of the file, as last written or read.
     saved: Option<String>,
     /// displays.toml, and the workspace bindings as edited.
     store: Store,
@@ -231,7 +234,7 @@ fn auto_switch(weak: &slint::Weak<MainWindow>, state: &mut State) {
     send(weak, state, changed, ws);
     if let Some(file) = &state.file {
         let text = state.text(&rules);
-        if file.write(&text).is_ok() {
+        if file.write_section(SECTION, &text).is_ok() {
             state.saved = Some(text);
         }
     }
@@ -271,7 +274,7 @@ fn loaded(state: &mut State, read: Result<(Hyprland, bool, Vec<Monitor>), lituus
             monitors.sort_by_key(|m| (m.disabled, m.x, m.y));
             let file = ConfigFile::new(state.hypr_dir.clone().unwrap_or_else(config_dir), lua);
             state.loaded = file.loaded();
-            state.saved = file.read();
+            state.saved = file.read_section(SECTION);
             state.file = Some(file);
             state.hypr = Some(h);
             state.not_running = false;
@@ -592,7 +595,7 @@ fn revert(weak: &slint::Weak<MainWindow>, state: &mut State) {
 fn save(state: &mut State) {
     let Some(file) = &state.file else { return };
     let text = state.text(&state.live);
-    match file.write(&text) {
+    match file.write_section(SECTION, &text) {
         Ok(()) => state.saved = Some(text),
         Err(e) => state.error = Some(format!("Couldn't write {}: {e}", file.path().display())),
     }
@@ -1956,6 +1959,64 @@ mod tests {
         let v = view(&st);
         assert_eq!(v.status, "Everything is applied and saved");
         assert_eq!(v.profiles.row_data(0).unwrap().exec_hint, "");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Saving writes the Displays part only: the Input part and the user's lines before the
+    /// first part stay, in Lua and in hyprlang.
+    #[test]
+    fn saving_keeps_the_input_part() {
+        for lua in [true, false] {
+            let (mut st, dir) = state_in(if lua { "input-lua" } else { "input-conf" });
+            std::fs::write(dir.join("hyprland.conf"), "source = ~/.config/hypr/lituus.conf\n").unwrap();
+            let file = ConfigFile::new(&dir, lua);
+            let comment = if lua { "--" } else { "#" };
+            let input = lituus_hypr::InputSettings::default().file(lua);
+            let old = format!("{comment} Written by Lituus (Displays).\n");
+            std::fs::write(file.path(), format!("{comment} Mine.\n\n{old}\n{input}")).unwrap();
+            loaded(&mut st, Ok((Hyprland::at("/nonexistent"), lua, fixture())));
+            assert_eq!(st.saved.as_deref(), Some(old.as_str()));
+            assert_eq!(view(&st).status, "The config file has older settings than the monitors now");
+            act(&weak(), &mut st, "save", "", 0.0);
+            let text = st.text(&st.live);
+            assert!(text.contains(if lua { "hl.monitor(" } else { "monitor = " }), "{text}");
+            assert_eq!(file.read().unwrap(), format!("{comment} Mine.\n\n{text}\n{input}"));
+            assert_eq!(view(&st).status, "Everything is applied and saved");
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    /// The Input part isn't older Displays settings.
+    #[test]
+    fn an_input_part_doesnt_make_the_file_older() {
+        let (mut st, dir) = state_in("input-after");
+        act(&weak(), &mut st, "save", "", 0.0);
+        let file = ConfigFile::new(&dir, true);
+        file.write_section("Input", &lituus_hypr::InputSettings::default().file(true)).unwrap();
+        reread(&mut st, &fixture());
+        let v = view(&st);
+        assert_eq!(v.status, "Everything is applied and saved");
+        assert!(!v.can_save);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Switching to a profile on hotplug writes the Displays part only.
+    #[test]
+    fn switching_on_hotplug_keeps_the_input_part() {
+        let (mut st, dir) = state_in("input-hotplug");
+        let file = ConfigFile::new(&dir, true);
+        let input = lituus_hypr::InputSettings::default().file(true);
+        file.write_section("Input", &input).unwrap();
+        act(&weak(), &mut st, "profile-save", "Desk", 0.0);
+        // DP-4 moved outside Lituus; the profile puts it back.
+        let mut moved = fixture();
+        moved[2].x += 100;
+        reread(&mut st, &moved);
+        auto_switch(&weak(), &mut st);
+        let text = file.read().unwrap();
+        assert!(text.contains(r#"position = "6338x2393""#), "{text}");
+        assert_eq!(lituus_hypr::section(&text, "Input").as_deref(), Some(input.as_str()));
+        assert_eq!(lituus_hypr::section(&text, "Displays"), st.saved);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

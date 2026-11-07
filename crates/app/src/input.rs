@@ -1916,5 +1916,16 @@ B: PROP=5
         assert_eq!(lituus_hypr::section(&file, "Displays").as_deref(), Some(displays));
         assert!(lituus_hypr::section(&file, "Input").unwrap().contains("numlock_by_default = true"));
         std::fs::remove_dir_all(&dir).unwrap();
+
+        // hyprlang's, with the user's own lines before the first part.
+        let (mut st, dir) = state_in("both-conf");
+        (st.lua, st.file) = (false, Some(ConfigFile::new(&dir, false)));
+        let displays = "# Mine.\n\n# Written by Lituus (Displays). Change it in Lituus: edits made here are overwritten.\n\nmonitor = DP-1, disable\n";
+        std::fs::write(dir.join("lituus.conf"), displays).unwrap();
+        act(&weak(), &mut st, "numlock", "", 0.0);
+        let file = std::fs::read_to_string(dir.join("lituus.conf")).unwrap();
+        assert!(file.starts_with(displays), "{file}");
+        assert!(lituus_hypr::section(&file, "Input").unwrap().contains("numlock_by_default = true"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
