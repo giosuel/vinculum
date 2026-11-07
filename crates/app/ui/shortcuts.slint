@@ -48,6 +48,13 @@ export struct ShortcutDialog {
     snippet: string,
     can-restore: bool,
     use-on: bool,
+    has-keys: bool,
+    listening: bool,
+    held: [string],
+    listen-note: string,
+    conflict-title: string,
+    conflict-text: string,
+    conflict-open: bool,
 }
 /// state: "list", "loading" or "not-running" (empty-* say why). count: how many the search found.
 /// editable: the config is Lua, which Lituus can change. not-loaded: the config doesn't load
@@ -343,6 +350,100 @@ component Source inherits VerticalLayout {
     }
 }
 
+// The keys: listening for new ones (Hyprland's own shortcuts paused meanwhile), or the ones it
+// has, with a button to change them; and what already has them.
+component KeysField inherits VerticalLayout {
+    in property <ShortcutDialog> dialog;
+    callback act(string, string);
+    spacing: 8px;
+    if root.dialog.listening: VerticalLayout {
+        spacing: 8px;
+        Rectangle {
+            width: 300px;
+            height: 116px;
+            border-radius: 10px;
+            border-width: 1.5px;
+            border-color: Theme.accent;
+            background: Theme.input-bg;
+            accessible-role: AccessibleRole.text;
+            accessible-label: "Press the new shortcut";
+            // Every key goes here while it listens: Esc stops, Backspace clears.
+            capture := FocusScope {
+                init => { self.focus(); }
+                key-pressed(event) => {
+                    if event.text == Key.Escape { root.act("d-stop", ""); return accept; }
+                    if event.text == Key.Backspace && !event.modifiers.meta && !event.modifiers.control && !event.modifiers.alt { root.act("d-clear", ""); return accept; }
+                    root.act("d-key", event.text + "\u{9}" + (event.modifiers.meta ? "M" : "") + (event.modifiers.control ? "C" : "") + (event.modifiers.alt ? "A" : "") + (event.modifiers.shift ? "S" : ""));
+                    accept
+                }
+                key-released(event) => { root.act("d-key-up", event.text); accept }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 10px;
+                Text { text: "Press the new shortcut"; color: Theme.text; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 6px;
+                    Keys { keys: root.dialog.held; large: true; }
+                    Rectangle {
+                        width: 30px;
+                        height: 30px;
+                        border-radius: 5px;
+                        border-width: 1px;
+                        border-color: Theme.accent;
+                    }
+                }
+                Text { text: root.dialog.listen-note; color: Theme.muted; font-size: 12px; horizontal-alignment: center; }
+            }
+        }
+        HorizontalLayout {
+            spacing: 16px;
+            alignment: start;
+            Text { text: "Esc cancels · Backspace clears"; color: Theme.faint; font-size: 12px; }
+        }
+        Text {
+            width: 300px;
+            text: "Hyprland's shortcuts are paused while Lituus listens, so the keys you press don't run anything.";
+            color: Theme.muted;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+    if !root.dialog.listening: HorizontalLayout {
+        spacing: 12px;
+        alignment: start;
+        Keys { keys: root.dialog.keys; large: true; visible: root.dialog.has-keys; }
+        if !root.dialog.unread: Button {
+            label: root.dialog.has-keys ? "Change keys…" : "Choose keys…";
+            button-height: 34px;
+            clicked => { root.act("d-listen", ""); }
+        }
+    }
+    if root.dialog.conflict-title != "": Rectangle {
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: Theme.warn-border;
+        background: Theme.warn-bg;
+        height: conflict.preferred-height;
+        conflict := VerticalLayout {
+            padding: 12px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            spacing: 4px;
+            Text { text: root.dialog.conflict-title; color: Theme.text; font-size: 13px; font-weight: 600; wrap: word-wrap; }
+            Text { text: root.dialog.conflict-text; color: Theme.warn-text; font-size: 13px; wrap: word-wrap; }
+            if root.dialog.conflict-open: HorizontalLayout {
+                padding-top: 6px;
+                spacing: 8px;
+                alignment: start;
+                Button { label: "Replace it"; button-height: 28px; clicked => { root.act("d-replace-keys", ""); } }
+                Button { label: "Pick other keys"; button-height: 28px; clicked => { root.act("d-listen", ""); } }
+            }
+        }
+    }
+}
+
 /// Changing a shortcut: its action and what that needs, a description, the options; or, for a
 /// bind Lituus can't read, keeping it, turning it off or replacing it. Two columns in a wide
 /// window, one that scrolls in a small one; Cancel and Save stay in view.
@@ -390,7 +491,7 @@ export component ShortcutEditDialog inherits Modal {
                 horizontal-stretch: 1;
                 spacing: 14px;
                 alignment: start;
-                Row { label: "Keys"; label-top: 6px; Keys { keys: root.dialog.keys; large: true; } }
+                Row { label: "Keys"; label-top: 6px; KeysField { dialog: root.dialog; act(v, a) => { root.act(v, a); } } }
                 Row {
                     label: "Action";
                     HorizontalLayout {
@@ -550,6 +651,7 @@ export component ShortcutsPage inherits VerticalLayout {
         // Hyprland not running: only the title; the card says the rest.
         hero-height: root.compact || root.view.state != "list" ? 136px : 206px;
         compact: root.compact;
+        aside: add.width;
         if root.view.state == "list": HeroSubject {
             x: 24px;
             y: parent.height - self.height - (root.compact ? 16px : 22px);
@@ -557,6 +659,15 @@ export component ShortcutsPage inherits VerticalLayout {
             height: root.compact ? 56px : 96px;
             compact: root.compact;
             info: root.view.hero;
+        }
+        add := Button {
+            x: parent.width - self.width - 22px;
+            y: 22px;
+            width: root.view.state == "list" && root.view.editable ? self.preferred-width : 0;
+            visible: root.view.state == "list" && root.view.editable;
+            enabled: self.visible;
+            label: "Add a shortcut…";
+            clicked => { root.act("add", ""); }
         }
     }
     if root.view.state == "list": table := Card {
