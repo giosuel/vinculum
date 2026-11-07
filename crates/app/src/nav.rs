@@ -1,5 +1,5 @@
 //! The sidebar: its pages in groups, each with a short status, filtered by the search field.
-//! Network's pages (Wi-Fi, Wired, VPN, Hotspot) and Input's (Keyboard, Mouse & touchpad) are their
+//! Network's pages (Wi-Fi, Wired, VPN, Hotspot) and Input's (Keyboard, Mouse & touchpad, Shortcuts) are their
 //! sub-items, shown under them unless they're folded, and when the search finds them. Settings has its own button at the bottom, so it's
 //! listed only as a search result.
 

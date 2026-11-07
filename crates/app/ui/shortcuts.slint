@@ -1,0 +1,186 @@
+// Input › Shortcuts, following the "Shortcuts" mockups (the table): the binds in the user's
+// Hyprland config in groups, each with its keys, what it does, its options and where it's
+// written. Only shown for now; changing them comes next. What it shows comes from Rust
+// (src/shortcuts.rs); the search goes back through `act`.
+import { Theme } from "theme.slint";
+import { SectionLabel, Scroll } from "controls.slint";
+import { TextField } from "dialogs.slint";
+import { Hero, HeroSubject, HeroInfo, Card, EmptyState } from "shell.slint";
+
+/// A row of the table, or a group's label above its rows (`label` set, the rest empty). unread:
+/// Lua that Lituus doesn't read; warn: in the config but not in effect. summary: the detail, the
+/// options and where it's from on one line, for a narrow table.
+export struct ShortcutRow { label: string, keys: [string], title: string, detail: string, mono: bool, options: string, from: string, summary: string, unread: bool, warn: bool }
+/// state: "list", "loading" or "not-running" (empty-* say why). count: how many the search found.
+export struct ShortcutsView { state: string, empty-title: string, empty-text: string, sub: string, hero: HeroInfo, rows: [ShortcutRow], count: string, query: string }
+
+component KeyCap inherits Rectangle {
+    in property <string> key;
+    width: label.preferred-width + 14px;
+    height: 24px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: Theme.border2;
+    background: Theme.bg;
+    label := Text { text: root.key; color: Theme.text; font-size: 12px; vertical-alignment: center; horizontal-alignment: center; }
+}
+
+// The columns' widths in a wide table, as in the mockup.
+global Columns {
+    out property <length> keys: 220px;
+    out property <length> options: 220px;
+    out property <length> from: 250px;
+    out property <length> keys-narrow: 168px;
+}
+
+component Line inherits Rectangle {
+    in property <ShortcutRow> entry;
+    in property <bool> wide;
+    in property <bool> first;
+    height: root.entry.label != "" ? (root.first ? 26px : 34px) : root.wide ? 40px : 52px;
+    border-radius: 8px;
+    background: root.entry.label == "" && touch.has-hover ? Theme.hover : transparent;
+    accessible-role: list-item;
+    accessible-label: root.entry.label != "" ? root.entry.label : root.entry.title;
+    touch := TouchArea { }
+    SectionLabel {
+        x: 10px;
+        y: parent.height - self.height - 4px;
+        visible: root.entry.label != "";
+        text: root.entry.label;
+    }
+    HorizontalLayout {
+        visible: root.entry.label == "";
+        padding-left: 10px;
+        padding-right: 8px;
+        spacing: root.wide ? 16px : 12px;
+        HorizontalLayout {
+            width: root.wide ? Columns.keys : Columns.keys-narrow;
+            spacing: 4px;
+            alignment: start;
+            for k in root.entry.keys: KeyCap { key: k; y: (parent.height - self.height) / 2; }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                spacing: 14px;
+                Text {
+                    text: root.entry.title;
+                    color: root.entry.unread ? Theme.muted : root.entry.warn ? Theme.faint : Theme.text;
+                    font-size: 14px;
+                    font-weight: 500;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+                if root.wide: Text {
+                    text: root.entry.detail;
+                    color: root.entry.unread || root.entry.warn ? Theme.faint : Theme.muted;
+                    font-size: 12px;
+                    font-family: root.entry.mono ? "JetBrains Mono" : "Inter";
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+            }
+            // Narrow: what it runs, its options and where it's from on a second line.
+            if !root.wide: Text {
+                text: root.entry.summary;
+                color: root.entry.warn ? Theme.warn-text : Theme.faint;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+        if root.wide: Text {
+            width: Columns.options;
+            text: root.entry.options;
+            color: root.entry.warn ? Theme.warn-text : Theme.muted;
+            font-size: 12px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+        if root.wide: Text {
+            width: Columns.from;
+            text: root.entry.from;
+            color: Theme.faint;
+            font-size: 12px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component ShortcutsPage inherits VerticalLayout {
+    in property <ShortcutsView> view;
+    in property <bool> compact;
+    /// Goes up to put the keyboard in the search field ("/").
+    in property <int> search-requests;
+    callback act(string, string);
+    spacing: 14px;
+
+    Hero {
+        title: "Shortcuts";
+        sub: root.view.state == "list" ? root.view.sub : "";
+        // Hyprland not running: only the title; the card says the rest.
+        hero-height: root.compact || root.view.state != "list" ? 136px : 206px;
+        compact: root.compact;
+        if root.view.state == "list": HeroSubject {
+            x: 24px;
+            y: parent.height - self.height - (root.compact ? 16px : 22px);
+            width: parent.width - 48px;
+            height: root.compact ? 56px : 96px;
+            compact: root.compact;
+            info: root.view.hero;
+        }
+    }
+    if root.view.state == "list": table := Card {
+        vertical-stretch: 1;
+        property <bool> wide: self.width >= 1150px;
+        property <int> search-requests: root.search-requests;
+        changed search-requests => { search.focus(); }
+        VerticalLayout {
+            padding: 12px;
+            padding-bottom: 6px;
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 14px;
+                search := TextField {
+                    width: 340px;
+                    label: "Search shortcuts";
+                    placeholder: "Search keys or actions";
+                    text: root.view.query;
+                    edited => { root.act("query", self.text); }
+                }
+                Text { text: root.view.count; color: Theme.faint; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            }
+            // The columns' names, over a line.
+            VerticalLayout {
+                spacing: 8px;
+                // Placed rather than laid out: the columns follow the card's width, which mustn't
+                // follow them.
+                Rectangle {
+                    height: 16px;
+                    SectionLabel { x: 10px; width: 120px; text: "KEYS"; }
+                    SectionLabel { x: 10px + (table.wide ? Columns.keys + 16px : Columns.keys-narrow + 12px); width: 120px; text: "ACTION"; }
+                    SectionLabel { x: parent.width - 8px - Columns.from - 16px - Columns.options; width: 120px; visible: table.wide; text: "OPTIONS"; }
+                    SectionLabel { x: parent.width - 8px - Columns.from; width: 120px; visible: table.wide; text: "FROM"; }
+                }
+                Rectangle { height: 1px; background: Theme.border; }
+            }
+            Scroll {
+                vertical-stretch: 1;
+                // Its rows follow the card's width (wide or not), so its least width can't
+                // follow them.
+                min-width: 0;
+                spacing: 2px;
+                for r[i] in root.view.rows: Line { entry: r; first: i == 0; wide: table.wide; }
+            }
+        }
+    }
+    if root.view.state != "list": Card {
+        vertical-stretch: 1;
+        EmptyState { icon: "keyboard"; loading: root.view.state == "loading"; title: root.view.empty-title; text: root.view.empty-text; }
+    }
+}

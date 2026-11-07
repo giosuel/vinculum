@@ -27,6 +27,7 @@ mod profiles;
 mod qr;
 mod quick;
 mod secrets;
+mod shortcuts;
 mod sound;
 mod theme;
 mod tray;
@@ -182,6 +183,8 @@ struct App {
     /// The Input pages, and which of them was open last (for the Input item).
     input: input::State,
     input_page: Option<view::Page>,
+    /// Input › Shortcuts.
+    shortcuts: shortcuts::State,
     /// Airplane mode, from when it's turned on until it ends.
     airplane: Option<airplane::Airplane>,
     /// The sidebar's search.
@@ -288,6 +291,7 @@ fn main() -> Result<(), slint::PlatformError> {
     files::spawn(window.as_weak(), config::load(&config::path()).bluetooth.accept_files_from);
     displays::refresh(&window.as_weak());
     input::refresh(&window.as_weak());
+    shortcuts::refresh(&window.as_weak());
     spawn_hyprland_watcher(window.as_weak());
     // The Displays page's countdown after Apply.
     let weak = window.as_weak();
@@ -672,6 +676,10 @@ fn connect_callbacks(window: &MainWindow) {
         if APP.with(|app| matches!(app.borrow().ui.page, view::Page::Keyboard | view::Page::Mouse)) {
             input::refresh(&weak);
         }
+        // The config may have changed since.
+        if APP.with(|app| app.borrow().ui.page == view::Page::Shortcuts) {
+            shortcuts::refresh(&weak);
+        }
     });
     let weak = window.as_weak();
     window.on_nav_search(move |text| update(&weak, |app| app.nav_query = text.to_string()));
@@ -709,6 +717,7 @@ fn connect_callbacks(window: &MainWindow) {
                 view::Page::Bluetooth => return bluetooth::move_selection(&mut app.bt, delta),
                 view::Page::Keyboard => return input::move_layout_selection(&mut app.input, delta),
                 view::Page::Mouse => return input::move_selection(&mut app.input, delta),
+                view::Page::Shortcuts => return,
                 _ => {}
             }
             let ids = &app.row_ids;
@@ -726,7 +735,7 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_activate_selected(move || {
         update(&weak, |app| match app.ui.page {
             view::Page::Bluetooth => bluetooth::activate(&mut app.bt),
-            view::Page::Keyboard | view::Page::Mouse => {}
+            view::Page::Keyboard | view::Page::Mouse | view::Page::Shortcuts => {}
             _ => act(app, "connect"),
         })
     });
@@ -819,6 +828,11 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_input_act(move |verb, arg, value| {
         let w = weak.clone();
         update(&weak, |app| input::act(&w, &mut app.input, &verb, &arg, value))
+    });
+    let weak = window.as_weak();
+    window.on_shortcuts_act(move |verb, arg| {
+        let w = weak.clone();
+        update(&weak, |app| shortcuts::act(&w, &mut app.shortcuts, &verb, &arg))
     });
     let weak = window.as_weak();
     window.on_sound_act(move |verb, id, value| {
@@ -1074,7 +1088,7 @@ fn go(app: &mut App, id: &str) {
     };
     match view::navigate(&mut app.ui, &mut app.net_page, id) {
         Some(view::Page::Hotspot) => open_hotspot(app),
-        Some(page @ (view::Page::Keyboard | view::Page::Mouse)) => app.input_page = Some(page),
+        Some(page @ (view::Page::Keyboard | view::Page::Mouse | view::Page::Shortcuts)) => app.input_page = Some(page),
         _ => {}
     }
 }
@@ -1262,6 +1276,7 @@ fn spawn_hyprland_watcher(weak: slint::Weak<MainWindow>) {
                         "configreloaded" => {
                             displays::refresh(&weak);
                             input::refresh(&weak);
+                            shortcuts::refresh(&weak);
                         }
                         // A keyboard switched layouts (Super+Space, say).
                         "activelayout" => input::refresh(&weak),
@@ -1465,6 +1480,15 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             status: mouse,
             parent: Some("input"),
         },
+        nav::Entry {
+            id: "shortcuts",
+            label: "Shortcuts",
+            icon: "keyboard",
+            group: "DEVICES",
+            keywords: "shortcuts shortcut keybinds keybind binds bind hotkeys hotkey keys super workspace launch",
+            status: shortcuts::status(&app.shortcuts),
+            parent: Some("input"),
+        },
         // Lituus's own look is in Settings; "Appearance" is kept for the desktop's (GTK) later.
         nav::Entry {
             id: "settings",
@@ -1598,6 +1622,7 @@ fn render(window: &MainWindow) {
         displays::render(window, &app.displays);
         let state = &mut *app;
         input::render(window, &mut state.input, state.bt.snapshot.as_ref());
+        shortcuts::render(window, &app.shortcuts);
         files::render(window, &app.files);
         // The keys that work on this page now, after the pages above worked out their lists.
         let mut hints = vec![Hint::new("Ctrl K", "Find a setting"), Hint::new("F6", "Sidebar or page")];
@@ -1606,6 +1631,7 @@ fn render(window: &MainWindow) {
             view::Page::Bluetooth => bluetooth::keys(&app.bt),
             view::Page::Keyboard => input::keyboard_keys(&app.input),
             view::Page::Mouse => input::mouse_keys(&app.input),
+            view::Page::Shortcuts => shortcuts::keys(&app.shortcuts),
             _ => Vec::new(),
         });
         window.set_hints(model(hints));

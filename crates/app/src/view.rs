@@ -21,6 +21,7 @@ pub enum Page {
     Sound,
     Keyboard,
     Mouse,
+    Shortcuts,
     Settings,
 }
 
@@ -36,6 +37,7 @@ impl Page {
             "sound" => Self::Sound,
             "keyboard" => Self::Keyboard,
             "mouse" => Self::Mouse,
+            "shortcuts" => Self::Shortcuts,
             // Lituus's own look moved to Settings.
             "settings" | "appearance" => Self::Settings,
             _ => return None,
@@ -68,6 +70,7 @@ impl Page {
             Self::Sound => "sound",
             Self::Keyboard => "keyboard",
             Self::Mouse => "mouse",
+            Self::Shortcuts => "shortcuts",
             Self::Settings => "settings",
         }
     }
@@ -370,7 +373,13 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
             Vec::new()
         }
         // Bluetooth has a page of its own (bluetooth.rs).
-        Page::Bluetooth | Page::Displays | Page::Sound | Page::Keyboard | Page::Mouse | Page::Settings => Vec::new(),
+        Page::Bluetooth
+        | Page::Displays
+        | Page::Sound
+        | Page::Keyboard
+        | Page::Mouse
+        | Page::Shortcuts
+        | Page::Settings => Vec::new(),
     };
     // Rows grouped by section title, the selection resolved, and the selected row's details.
     view.row_ids = rows.iter().flat_map(|(_, r)| r.iter().map(|r| r.id.clone())).collect();
@@ -441,6 +450,7 @@ fn page_title(page: Page) -> &'static str {
         Page::Sound => "Sound",
         Page::Keyboard => "Keyboard",
         Page::Mouse => "Mouse & touchpad",
+        Page::Shortcuts => "Shortcuts",
         Page::Settings => "Settings",
     }
 }

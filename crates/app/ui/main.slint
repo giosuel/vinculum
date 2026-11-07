@@ -19,10 +19,11 @@ import { SendFilesDialog, IncomingFileDialog, FilesView, FileRow } from "files.s
 import { DisplaysPage, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeepDialog, ConfigDialog } from "displays.slint";
 import { SoundPage, SoundView, SoundApp, SoundCard } from "sound.slint";
 import { KeyboardPage, MousePage, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, AddLayoutDialog, OwnSettingsDialog } from "input.slint";
+import { ShortcutsPage, ShortcutsView, ShortcutRow } from "shortcuts.slint";
 import { BluetoothPage, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, Focus, Hint, FilesView, FileRow, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, Focus, Hint, FilesView, FileRow, ShortcutsView, ShortcutRow, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -144,6 +145,9 @@ export component MainWindow inherits Window {
     in property <MouseView> mouse;
     /// Everything done on them: (verb, argument, value).
     callback input-act(string, string, float);
+    in property <ShortcutsView> shortcuts;
+    callback shortcuts-act(string, string);
+    property <int> shortcuts-search-requests;
     // Settings' Appearance section and hero (see appearance.slint).
     in property <[SourceRow]> sources;
     in property <bool> ap-follow;
@@ -339,6 +343,7 @@ export component MainWindow inherits Window {
             if root.page == "keyboard" && event.modifiers.alt && event.text == Key.UpArrow { root.input-act("layout-up", "", 0); return accept; }
             if root.page == "keyboard" && event.modifiers.alt && event.text == Key.DownArrow { root.input-act("layout-down", "", 0); return accept; }
             if root.page == "keyboard" && event.text == Key.Delete { root.input-act("layout-remove-selected", "", 0); return accept; }
+            if event.text == "/" && root.page == "shortcuts" { root.shortcuts-search-requests += 1; return accept; }
             if event.text == "/" && root.show-search { root.search-focus-requests += 1; return accept; }
             if event.text == Key.DownArrow { root.follow-selection = true; root.move-selection(1); return accept; }
             if event.text == Key.UpArrow { root.follow-selection = true; root.move-selection(-1); return accept; }
@@ -725,6 +730,13 @@ export component MainWindow inherits Window {
                         compact: root.compact;
                         view: root.mouse;
                         act(verb, arg, value) => { root.input-act(verb, arg, value); }
+                    }
+                    if root.page == "shortcuts": ShortcutsPage {
+                        vertical-stretch: 1;
+                        compact: root.compact;
+                        view: root.shortcuts;
+                        search-requests: root.shortcuts-search-requests;
+                        act(verb, arg) => { root.shortcuts-act(verb, arg); }
                     }
                     if root.page == "sound": SoundPage {
                         vertical-stretch: 1;
