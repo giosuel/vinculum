@@ -1,14 +1,21 @@
 //! The Shortcuts page (Input › Shortcuts): the binds in the user's Hyprland config, in groups and
 //! in words ("Close window", "Go to workspace 3"), with the keys and the file and line each comes
 //! from. Hyprland's own list (`hyprctl binds`) says which are in effect, and has the binds made
-//! while it runs. It only shows them for now; changing them comes next.
+//! while it runs. A shortcut is changed in a dialog, or turned off with its switch: Lituus writes
+//! that to its own file (shortcut_edit.rs) and applies it at once with `hyprctl eval`.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
-use lituus_hypr::{Action, Bind, Hyprland, LiveBind, LuaValue as Value, config_dir, modifier_bit, read_binds};
+use lituus_hypr::{
+    Action, Bind, BindConfig, ConfigFile, Hyprland, LiveBind, LuaValue as Value, config_dir, lua_string, modifier_bit,
+    normalized_keys, read_binds,
+};
 use slint::{ModelRc, SharedString, VecModel};
 
-use crate::{HeroInfo, Hint, MainWindow, ShortcutRow, ShortcutsView, update};
+use crate::input::kept;
+use crate::shortcut_edit::{self, DIRECTIONS, Field, Form, KINDS, Mine, SECTION};
+use crate::{HeroInfo, Hint, MainWindow, ShortcutDialog, ShortcutRow, ShortcutsView, update};
 
 #[derive(Default)]
 pub struct State {
@@ -16,10 +23,21 @@ pub struct State {
     /// Read at least once.
     read: bool,
     pub error: Option<String>,
-    binds: Vec<Bind>,
+    /// The user's config, without Lituus's own file.
+    config: BindConfig,
+    /// What Lituus's part of its file changes and adds.
+    mine: Vec<Mine>,
+    /// Where the config loads Lituus's file: the file and line of its `require("lituus")`.
+    loads: Option<(PathBuf, usize)>,
     /// What Hyprland has now; `None` when it couldn't say.
     live: Option<Vec<LiveBind>>,
+    hypr: Option<Hyprland>,
     pub query: String,
+    pub dialog: Option<Dialog>,
+    /// The bind of Lituus's own about to be deleted (an index into `mine`), once confirmed.
+    pub deleting: Option<usize>,
+    /// Why the last change couldn't be saved or applied.
+    message: Option<String>,
     /// Where Hyprland's config is, if not the usual place (tests).
     hypr_dir: Option<PathBuf>,
 }
@@ -28,10 +46,66 @@ impl State {
     fn dir(&self) -> PathBuf {
         self.hypr_dir.clone().unwrap_or_else(config_dir)
     }
+
+    fn file(&self) -> ConfigFile {
+        ConfigFile::new(self.dir(), true)
+    }
+
+    /// The config is Lua, which Lituus can add its part to (hyprlang is read only, for now).
+    fn editable(&self) -> bool {
+        self.dir().join("hyprland.lua").exists()
+    }
+
+    /// What Lituus's part does to the config's bind `b`.
+    fn over(&self, b: &Bind) -> Option<&Option<Bind>> {
+        let keys = normalized_keys(&b.keys());
+        self.mine.iter().find_map(|m| match m {
+            Mine::Over { bind, .. } if m.keys() == keys => Some(bind),
+            _ => None,
+        })
+    }
 }
 
-/// What was read, on a thread.
-pub type Read = Result<(Vec<Bind>, Option<Vec<LiveBind>>), lituus_hypr::Error>;
+/// What a row or the dialog is about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// One of the config's binds (an index into `config.binds`).
+    Config(usize),
+    /// One of Lituus's own (an index into `mine`).
+    Added(usize),
+}
+
+impl Target {
+    fn id(self) -> String {
+        match self {
+            Target::Config(i) => format!("c{i}"),
+            Target::Added(i) => format!("a{i}"),
+        }
+    }
+
+    fn parse(id: &str) -> Option<Target> {
+        let n = id.get(1..)?.parse().ok()?;
+        match id.as_bytes().first()? {
+            b'c' => Some(Target::Config(n)),
+            b'a' => Some(Target::Added(n)),
+            _ => None,
+        }
+    }
+}
+
+/// The edit dialog: what it's about, and the form. `unread`: a config bind Lituus can't read,
+/// which can only be kept or turned off, or replaced by a new one on its keys (`replacing`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dialog {
+    pub target: Target,
+    pub form: Form,
+    pub unread: bool,
+    pub replacing: bool,
+    pub use_on: bool,
+}
+
+/// What was read, on a thread: the config, Lituus's part, Hyprland's binds.
+pub type Read = Result<(BindConfig, Option<String>, Option<Vec<LiveBind>>, Hyprland), lituus_hypr::Error>;
 
 /// Reads the config's binds and Hyprland's (on a thread: the files and the socket may take a
 /// moment). Also from the thread that follows Hyprland's events.
@@ -45,21 +119,98 @@ pub fn refresh(weak: &slint::Weak<MainWindow>) {
 
 fn read(dir: &Path) -> Read {
     let h = Hyprland::from_env()?;
-    Ok((read_binds(dir), h.binds().ok()))
+    let section = ConfigFile::new(dir, true).read_section(SECTION);
+    Ok((read_binds(dir), section, h.binds().ok(), h))
 }
 
 pub fn loaded(state: &mut State, read: Read) {
     state.read = true;
     match read {
-        Ok((binds, live)) => {
-            state.binds = binds;
+        Ok((mut config, section, live, hypr)) => {
+            // Lituus's own file is read as its part, not as the user's binds.
+            let own = state.file().path();
+            config.binds.retain(|b| b.file != own);
+            config.unbinds.retain(|u| u.file != own);
+            state.loads = config.requires.iter().find(|(name, _, _)| name == "lituus").map(|(_, f, l)| (f.clone(), *l));
+            state.mine = section.map(|t| shortcut_edit::parse(&t, &own)).unwrap_or_default();
+            state.config = config;
             state.live = live;
+            state.hypr = Some(hypr);
             state.not_running = false;
             state.error = None;
         }
         Err(lituus_hypr::Error::NotRunning) => state.not_running = true,
         Err(e) => state.error = Some(e.to_string()),
     }
+}
+
+/// Lituus's part becomes `mine`: written to its file and applied with `lua` (none: Hyprland
+/// reads its config again, for a bind of the config's Lituus can't write itself), on a thread.
+fn change(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, mine: Vec<Mine>, lua: Option<String>) {
+    state.mine = mine;
+    state.message = None;
+    let text = shortcut_edit::text(&state.mine);
+    let file = state.file();
+    let hypr = state.hypr.clone();
+    let Some(weak) = weak.cloned() else {
+        // Tests: written at once, nothing applied.
+        if let Err(e) = file.write_section(SECTION, &text) {
+            state.message = Some(format!("Couldn't save the change: {e}."));
+        }
+        return;
+    };
+    let dir = state.dir();
+    std::thread::spawn(move || {
+        let done =
+            file.write_section(SECTION, &text).map_err(|e| format!("Couldn't save the change: {e}.")).and_then(|()| {
+                let Some(h) = hypr else { return Ok(()) };
+                match &lua {
+                    Some(lua) => h.eval(lua),
+                    None => h.request("reload").map(|_| ()),
+                }
+                .map_err(|e| format!("Saved, but Hyprland didn't take it: {e}."))
+            });
+        let read = read(&dir);
+        let _ = weak.clone().upgrade_in_event_loop(move |_| {
+            update(&weak, move |app| {
+                loaded(&mut app.shortcuts, read);
+                app.shortcuts.message = done.err();
+            })
+        });
+    });
+}
+
+/// The Lua that brings back the config's binds on `keys` (none when one can't be written: then
+/// Hyprland reads its config again).
+fn restore_lua(state: &State, keys: &str) -> Option<String> {
+    let norm = normalized_keys(keys);
+    let mut lua = vec![format!("hl.unbind({})", lua_string(keys))];
+    for b in state.config.binds.iter().filter(|b| normalized_keys(&b.keys()) == norm) {
+        lua.push(b.to_lua()?);
+    }
+    Some(lua.join(" "))
+}
+
+/// Lituus's part with the config's bind `b` changed to `bind` (none: turned off), and the Lua
+/// that does it now.
+fn with_over(state: &State, b: &Bind, bind: Option<Bind>) -> (Vec<Mine>, Option<String>) {
+    let keys = b.keys();
+    let norm = normalized_keys(&keys);
+    let mut mine: Vec<Mine> =
+        state.mine.iter().filter(|m| !matches!(m, Mine::Over { .. } if m.keys() == norm)).cloned().collect();
+    let mut lua = format!("hl.unbind({})", lua_string(&keys));
+    if let Some(l) = bind.as_ref().and_then(Bind::to_lua) {
+        lua = format!("{lua} {l}");
+    }
+    mine.push(Mine::Over { keys, bind });
+    (mine, Some(lua))
+}
+
+/// Lituus's part without its change to the config's bind `b`, and the Lua that brings it back.
+fn without_over(state: &State, b: &Bind) -> (Vec<Mine>, Option<String>) {
+    let norm = normalized_keys(&b.keys());
+    let mine = state.mine.iter().filter(|m| !matches!(m, Mine::Over { .. } if m.keys() == norm)).cloned().collect();
+    (mine, restore_lua(state, &b.keys()))
 }
 
 // ---- in words ----------------------------------------------------------------------------------
@@ -430,7 +581,7 @@ pub fn keys(state: &State) -> Vec<Hint> {
 }
 
 pub fn status(state: &State) -> String {
-    if has_list(state) { state.binds.len().to_string() } else { String::new() }
+    if has_list(state) { state.config.binds.len().to_string() } else { String::new() }
 }
 
 /// The main key: the modifier most binds use.
@@ -452,41 +603,101 @@ fn main_key(binds: &[Bind]) -> Option<(String, usize)> {
 const MODMASK: [(u32, &str); 8] =
     [(64, "SUPER"), (4, "CTRL"), (8, "ALT"), (1, "SHIFT"), (128, "MOD5"), (2, "CAPS"), (16, "MOD2"), (32, "MOD3")];
 
+/// What Lituus did to a row: changed, added, turned off.
+const CHANGED: &str = "Changed in Lituus";
+const ADDED: &str = "Added in Lituus";
+const TURNED_OFF: &str = "Turned off in Lituus";
+
 struct Entry {
+    target: Option<Target>,
     group: String,
     caps: Vec<String>,
     d: Described,
     options: String,
     from: String,
+    /// What Lituus did to it, if anything.
+    marker: &'static str,
+    on: bool,
     unread: bool,
     warn: bool,
 }
 
+/// How many of Hyprland's binds are on `b`'s keys; `None` when Hyprland couldn't say.
+fn live_count(state: &State, b: &Bind) -> Option<usize> {
+    state.live.as_ref().map(|live| live.iter().filter(|l| l.matches(b)).count())
+}
+
 fn entries(state: &State) -> Vec<Entry> {
     let dir = state.dir();
-    let mut entries: Vec<Entry> = state
-        .binds
-        .iter()
-        .map(|b| {
-            let d = describe(b);
-            let mut options: Vec<&str> = options(b);
-            let in_effect = state.live.as_ref().is_none_or(|live| live.iter().any(|l| l.matches(b)));
-            if !in_effect {
-                options.push("Not in effect now");
-            }
-            Entry {
-                group: if b.submap.is_empty() { d.group.to_owned() } else { format!("Submap {}", b.submap) },
-                caps: caps(b),
-                unread: b.action == Action::Unread,
-                d,
-                options: options.join(" · "),
-                from: from(b, &dir),
-                warn: !in_effect,
-            }
-        })
-        .collect();
-    // What Hyprland has that the config doesn't: made while it runs (hyprctl eval, a plugin).
-    for l in state.live.iter().flatten().filter(|l| !state.binds.iter().any(|b| l.matches(b))) {
+    let mut entries: Vec<Entry> = Vec::new();
+    for (i, b) in state.config.binds.iter().enumerate() {
+        let over = state.over(b);
+        let shown = match over {
+            Some(Some(new)) => new,
+            _ => b,
+        };
+        let d = describe(shown);
+        let mut options: Vec<&str> = options(shown);
+        let count = live_count(state, b);
+        // In effect: Hyprland has it (once, when Lituus changed it), or doesn't, when it's off.
+        let in_effect = match (over, count) {
+            (_, None) => true,
+            (Some(None), Some(n)) => n == 0,
+            (Some(Some(_)), Some(n)) => n == 1,
+            (None, Some(n)) => n > 0,
+        };
+        let marker = match over {
+            Some(Some(_)) => CHANGED,
+            Some(None) => TURNED_OFF,
+            None => "",
+        };
+        if !in_effect {
+            options.push("Not in effect now");
+        }
+        entries.push(Entry {
+            target: Some(Target::Config(i)),
+            group: if b.submap.is_empty() { d.group.to_owned() } else { format!("Submap {}", b.submap) },
+            caps: caps(b),
+            unread: shown.action == Action::Unread,
+            d,
+            options: options.join(" · "),
+            from: from(b, &dir),
+            marker,
+            on: !matches!(over, Some(None)),
+            warn: !in_effect,
+        });
+    }
+    for (i, m) in state.mine.iter().enumerate() {
+        let Mine::Added { bind, on } = m else { continue };
+        let d = describe(bind);
+        let in_effect = !on || live_count(state, bind).is_none_or(|n| n == 1);
+        let mut options = options(bind);
+        if !in_effect {
+            options.push("Not in effect now");
+        }
+        entries.push(Entry {
+            target: Some(Target::Added(i)),
+            group: d.group.to_owned(),
+            caps: caps(bind),
+            unread: false,
+            d,
+            options: options.join(" · "),
+            from: from(bind, &dir),
+            marker: ADDED,
+            on: *on,
+            warn: !in_effect,
+        });
+    }
+    // What Hyprland has that neither the config nor Lituus's part has: made while it runs
+    // (hyprctl eval, a plugin).
+    let known = |l: &LiveBind| {
+        state.config.binds.iter().any(|b| l.matches(b))
+            || state.mine.iter().any(|m| match m {
+                Mine::Added { bind, .. } | Mine::Over { bind: Some(bind), .. } => l.matches(bind),
+                Mine::Over { bind: None, .. } => false,
+            })
+    };
+    for l in state.live.iter().flatten().filter(|l| !known(l)) {
         let mods = MODMASK.iter().filter(|(bit, _)| l.modmask & bit != 0).map(|(_, m)| key_name(m));
         let caps = mods.chain(std::iter::once(key_name(&l.key))).collect();
         let title =
@@ -494,11 +705,14 @@ fn entries(state: &State) -> Vec<Entry> {
         let detail =
             l.dispatcher.strip_prefix("HL.Dispatcher(").and_then(|d| d.strip_suffix(')')).unwrap_or(&l.dispatcher);
         entries.push(Entry {
+            target: None,
             group: "Not in your config".into(),
             caps,
             d: Described { group: "Other", title, detail: detail.to_owned(), mono: true },
             options: String::new(),
             from: "Gone when Hyprland restarts".into(),
+            marker: "",
+            on: true,
             unread: false,
             warn: false,
         });
@@ -517,8 +731,17 @@ fn group_order(group: &str) -> usize {
 fn matches(e: &Entry, query: &str) -> bool {
     let q = query.trim().to_lowercase();
     q.is_empty()
-        || [&e.d.title, &e.d.detail, &e.group, &e.from].iter().any(|t| t.to_lowercase().contains(&q))
+        || [&e.d.title, &e.d.detail, &e.group, &e.from, &e.marker.to_owned()]
+            .iter()
+            .any(|t| t.to_lowercase().contains(&q))
         || e.caps.join(" + ").to_lowercase().contains(&q)
+}
+
+/// The changes in Lituus's part that Hyprland's config would undo when it loads again: the
+/// overridden binds of the file that `require`s Lituus's, after that line.
+fn loads_too_early(state: &State) -> Vec<&Bind> {
+    let Some((file, line)) = &state.loads else { return Vec::new() };
+    state.config.binds.iter().filter(|b| state.over(b).is_some() && b.file == *file && b.line > *line).collect()
 }
 
 pub fn view(state: &State) -> ShortcutsView {
@@ -535,21 +758,27 @@ pub fn view(state: &State) -> ShortcutsView {
         return v;
     }
     v.state = s("list");
+    v.editable = state.editable();
     let mut entries = entries(state);
     let total = entries.len();
+    let changed = entries.iter().filter(|e| !e.marker.is_empty()).count();
     let not_in_effect = entries.iter().filter(|e| e.warn).count();
     let mut sub = plural(total, "shortcut", "shortcuts");
+    if changed > 0 {
+        sub += &format!(" · {changed} changed in Lituus");
+    }
     if not_in_effect > 0 {
         sub += &format!(" · {not_in_effect} not in effect");
     }
     v.sub = s(sub);
     let dir = state.dir();
     let config = if dir.join("hyprland.lua").exists() { dir.join("hyprland.lua") } else { dir.join("hyprland.conf") };
-    v.hero = match main_key(&state.binds) {
+    let binds = &state.config.binds;
+    v.hero = match main_key(binds) {
         Some((key, n)) => HeroInfo {
             icon: s("keyboard"),
             name: s(format!("{key} is your main key")),
-            meta: s(format!("{n} of {} use it", plural(state.binds.len(), "shortcut", "shortcuts"))),
+            meta: s(format!("{n} of {} use it", plural(binds.len(), "shortcut", "shortcuts"))),
             tone: s("accent"),
             detail: s(shorten_home(&config.display().to_string())),
         },
@@ -561,6 +790,26 @@ pub fn view(state: &State) -> ShortcutsView {
             detail: s(shorten_home(&config.display().to_string())),
         },
     };
+    // Lituus's part only works when the config loads it, after its shortcuts.
+    let file = state.file();
+    v.load_line = s(file.load_line());
+    if !state.mine.is_empty() && state.loads.is_none() {
+        v.not_loaded = true;
+    } else if let (Some((f, line)), early) = (&state.loads, loads_too_early(state))
+        && !early.is_empty()
+    {
+        let name = f.strip_prefix(&dir).map_or_else(|_| f.display().to_string(), |p| p.display().to_string());
+        v.banner_title = s(format!(
+            "{} here {} take effect",
+            plural(early.len(), "change", "changes"),
+            if early.len() == 1 { "doesn't" } else { "don't" }
+        ));
+        v.banner_text = s(format!(
+            "{name} loads Lituus's file on line {line}, before your shortcuts, so your config's versions still run as well. \
+             Move the line to the end of {name}."
+        ));
+    }
+    v.message = s(state.message.clone().unwrap_or_default());
     entries.retain(|e| matches(e, &state.query));
     // Stable: in each group, in the config's order; going to workspaces before moving windows
     // to them, which a config's loop makes in turn.
@@ -572,19 +821,25 @@ pub fn view(state: &State) -> ShortcutsView {
             rows.push(ShortcutRow { label: s(e.group.to_uppercase()), ..Default::default() });
             last = Some(&e.group);
         }
+        let shown_from = if e.marker.is_empty() { e.from.clone() } else { e.marker.to_owned() };
         rows.push(ShortcutRow {
             label: s(""),
+            id: s(e.target.map(Target::id).unwrap_or_default()),
             keys: strings(e.caps.clone()),
             title: s(&e.d.title),
             detail: s(&e.d.detail),
             mono: e.d.mono,
             options: s(&e.options),
-            from: s(&e.from),
-            summary: s([e.d.detail.as_str(), &e.options, &e.from]
+            from: s(&shown_from),
+            marker: !e.marker.is_empty(),
+            summary: s([e.d.detail.as_str(), &e.options, &shown_from]
                 .into_iter()
                 .filter(|t| !t.is_empty())
                 .collect::<Vec<_>>()
                 .join(" · ")),
+            on: e.on,
+            can_restore: e.marker == CHANGED,
+            can_delete: e.marker == ADDED,
             unread: e.unread,
             warn: e.warn,
         });
@@ -598,20 +853,314 @@ pub fn view(state: &State) -> ShortcutsView {
     });
     v.rows = ModelRc::new(VecModel::from(rows));
     v.query = s(&state.query);
+    if let Some(d) = &state.dialog {
+        v.dialog = dialog_view(state, d);
+    }
+    if let Some(Mine::Added { bind, .. }) = state.deleting.and_then(|i| state.mine.get(i)) {
+        v.deleting = s(format!("Delete {}?", caps(bind).join(" + ")));
+        v.deleting_text = s(format!(
+            "{} goes away and {} does nothing again. It was added in Lituus, so your config doesn't have it.",
+            describe(bind).title,
+            caps(bind).join(" + ")
+        ));
+    }
     v
 }
 
-pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &str) {
+/// The config's own text of a bind: its lines in the file.
+fn snippet(b: &Bind) -> String {
+    let text = std::fs::read_to_string(&b.file).unwrap_or_default();
+    let lines: Vec<&str> =
+        text.lines().skip(b.line.saturating_sub(1)).take(b.end_line.max(b.line) - b.line + 1).collect();
+    // As indented in the file, less the indent they share.
+    let indent =
+        lines.iter().filter(|l| !l.trim().is_empty()).map(|l| l.len() - l.trim_start().len()).min().unwrap_or(0);
+    lines.iter().map(|l| l.get(indent..).unwrap_or(l.trim())).collect::<Vec<_>>().join("\n")
+}
+
+fn dialog_view(state: &State, d: &Dialog) -> ShortcutDialog {
+    let dir = state.dir();
+    let (bind, config_bind) = match d.target {
+        Target::Config(i) => {
+            let b = &state.config.binds[i];
+            (b.clone(), Some(b))
+        }
+        Target::Added(i) => match state.mine.get(i) {
+            Some(Mine::Added { bind, .. }) => (bind.clone(), None),
+            _ => return ShortcutDialog::default(),
+        },
+    };
+    let f = &d.form;
+    let mut v = ShortcutDialog { open: true, unread: d.unread && !d.replacing, ..Default::default() };
+    v.keys = strings(caps(&bind));
+    let over = config_bind.and_then(|b| state.over(b));
+    let (word, tone) = match (d.target, over) {
+        (Target::Added(_), _) => (ADDED, "accent"),
+        (_, Some(Some(_))) => (CHANGED, "accent"),
+        (_, Some(None)) => (TURNED_OFF, "faint"),
+        _ if d.unread && !d.replacing => ("Lituus can't read what it does", "warn"),
+        _ => ("From your config", "faint"),
+    };
+    v.word = s(word);
+    v.word_tone = s(tone);
+    v.title = s(if d.unread && !d.replacing {
+        "Set in your config".to_owned()
+    } else if d.replacing {
+        "Replace the shortcut".to_owned()
+    } else {
+        describe(&f.bind(&bind)).title
+    });
+    // The actions: the config's own first when the dialog doesn't offer it.
+    let mut kinds: Vec<String> = Vec::new();
+    if let Some(keep) = &f.keep {
+        kinds.push(format!("As in your config: {}", describe(&Bind { action: keep.clone(), ..bind.clone() }).title));
+    }
+    kinds.extend(KINDS.iter().map(|(_, label, _)| (*label).to_owned()));
+    let offset = usize::from(f.keep.is_some());
+    v.kinds = strings(kinds);
+    v.kind = f.kind.map_or(0, |k| k + offset) as i32;
+    v.field = s(match f.field() {
+        Field::None => "",
+        Field::Command => "command",
+        Field::Workspace => "workspace",
+        Field::Direction => "direction",
+        Field::Special => "special",
+    });
+    v.follow_shown = f.kind.is_some_and(|k| KINDS[k].0 == "move-ws");
+    v.command = s(&f.command);
+    v.workspace = s(&f.workspace);
+    v.follow = f.follow;
+    v.directions = strings(DIRECTIONS.iter().map(|(label, _)| (*label).to_owned()).collect());
+    v.direction = f.direction as i32;
+    v.special = s(&f.special);
+    v.description = s(&f.description);
+    let flags = f.flags();
+    v.locked = flags.locked;
+    v.repeating = flags.repeating;
+    v.release = flags.release;
+    v.apps = flags.non_consuming;
+    v.mouse = f.mouse();
+    v.release_note = s(if v.mouse {
+        "Not with a mouse drag"
+    } else if flags.repeating {
+        "Can't while it repeats"
+    } else {
+        "Instead of when the keys go down"
+    });
+    v.mouse_note = s("Not with a mouse drag");
+    v.problem = s(f.problem().unwrap_or_default());
+    // Where it comes from.
+    match (d.target, config_bind) {
+        (Target::Config(_), Some(b)) => {
+            let place = from(b, &dir);
+            if matches!(over, Some(Some(_))) {
+                v.source = s(format!("{CHANGED} · {}", shorten_home(&state.file().path().display().to_string())));
+                v.source_note = s(format!("Your config's version, {place}:"));
+                v.can_restore = !d.unread;
+            } else {
+                v.source = s(format!("From your config · {}", shorten_home(&b.file.display().to_string())));
+                v.source_note = s(place);
+            }
+            v.snippet = s(snippet(b));
+        }
+        _ => v.source = s(format!("{ADDED} · {}", shorten_home(&state.file().path().display().to_string()))),
+    }
+    v.use_on = d.use_on;
+    v
+}
+
+/// Opens the dialog for a row.
+fn open(state: &mut State, target: Target) {
+    let (bind, unread, use_on) = match target {
+        Target::Config(i) => {
+            let Some(b) = state.config.binds.get(i) else { return };
+            let over = state.over(b).cloned();
+            let shown = match &over {
+                Some(Some(new)) => new.clone(),
+                _ => b.clone(),
+            };
+            (shown, b.action == Action::Unread && !matches!(over, Some(Some(_))), !matches!(over, Some(None)))
+        }
+        Target::Added(i) => match state.mine.get(i) {
+            Some(Mine::Added { bind, on }) => (bind.clone(), false, *on),
+            _ => return,
+        },
+    };
+    state.dialog = Some(Dialog { target, form: Form::of(&bind), unread, replacing: false, use_on });
+}
+
+/// Saves the dialog.
+fn save(weak: Option<&slint::Weak<MainWindow>>, state: &mut State) {
+    let Some(d) = state.dialog.clone() else { return };
+    if (!d.unread || d.replacing) && d.form.problem().is_some() {
+        return;
+    }
+    state.dialog = None;
+    match d.target {
+        Target::Config(i) => {
+            let Some(b) = state.config.binds.get(i).cloned() else { return };
+            if d.unread && !d.replacing {
+                // Kept, or turned off.
+                let (mine, lua) = if d.use_on { without_over(state, &b) } else { with_over(state, &b, None) };
+                if mine != state.mine {
+                    change(weak, state, mine, lua);
+                }
+                return;
+            }
+            let new = d.form.bind(&b);
+            // The config's own version again: nothing of Lituus's left.
+            let same = new.action == b.action && new.flags == b.flags && new.description == b.description;
+            let (mine, lua) = if same { without_over(state, &b) } else { with_over(state, &b, Some(new)) };
+            change(weak, state, mine, lua);
+        }
+        Target::Added(i) => {
+            let Some(Mine::Added { bind, on }) = state.mine.get(i).cloned() else { return };
+            let new = d.form.bind(&bind);
+            let mut mine = state.mine.clone();
+            mine[i] = Mine::Added { bind: new.clone(), on };
+            let lua = format!(
+                "hl.unbind({}) {}",
+                lua_string(&bind.keys()),
+                if on { new.to_lua().unwrap_or_default() } else { String::new() }
+            );
+            change(weak, state, mine, Some(lua));
+        }
+    }
+}
+
+/// The row's switch: the config's bind or Lituus's own turned off, or on again.
+fn toggle(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, target: Target) {
+    match target {
+        Target::Config(i) => {
+            let Some(b) = state.config.binds.get(i).cloned() else { return };
+            let (mine, lua) = match state.over(&b) {
+                Some(None) => without_over(state, &b),
+                _ => with_over(state, &b, None),
+            };
+            change(weak, state, mine, lua);
+        }
+        Target::Added(i) => {
+            let Some(Mine::Added { bind, on }) = state.mine.get(i).cloned() else { return };
+            let mut mine = state.mine.clone();
+            mine[i] = Mine::Added { bind: bind.clone(), on: !on };
+            let lua =
+                if on { format!("hl.unbind({})", lua_string(&bind.keys())) } else { bind.to_lua().unwrap_or_default() };
+            change(weak, state, mine, Some(lua));
+        }
+    }
+}
+
+/// The dialog's form, changed by one of its controls.
+fn edit(state: &mut State, verb: &str, arg: &str) {
+    let Some(d) = &mut state.dialog else { return };
+    let f = &mut d.form;
     match verb {
-        "query" => state.query = arg.to_owned(),
-        "refresh" => refresh(weak),
+        "d-kind" => {
+            let i: usize = arg.parse().unwrap_or(0);
+            let offset = usize::from(f.keep.is_some());
+            f.kind = if i < offset { None } else { Some(i - offset).filter(|k| *k < KINDS.len()) };
+        }
+        "d-command" => f.command = arg.to_owned(),
+        "d-workspace" => f.workspace = arg.to_owned(),
+        "d-special" => f.special = arg.to_owned(),
+        "d-direction" => f.direction = arg.parse().unwrap_or(0),
+        "d-follow" => f.follow = !f.follow,
+        "d-description" => f.description = arg.to_owned(),
+        "d-flag" => match arg {
+            "locked" => f.flags.locked = !f.flags.locked,
+            "repeating" => f.flags.repeating = !f.flags.repeating,
+            "release" => f.flags.release = !f.flags.release,
+            "apps" => f.flags.non_consuming = !f.flags.non_consuming,
+            _ => {}
+        },
+        "d-use" => d.use_on = !d.use_on,
+        "d-replace" => {
+            d.replacing = true;
+            f.kind = Some(0);
+            f.keep = None;
+        }
         _ => {}
     }
 }
 
+pub fn act(weak: &slint::Weak<MainWindow>, state: &mut State, verb: &str, arg: &str) {
+    act_with(Some(weak), state, verb, arg);
+}
+
+fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &str, arg: &str) {
+    let target = Target::parse(arg);
+    match verb {
+        "query" => state.query = arg.to_owned(),
+        "refresh" => {
+            if let Some(weak) = weak {
+                refresh(weak);
+            }
+        }
+        "open" if state.editable() => {
+            if let Some(t) = target {
+                open(state, t);
+            }
+        }
+        "toggle" if state.editable() => {
+            if let Some(t) = target {
+                toggle(weak, state, t);
+            }
+        }
+        "restore" => {
+            if let Some(Target::Config(i)) = target
+                && let Some(b) = state.config.binds.get(i).cloned()
+            {
+                let (mine, lua) = without_over(state, &b);
+                change(weak, state, mine, lua);
+            }
+        }
+        "delete" => {
+            if let Some(Target::Added(i)) = target {
+                state.deleting = Some(i);
+            }
+        }
+        "delete-yes" => {
+            if let Some(i) = state.deleting.take()
+                && let Some(Mine::Added { bind, .. }) = state.mine.get(i).cloned()
+            {
+                let mut mine = state.mine.clone();
+                mine.remove(i);
+                change(weak, state, mine, Some(format!("hl.unbind({})", lua_string(&bind.keys()))));
+            }
+        }
+        "delete-no" => state.deleting = None,
+        "d-save" => save(weak, state),
+        "d-cancel" => state.dialog = None,
+        "d-restore" => {
+            // The form takes the config's version; Save puts it back.
+            if let Some(d) = &mut state.dialog
+                && let Target::Config(i) = d.target
+                && let Some(b) = state.config.binds.get(i)
+            {
+                d.form = Form::of(b);
+            }
+        }
+        _ if verb.starts_with("d-") => edit(state, verb, arg),
+        _ => {}
+    }
+}
+
+thread_local! {
+    /// The rows, and the dialog's lists of actions and directions, each kept as one model: the
+    /// window renders again now and then (a network's signal, a device), and a new model would
+    /// rebuild the row (or the open list) between a click's press and its release.
+    static ROWS: Rc<VecModel<ShortcutRow>> = Rc::new(VecModel::default());
+    static KINDS_SHOWN: Rc<VecModel<SharedString>> = Rc::new(VecModel::default());
+    static DIRECTIONS_SHOWN: Rc<VecModel<SharedString>> = Rc::new(VecModel::default());
+}
+
 pub fn render(window: &MainWindow, state: &State) {
     if window.get_page() == "shortcuts" {
-        window.set_shortcuts(view(state));
+        let mut v = view(state);
+        v.rows = ROWS.with(|m| kept(m, &v.rows));
+        v.dialog.kinds = KINDS_SHOWN.with(|m| kept(m, &v.dialog.kinds));
+        v.dialog.directions = DIRECTIONS_SHOWN.with(|m| kept(m, &v.dialog.directions));
+        window.set_shortcuts(v);
     }
 }
 
@@ -631,7 +1180,8 @@ mod tests {
         std::fs::write(d.join("hyprland.lua"), config).unwrap();
         let mut state = State { hypr_dir: Some(d.clone()), ..Default::default() };
         let live = live.map(|l| serde_json::from_str(l).unwrap());
-        loaded(&mut state, Ok((read_binds(&d), live)));
+        let section = state.file().read_section(SECTION);
+        loaded(&mut state, Ok((read_binds(&d), section, live, Hyprland::at(&d))));
         (state, d)
     }
 
@@ -716,6 +1266,104 @@ mod tests {
         assert_eq!(view(&state).count, "1 shortcut matches");
         state.query = "nothing like it".into();
         assert_eq!(view(&state).count, "No shortcut matches");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    fn row(v: &ShortcutsView, title: &str) -> ShortcutRow {
+        use slint::Model;
+        v.rows.iter().find(|r| r.title == title).unwrap_or_else(|| panic!("{title}: {:?}", titles(v)))
+    }
+
+    /// Reads the page again, as after Hyprland applied the change (without the live list).
+    fn reread(state: &mut State, d: &Path) {
+        let query = std::mem::take(&mut state.query);
+        let section = state.file().read_section(SECTION);
+        loaded(state, Ok((read_binds(d), section, None, Hyprland::at(d))));
+        state.query = query;
+    }
+
+    /// Changing a bind of the config: Lituus's part unbinds it and binds the new one, the row says
+    /// so, and Back to your config's version takes it away again.
+    #[test]
+    fn changing_a_shortcut() {
+        let config = "local mainMod = \"SUPER\"\nhl.bind(mainMod .. \" + D\", hl.dsp.exec_cmd(\"kitty\"))\n\
+                      hl.bind(mainMod .. \" + J\", hl.dsp.layout(\"togglesplit\"))\nrequire(\"lituus\")\n";
+        let (mut state, d) = state_with("change", config, None);
+        let id = row(&view(&state), "Open Kitty").id.to_string();
+        act_with(None, &mut state, "open", &id);
+        let dv = view(&state).dialog;
+        assert!(dv.open && !dv.unread);
+        assert_eq!(
+            (dv.field.as_str(), dv.command.as_str(), dv.word.as_str()),
+            ("command", "kitty", "From your config")
+        );
+        assert_eq!(dv.snippet, "hl.bind(mainMod .. \" + D\", hl.dsp.exec_cmd(\"kitty\"))");
+        act_with(None, &mut state, "d-command", "fuzzel");
+        act_with(None, &mut state, "d-flag", "locked");
+        act_with(None, &mut state, "d-description", "Open the app launcher");
+        act_with(None, &mut state, "d-save", "");
+        assert!(state.dialog.is_none());
+        let written = state.file().read_section(SECTION).unwrap();
+        assert!(
+            written.contains("hl.unbind(\"SUPER + D\")\nhl.bind(\"SUPER + D\", hl.dsp.exec_cmd(\"fuzzel\"), { locked = true, description = \"Open the app launcher\" })"),
+            "{written}"
+        );
+        reread(&mut state, &d);
+        let v = view(&state);
+        let r = row(&v, "Open the app launcher");
+        assert_eq!((r.from.as_str(), r.marker, r.can_restore), ("Changed in Lituus", true, true));
+        assert_eq!(v.sub, "2 shortcuts · 1 changed in Lituus");
+        // Lituus's file loads after the config's binds: no banner.
+        assert_eq!(v.banner_title, "");
+        act_with(None, &mut state, "restore", &r.id);
+        reread(&mut state, &d);
+        assert!(state.mine.is_empty());
+        assert_eq!(row(&view(&state), "Open Kitty").from, "hyprland.lua · line 2");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// The switch turns a bind off, and on again; with Lituus's file loaded before the binds, the
+    /// banner says the change doesn't take effect.
+    #[test]
+    fn turning_one_off_and_the_load_order() {
+        let config = "require(\"lituus\")\nhl.bind(\"SUPER + J\", hl.dsp.layout(\"togglesplit\"))\n";
+        let (mut state, d) = state_with("off", config, None);
+        let id = row(&view(&state), "Switch split direction").id.to_string();
+        act_with(None, &mut state, "toggle", &id);
+        reread(&mut state, &d);
+        let v = view(&state);
+        let r = row(&v, "Switch split direction");
+        assert_eq!((r.on, r.from.as_str()), (false, "Turned off in Lituus"));
+        assert_eq!(v.banner_title, "1 change here doesn't take effect");
+        assert!(v.banner_text.starts_with("hyprland.lua loads Lituus's file on line 1"), "{}", v.banner_text);
+        act_with(None, &mut state, "toggle", &id);
+        reread(&mut state, &d);
+        assert!(row(&view(&state), "Switch split direction").on);
+        assert!(state.mine.is_empty());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// A bind made by Lua Lituus doesn't read: kept, turned off, or replaced by a new one.
+    #[test]
+    fn a_bind_lituus_cant_read() {
+        let config = "hl.bind(\"SUPER + T\", function() end)\n";
+        let (mut state, d) = state_with("unread", config, None);
+        let id = row(&view(&state), "Set in your config").id.to_string();
+        act_with(None, &mut state, "open", &id);
+        assert!(view(&state).dialog.unread);
+        act_with(None, &mut state, "d-replace", "");
+        let dv = view(&state).dialog;
+        assert!(!dv.unread && dv.title == "Replace the shortcut");
+        // A command to run is needed before it saves.
+        act_with(None, &mut state, "d-save", "");
+        assert!(state.dialog.is_some());
+        act_with(None, &mut state, "d-command", "foot");
+        act_with(None, &mut state, "d-save", "");
+        reread(&mut state, &d);
+        // Not loaded by the config: the page says so.
+        let v = view(&state);
+        assert!(v.not_loaded);
+        assert_eq!(row(&v, "Open Foot").from, "Changed in Lituus");
         std::fs::remove_dir_all(&d).unwrap();
     }
 
