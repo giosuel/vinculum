@@ -13,7 +13,7 @@ import { Button, IconButton, AddButton, Switch, PillSwitch, SectionLabel, Banner
 import { JoinDialog, TextField, Segmented, FormRow, Modal } from "dialogs.slint";
 import { QuickWindow, QuickRow } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
-import { Sidebar, Hero, HeroSubject, Card, SettingRow, EmptyState, NavItem, NavGroup, HeroInfo } from "shell.slint";
+import { Sidebar, Hero, HeroSubject, Card, ScrollCard, SettingRow, EmptyState, NavItem, NavGroup, HeroInfo } from "shell.slint";
 import { SettingsHero, AppearanceSettings, ColourFiles, ThemeSwatch, ColourChip, SourceRow } from "appearance.slint";
 import { SendFilesDialog, IncomingFileDialog, FilesView, FileRow } from "files.slint";
 import { DisplaysPage, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeepDialog, ConfigDialog } from "displays.slint";
@@ -749,8 +749,9 @@ export component MainWindow inherits Window {
                         min-width: 0;
                         vertical-stretch: 1;
                         bar-inset: -16px;
-                        // As tall as its settings.
-                        settings-card := Card {
+                        fill: true;
+                        // Down to the bottom, scrolling inside.
+                        settings-card := ScrollCard {
                             HorizontalLayout {
                                 padding: 22px;
                                 padding-top: 10px;

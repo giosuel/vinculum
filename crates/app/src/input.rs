@@ -1859,17 +1859,19 @@ B: PROP=5
             // Add is as wide as its label, not the card.
             assert!(add < 200.0, "{w}: {add}");
         }
-        // In three columns, every card is as tall as its content, the list of layouts too: down
-        // to the bar, it was a tall empty card.
+        // In three columns, every card reaches the bottom of the page (above the bar) and scrolls
+        // inside (the owner, 2026-11-07).
         let bottom = |name: &str| {
             let card = i_slint_backend_testing::ElementHandle::find_by_element_type_name(&window, name)
                 .next()
                 .unwrap_or_else(|| panic!("{name}"));
             card.absolute_position().y + card.size().height
         };
-        assert!(bottom("LayoutsCard") < 700.0, "{}", bottom("LayoutsCard"));
-        assert!(bottom("TypingCard") < 700.0, "{}", bottom("TypingCard"));
-        // In two, the list is as tall as the column beside it.
+        for name in ["LayoutsCard", "TypingCard", "KeysCard"] {
+            assert!((bottom(name) - bottom("KeysCard")).abs() < 1.0, "{name}: {}", bottom(name));
+        }
+        assert!(bottom("KeysCard") > 950.0, "{}", bottom("KeysCard"));
+        // In two, the list and Keys below Typing do.
         window.window().set_size(LogicalSize::new(1200.0, 1400.0));
         i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(50));
         assert!(
@@ -1878,7 +1880,7 @@ B: PROP=5
             bottom("LayoutsCard"),
             bottom("KeysCard")
         );
-        assert!(bottom("KeysCard") < 1300.0, "{}", bottom("KeysCard"));
+        assert!(bottom("KeysCard") > 1280.0, "{}", bottom("KeysCard"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -5,7 +5,7 @@ import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
 import { Button, IconButton, CardTitle, SectionLabel, FieldLabel, Scroll, Focusable } from "controls.slint";
 import { Segmented, ViewSwitcher, Tabs, Select, TextField, CheckBox, Modal } from "dialogs.slint";
-import { Hero, Card, LoadBanner, EmptyState } from "shell.slint";
+import { Hero, Card, ScrollCard, LoadBanner, EmptyState } from "shell.slint";
 import { Slider } from "sound.slint";
 
 /// A monitor on the layout, in layout pixels.
@@ -367,7 +367,7 @@ export component DisplaysPage inherits VerticalLayout {
         bar-inset: -16px;
         // Everything here waits for Apply, so the options are check boxes (the guide's commit
         // rule); a workspace that opens on any monitor has neither, which its row says.
-        if root.page-tab == 1: Card {
+        if root.page-tab == 1: ScrollCard {
             HorizontalLayout {
                 alignment: start;
                 ws-list := VerticalLayout {
@@ -433,7 +433,7 @@ export component DisplaysPage inherits VerticalLayout {
 
         // The options here wait for Apply too (check boxes); Use, Update, Delete and Save are
         // actions, which happen when pressed.
-        if root.page-tab == 2: Card {
+        if root.page-tab == 2: ScrollCard {
             HorizontalLayout {
                 alignment: start;
                 profile-list := VerticalLayout {
@@ -493,7 +493,7 @@ export component DisplaysPage inherits VerticalLayout {
             }
         }
 
-        if root.page-tab == 0: Card {
+        if root.page-tab == 0: ScrollCard {
             vertical-stretch: 1;
             VerticalLayout {
                 padding: 18px;

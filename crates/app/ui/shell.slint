@@ -419,6 +419,26 @@ export component Card inherits Rectangle {
     clip: true;
 }
 
+/// A card that reaches the bottom of its column and scrolls what's in it, once that's taller.
+/// Below `least` the page scrolls instead. With `whole` (cards stacked in one column) it's as
+/// tall as what's in it, and the page scrolls. With `fill`, what's in it fills its height, as
+/// in `Scroll`.
+export component ScrollCard inherits Card {
+    in property <bool> whole;
+    in property <bool> fill;
+    in property <length> least: 120px;
+    min-width: scroll.min-width;
+    min-height: root.whole ? scroll.content-height : min(root.least, scroll.content-height);
+    preferred-height: root.whole ? scroll.content-height : 0;
+    vertical-stretch: 1;
+    scroll := Scroll {
+        width: parent.width;
+        height: parent.height;
+        fill: root.fill;
+        @children
+    }
+}
+
 /// What a card shows when its page has nothing to show (a service isn't running, Wi-Fi is off,
 /// no VPN yet): a 44 px icon (a spinner while `loading`), a title, why, a command that fixes it
 /// with Copy, and a button. With a command, the button is secondary: the command is the fix.
