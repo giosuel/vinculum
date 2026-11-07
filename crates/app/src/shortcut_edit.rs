@@ -338,6 +338,112 @@ impl Form {
     }
 }
 
+// ---- recording keys ----------------------------------------------------------------------------
+
+/// A modifier key, by the text Slint gives it, as Hyprland names it.
+pub fn modifier(text: &str) -> Option<&'static str> {
+    Some(match text.chars().next()? {
+        '\u{10}' | '\u{15}' => "SHIFT",
+        '\u{11}' | '\u{16}' => "CTRL",
+        '\u{12}' => "ALT",
+        '\u{13}' => "MOD5",
+        '\u{17}' | '\u{18}' => "SUPER",
+        _ => return None,
+    })
+}
+
+/// The keysym Hyprland binds a key by, from the text Slint gives the key: letters in capitals,
+/// keys without a character by their names ("Return", "left", "F5"). Hyprland matches the key's
+/// symbol without Shift, so a shifted symbol is named by its key, as on a US layout (Shift+1 is
+/// "1"). None for a key Lituus can't name.
+pub fn keysym(text: &str) -> Option<String> {
+    let mut chars = text.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    let named = match c {
+        '\n' | '\r' => "Return",
+        '\t' => "Tab",
+        '\u{8}' => "BackSpace",
+        '\u{7f}' | '\u{F728}' => "Delete",
+        ' ' => "space",
+        '\u{F700}' => "up",
+        '\u{F701}' => "down",
+        '\u{F702}' => "left",
+        '\u{F703}' => "right",
+        '\u{F727}' => "Insert",
+        '\u{F729}' => "Home",
+        '\u{F72B}' => "End",
+        '\u{F72C}' => "Prior",
+        '\u{F72D}' => "Next",
+        '\u{F72E}' | '\u{F738}' => "Print",
+        '\u{F730}' => "Pause",
+        '\u{F735}' => "Menu",
+        '\u{F704}'..='\u{F71B}' => return Some(format!("F{}", c as u32 - 0xF704 + 1)),
+        'a'..='z' | 'A'..='Z' => return Some(c.to_ascii_uppercase().to_string()),
+        '0'..='9' => return Some(c.to_string()),
+        _ => "",
+    };
+    if !named.is_empty() {
+        return Some(named.to_owned());
+    }
+    const SYMBOLS: [(char, &str); 32] = [
+        ('!', "1"),
+        ('@', "2"),
+        ('#', "3"),
+        ('$', "4"),
+        ('%', "5"),
+        ('^', "6"),
+        ('&', "7"),
+        ('*', "8"),
+        ('(', "9"),
+        (')', "0"),
+        ('-', "minus"),
+        ('_', "minus"),
+        ('=', "equal"),
+        ('+', "equal"),
+        ('[', "bracketleft"),
+        ('{', "bracketleft"),
+        (']', "bracketright"),
+        ('}', "bracketright"),
+        ('\\', "backslash"),
+        ('|', "backslash"),
+        (';', "semicolon"),
+        (':', "semicolon"),
+        ('\'', "apostrophe"),
+        ('"', "apostrophe"),
+        (',', "comma"),
+        ('<', "comma"),
+        ('.', "period"),
+        ('>', "period"),
+        ('/', "slash"),
+        ('?', "slash"),
+        ('`', "grave"),
+        ('~', "grave"),
+    ];
+    SYMBOLS.iter().find(|(s, _)| *s == c).map(|(_, name)| (*name).to_owned())
+}
+
+/// The modifiers Slint says are held ("C", "A", "S", "M" for Control, Alt, Shift and Meta), in
+/// the order Hyprland's configs usually write them.
+pub fn held(flags: &str) -> Vec<String> {
+    [('M', "SUPER"), ('C', "CTRL"), ('A', "ALT"), ('S', "SHIFT")]
+        .iter()
+        .filter(|(f, _)| flags.contains(*f))
+        .map(|(_, m)| (*m).to_owned())
+        .collect()
+}
+
+/// Lua that pauses Hyprland's own shortcuts while Lituus listens for keys: a submap whose one bind,
+/// Esc, leaves it. The keys pressed reach Lituus and run nothing; Esc reaches Lituus too (the bind
+/// doesn't consume it), and brings Hyprland's shortcuts back even if Lituus went away meanwhile.
+/// `RESUME` leaves the submap.
+pub const PAUSE: &str = "hl.define_submap(\"lituus-listening\", function() \
+                         hl.bind(\"Escape\", hl.dsp.submap(\"reset\"), { non_consuming = true }) end) \
+                         hl.dispatch(hl.dsp.submap(\"lituus-listening\"))";
+pub const RESUME: &str = "hl.dispatch(hl.dsp.submap(\"reset\"))";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +505,22 @@ mod tests {
         let swallow = bind(r#"hl.bind("SUPER + W", hl.dsp.window.toggle_swallow())"#);
         let form = Form::of(&swallow);
         assert_eq!((form.kind, form.action()), (None, swallow.action.clone()));
+    }
+
+    #[test]
+    fn keys_as_hyprland_names_them() {
+        let key = |k: slint::platform::Key| keysym(&slint::SharedString::from(k));
+        assert_eq!(keysym("q").as_deref(), Some("Q"));
+        assert_eq!(keysym("!").as_deref(), Some("1"));
+        assert_eq!(keysym("/").as_deref(), Some("slash"));
+        assert_eq!(key(slint::platform::Key::Return).as_deref(), Some("Return"));
+        assert_eq!(key(slint::platform::Key::LeftArrow).as_deref(), Some("left"));
+        assert_eq!(key(slint::platform::Key::F5).as_deref(), Some("F5"));
+        assert_eq!(key(slint::platform::Key::PageDown).as_deref(), Some("Next"));
+        assert_eq!(keysym("ä"), None);
+        assert_eq!(modifier(&slint::SharedString::from(slint::platform::Key::Meta)), Some("SUPER"));
+        assert_eq!(modifier("q"), None);
+        assert_eq!(held("SMC"), ["SUPER", "CTRL", "SHIFT"]);
     }
 
     #[test]

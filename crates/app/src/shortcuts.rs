@@ -32,6 +32,8 @@ pub struct State {
     /// What Hyprland has now; `None` when it couldn't say.
     live: Option<Vec<LiveBind>>,
     hypr: Option<Hyprland>,
+    /// Hyprland's own shortcuts are paused while the dialog listens for keys.
+    paused: bool,
     pub query: String,
     pub dialog: Option<Dialog>,
     /// The bind of Lituus's own about to be deleted (an index into `mine`), once confirmed.
@@ -73,6 +75,8 @@ pub enum Target {
     Config(usize),
     /// One of Lituus's own (an index into `mine`).
     Added(usize),
+    /// A shortcut being added.
+    New,
 }
 
 impl Target {
@@ -80,6 +84,7 @@ impl Target {
         match self {
             Target::Config(i) => format!("c{i}"),
             Target::Added(i) => format!("a{i}"),
+            Target::New => "n".into(),
         }
     }
 
@@ -102,6 +107,32 @@ pub struct Dialog {
     pub unread: bool,
     pub replacing: bool,
     pub use_on: bool,
+    /// New keys: (modifiers, key), as recorded.
+    pub keys: Option<(Vec<String>, String)>,
+    /// Listening for the keys, with these modifiers held so far.
+    pub listening: bool,
+    pub held: Vec<String>,
+    /// A key Lituus couldn't name was pressed.
+    pub unnamed: bool,
+    /// The keys are taken, and the user chose to replace what has them.
+    pub replace: bool,
+}
+
+impl Dialog {
+    fn new(target: Target, form: Form) -> Dialog {
+        Dialog {
+            target,
+            form,
+            unread: false,
+            replacing: false,
+            use_on: true,
+            keys: None,
+            listening: false,
+            held: Vec::new(),
+            unnamed: false,
+            replace: false,
+        }
+    }
 }
 
 /// What was read, on a thread: the config, Lituus's part, Hyprland's binds.
@@ -878,23 +909,138 @@ fn snippet(b: &Bind) -> String {
     lines.iter().map(|l| l.get(indent..).unwrap_or(l.trim())).collect::<Vec<_>>().join("\n")
 }
 
-fn dialog_view(state: &State, d: &Dialog) -> ShortcutDialog {
+/// The bind the dialog began with, on the keys it has now: the config's, Lituus's own, or a new
+/// one (no keys yet).
+fn base(state: &State, d: &Dialog) -> Option<Bind> {
+    let mut bind = match d.target {
+        Target::Config(i) => state.config.binds.get(i)?.clone(),
+        Target::Added(i) => match state.mine.get(i)? {
+            Mine::Added { bind, .. } => bind.clone(),
+            Mine::Over { .. } => return None,
+        },
+        Target::New => Bind {
+            mods: Vec::new(),
+            key: String::new(),
+            action: Action::Unread,
+            flags: Default::default(),
+            description: String::new(),
+            file: state.file().path(),
+            line: 0,
+            end_line: 0,
+            submap: String::new(),
+        },
+    };
+    if let Some((mods, key)) = &d.keys {
+        bind.mods = mods.clone();
+        bind.key = key.clone();
+    }
+    Some(bind)
+}
+
+/// What already has `keys` (other than `except`): one of the config's binds Lituus didn't turn
+/// off, or one of Lituus's own that's on.
+fn taken(state: &State, keys: &str, except: Target) -> Option<Target> {
+    let norm = normalized_keys(keys);
+    let config = state.config.binds.iter().enumerate().find(|(i, b)| {
+        Target::Config(*i) != except && normalized_keys(&b.keys()) == norm && !matches!(state.over(b), Some(None))
+    });
+    if let Some((i, _)) = config {
+        return Some(Target::Config(i));
+    }
+    state.mine.iter().enumerate().find_map(|(i, m)| match m {
+        Mine::Added { bind, on: true } if Target::Added(i) != except && normalized_keys(&bind.keys()) == norm => {
+            Some(Target::Added(i))
+        }
+        _ => None,
+    })
+}
+
+/// The dialog's keys are new (recorded, and not the ones it began with).
+fn keys_changed(state: &State, d: &Dialog) -> bool {
+    let Some((mods, key)) = &d.keys else { return false };
+    let was = match d.target {
+        Target::Config(i) => state.config.binds.get(i).map(Bind::keys),
+        Target::Added(i) => match state.mine.get(i) {
+            Some(Mine::Added { bind, .. }) => Some(bind.keys()),
+            _ => None,
+        },
+        Target::New => None,
+    };
+    let now = mods.iter().map(String::as_str).chain(std::iter::once(key.as_str())).collect::<Vec<_>>().join(" + ");
+    was.is_none_or(|w| normalized_keys(&w) != normalized_keys(&now))
+}
+
+/// What has the dialog's new keys, if anything does.
+fn conflict(state: &State, d: &Dialog) -> Option<Target> {
+    if !keys_changed(state, d) {
+        return None;
+    }
+    taken(state, &base(state, d)?.keys(), d.target)
+}
+
+/// Why the dialog can't be saved yet.
+fn problem(state: &State, d: &Dialog) -> Option<&'static str> {
+    if d.listening {
+        return Some("Press the new shortcut, or Esc");
+    }
+    if d.target == Target::New && d.keys.is_none() {
+        return Some("Choose the keys and an action to save");
+    }
+    if conflict(state, d).is_some() && !d.replace {
+        return Some("These keys are taken");
+    }
+    if d.unread && !d.replacing { None } else { d.form.problem() }
+}
+
+/// A target's bind in words, and where it is: for the conflict banner.
+fn described_target(state: &State, t: Target) -> (String, String) {
     let dir = state.dir();
-    let (bind, config_bind) = match d.target {
+    match t {
         Target::Config(i) => {
             let b = &state.config.binds[i];
-            (b.clone(), Some(b))
+            let shown = match state.over(b) {
+                Some(Some(new)) => new,
+                _ => b,
+            };
+            (describe(shown).title, format!("From your config, {}.", from(b, &dir)))
         }
         Target::Added(i) => match state.mine.get(i) {
-            Some(Mine::Added { bind, .. }) => (bind.clone(), None),
-            _ => return ShortcutDialog::default(),
+            Some(Mine::Added { bind, .. }) => (describe(bind).title, "Added in Lituus.".into()),
+            _ => (String::new(), String::new()),
         },
+        Target::New => (String::new(), String::new()),
+    }
+}
+
+fn dialog_view(state: &State, d: &Dialog) -> ShortcutDialog {
+    let dir = state.dir();
+    let Some(bind) = base(state, d) else { return ShortcutDialog::default() };
+    let config_bind = match d.target {
+        Target::Config(i) => state.config.binds.get(i),
+        _ => None,
     };
     let f = &d.form;
     let mut v = ShortcutDialog { open: true, unread: d.unread && !d.replacing, ..Default::default() };
     v.keys = strings(caps(&bind));
+    v.has_keys = !bind.key.is_empty();
+    v.listening = d.listening;
+    v.held = strings(d.held.iter().map(|m| key_name(m)).collect());
+    v.listen_note = s(if d.unnamed {
+        "Lituus can't name that key; press another"
+    } else if d.held.is_empty() {
+        "Hold the modifiers, then press a key"
+    } else {
+        "Now press a key"
+    });
+    if let Some(t) = conflict(state, d) {
+        let (title, place) = described_target(state, t);
+        v.conflict_title = s(format!("{} is already {title}", caps(&bind).join(" + ")));
+        v.conflict_text = s(if d.replace { format!("{place} Saving replaces it.") } else { place });
+        v.conflict_open = !d.replace;
+    }
     let over = config_bind.and_then(|b| state.over(b));
     let (word, tone) = match (d.target, over) {
+        (Target::New, _) => ("It works as soon as you save it", "faint"),
         (Target::Added(_), _) => (ADDED, "accent"),
         (_, Some(Some(_))) => (CHANGED, "accent"),
         (_, Some(None)) => (TURNED_OFF, "faint"),
@@ -903,7 +1049,9 @@ fn dialog_view(state: &State, d: &Dialog) -> ShortcutDialog {
     };
     v.word = s(word);
     v.word_tone = s(tone);
-    v.title = s(if d.unread && !d.replacing {
+    v.title = s(if d.target == Target::New {
+        "Add a shortcut".to_owned()
+    } else if d.unread && !d.replacing {
         "Set in your config".to_owned()
     } else if d.replacing {
         "Replace the shortcut".to_owned()
@@ -948,7 +1096,7 @@ fn dialog_view(state: &State, d: &Dialog) -> ShortcutDialog {
         "Instead of when the keys go down"
     });
     v.mouse_note = s("Not with a mouse drag");
-    v.problem = s(f.problem().unwrap_or_default());
+    v.problem = s(problem(state, d).unwrap_or_default());
     // Where it comes from.
     match (d.target, config_bind) {
         (Target::Config(_), Some(b)) => {
@@ -962,6 +1110,9 @@ fn dialog_view(state: &State, d: &Dialog) -> ShortcutDialog {
                 v.source_note = s(place);
             }
             v.snippet = s(snippet(b));
+        }
+        (Target::New, _) => {
+            v.source = s(format!("Saved in {}", shorten_home(&state.file().path().display().to_string())))
         }
         _ => v.source = s(format!("{ADDED} · {}", shorten_home(&state.file().path().display().to_string()))),
     }
@@ -985,17 +1136,21 @@ fn open(state: &mut State, target: Target) {
             Some(Mine::Added { bind, on }) => (bind.clone(), false, *on),
             _ => return,
         },
+        Target::New => return,
     };
-    state.dialog = Some(Dialog { target, form: Form::of(&bind), unread, replacing: false, use_on });
+    state.dialog = Some(Dialog { unread, use_on, ..Dialog::new(target, Form::of(&bind)) });
 }
 
 /// Saves the dialog.
 fn save(weak: Option<&slint::Weak<MainWindow>>, state: &mut State) {
     let Some(d) = state.dialog.clone() else { return };
-    if (!d.unread || d.replacing) && d.form.problem().is_some() {
+    if problem(state, &d).is_some() {
         return;
     }
-    state.dialog = None;
+    close(state);
+    if d.target == Target::New || keys_changed(state, &d) {
+        return save_keys(weak, state, &d);
+    }
     match d.target {
         Target::Config(i) => {
             let Some(b) = state.config.binds.get(i).cloned() else { return };
@@ -1025,6 +1180,81 @@ fn save(weak: Option<&slint::Weak<MainWindow>>, state: &mut State) {
             );
             change(weak, state, mine, Some(lua));
         }
+        Target::New => {}
+    }
+}
+
+/// Saves a shortcut on new keys: added, or one of the config's (turned off on its old keys) or
+/// Lituus's own moved to them. What had the keys is replaced: a bind of the config's is changed
+/// to this one, one of Lituus's own goes.
+fn save_keys(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, d: &Dialog) {
+    let Some(base) = base(state, d) else { return };
+    let mut new = d.form.bind(&base);
+    new.file = state.file().path();
+    new.line = 0;
+    new.end_line = 0;
+    let mut lua = Vec::new();
+    let conflict = conflict(state, d);
+    // Lituus's own that go: the dialog's own (it moves) and the one it replaces.
+    let gone: Vec<usize> = [d.target, conflict.unwrap_or(Target::New)]
+        .iter()
+        .filter_map(|t| match t {
+            Target::Added(i) => Some(*i),
+            _ => None,
+        })
+        .collect();
+    if let Target::Added(i) = d.target
+        && let Some(Mine::Added { bind, .. }) = state.mine.get(i)
+    {
+        lua.push(format!("hl.unbind({})", lua_string(&bind.keys())));
+    }
+    let mut mine: Vec<Mine> =
+        state.mine.iter().enumerate().filter(|(i, _)| !gone.contains(i)).map(|(_, m)| m.clone()).collect();
+    // One of the config's binds is turned off on its old keys.
+    if let Target::Config(i) = d.target {
+        let Some(b) = state.config.binds.get(i) else { return };
+        let norm = normalized_keys(&b.keys());
+        mine.retain(|m| !matches!(m, Mine::Over { .. } if m.keys() == norm));
+        mine.push(Mine::Over { keys: b.keys(), bind: None });
+        lua.push(format!("hl.unbind({})", lua_string(&b.keys())));
+    }
+    // The config's bind on the new keys becomes this one.
+    let mut placed = false;
+    if let Some(Target::Config(j)) = conflict {
+        let Some(b) = state.config.binds.get(j) else { return };
+        let norm = normalized_keys(&b.keys());
+        mine.retain(|m| !matches!(m, Mine::Over { .. } if m.keys() == norm));
+        mine.push(Mine::Over {
+            keys: b.keys(),
+            bind: Some(Bind { mods: b.mods.clone(), key: b.key.clone(), ..new.clone() }),
+        });
+        placed = true;
+    }
+    if !placed {
+        mine.push(Mine::Added { bind: new.clone(), on: true });
+    }
+    lua.push(format!("hl.unbind({})", lua_string(&new.keys())));
+    lua.push(new.to_lua().unwrap_or_default());
+    change(weak, state, mine, Some(lua.join(" ")));
+}
+
+/// The dialog closes; Hyprland's shortcuts work again if they were paused.
+fn close(state: &mut State) {
+    state.dialog = None;
+    pause(state, false);
+}
+
+/// Pauses Hyprland's own shortcuts while the dialog listens for keys, or lets them work again.
+fn pause(state: &mut State, on: bool) {
+    if state.paused == on {
+        return;
+    }
+    state.paused = on;
+    if let Some(h) = &state.hypr {
+        let lua = if on { shortcut_edit::PAUSE } else { shortcut_edit::RESUME };
+        if let Err(e) = h.eval(lua) {
+            state.message = Some(format!("Hyprland's shortcuts couldn't be paused: {e}."));
+        }
     }
 }
 
@@ -1047,6 +1277,7 @@ fn toggle(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, target: Tar
                 if on { format!("hl.unbind({})", lua_string(&bind.keys())) } else { bind.to_lua().unwrap_or_default() };
             change(weak, state, mine, Some(lua));
         }
+        Target::New => {}
     }
 }
 
@@ -1130,7 +1361,67 @@ fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &st
         }
         "delete-no" => state.deleting = None,
         "d-save" => save(weak, state),
-        "d-cancel" => state.dialog = None,
+        "d-cancel" => close(state),
+        "add" if state.editable() => {
+            state.dialog = Some(Dialog { listening: true, ..Dialog::new(Target::New, Form::default()) });
+            pause(state, true);
+        }
+        "d-listen" => {
+            if let Some(d) = &mut state.dialog {
+                d.listening = true;
+                d.held.clear();
+                d.unnamed = false;
+                pause(state, true);
+            }
+        }
+        // A key pressed while listening: its text and the modifiers held ("MS": Meta and Shift).
+        "d-key" => {
+            let (text, flags) = arg.split_once('\t').unwrap_or((arg, ""));
+            let Some(d) = &mut state.dialog else { return };
+            if let Some(m) = shortcut_edit::modifier(text) {
+                if !d.held.iter().any(|h| h == m) {
+                    d.held.push(m.to_owned());
+                }
+                return;
+            }
+            match shortcut_edit::keysym(text) {
+                Some(key) => {
+                    d.keys = Some((shortcut_edit::held(flags), key));
+                    d.listening = false;
+                    d.held.clear();
+                    d.replace = false;
+                    pause(state, false);
+                }
+                None => d.unnamed = true,
+            }
+        }
+        "d-key-up" => {
+            if let Some(d) = &mut state.dialog
+                && let Some(m) = shortcut_edit::modifier(arg)
+            {
+                d.held.retain(|h| h != m);
+            }
+        }
+        // Esc while listening: the keys stay as they were.
+        "d-stop" => {
+            if let Some(d) = &mut state.dialog {
+                d.listening = false;
+                d.held.clear();
+                pause(state, false);
+            }
+        }
+        "d-clear" => {
+            if let Some(d) = &mut state.dialog {
+                d.keys = None;
+                d.held.clear();
+                d.replace = false;
+            }
+        }
+        "d-replace-keys" => {
+            if let Some(d) = &mut state.dialog {
+                d.replace = true;
+            }
+        }
         "d-restore" => {
             // The form takes the config's version; Save puts it back.
             if let Some(d) = &mut state.dialog
@@ -1364,6 +1655,57 @@ mod tests {
         let v = view(&state);
         assert!(v.not_loaded);
         assert_eq!(row(&v, "Open Foot").from, "Changed in Lituus");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Adding a shortcut: its keys pressed (Hyprland's own paused meanwhile), an action, saved as
+    /// Lituus's own; keys that are taken are replaced only when asked.
+    #[test]
+    fn adding_a_shortcut() {
+        use slint::Model;
+        let config = "hl.bind(\"SUPER + Q\", hl.dsp.window.close())\nrequire(\"lituus\")\n";
+        let (mut state, d) = state_with("add", config, None);
+        act_with(None, &mut state, "add", "");
+        assert!(state.paused);
+        let dv = view(&state).dialog;
+        assert!(dv.listening && dv.title == "Add a shortcut");
+        let meta = SharedString::from(slint::platform::Key::Meta);
+        act_with(None, &mut state, "d-key", &format!("{meta}\tM"));
+        assert_eq!(view(&state).dialog.listen_note, "Now press a key");
+        act_with(None, &mut state, "d-key", "q\tM");
+        assert!(!state.paused);
+        // Super + Q is Close window: Save waits until it's replaced or other keys are chosen.
+        let dv = view(&state).dialog;
+        assert_eq!(dv.conflict_title, "Super + Q is already Close window");
+        assert_eq!(dv.problem, "These keys are taken");
+        act_with(None, &mut state, "d-listen", "");
+        act_with(None, &mut state, "d-key", "B\tMS");
+        let dv = view(&state).dialog;
+        assert_eq!((dv.conflict_title.as_str(), dv.problem.as_str()), ("", "Type the command to run"));
+        act_with(None, &mut state, "d-command", "firefox");
+        act_with(None, &mut state, "d-save", "");
+        reread(&mut state, &d);
+        let r = row(&view(&state), "Open Firefox");
+        assert_eq!((r.from.as_str(), r.can_delete), ("Added in Lituus", true));
+        assert_eq!(r.keys.iter().collect::<Vec<_>>(), ["Super", "Shift", "B"]);
+        // Then on Super + Q after all, replacing Close window.
+        act_with(None, &mut state, "open", &r.id);
+        act_with(None, &mut state, "d-listen", "");
+        act_with(None, &mut state, "d-key", "Q\tM");
+        act_with(None, &mut state, "d-replace-keys", "");
+        assert_eq!(view(&state).dialog.problem, "");
+        act_with(None, &mut state, "d-save", "");
+        reread(&mut state, &d);
+        let v = view(&state);
+        assert_eq!(row(&v, "Open Firefox").from, "Changed in Lituus");
+        assert!(titles(&v).iter().all(|t| t != "Close window"), "{:?}", titles(&v));
+        // Lituus's own went with the move; the config's Super + Q is changed instead.
+        assert!(state.mine.iter().all(|m| matches!(m, Mine::Over { .. })), "{:?}", state.mine);
+        // Delete is only for Lituus's own: back to the config's version instead.
+        let id = row(&v, "Open Firefox").id.to_string();
+        act_with(None, &mut state, "restore", &id);
+        reread(&mut state, &d);
+        assert!(state.mine.is_empty());
         std::fs::remove_dir_all(&d).unwrap();
     }
 
