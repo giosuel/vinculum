@@ -1082,6 +1082,9 @@ fn hostname_problem(name: &str) -> Option<&'static str> {
 
 /// Goes to a page (a sidebar item's id); Network and Input open their sub-page used last.
 fn go(app: &mut App, id: &str) {
+    if !can_open(app, id) {
+        return;
+    }
     let id = match (id, app.input_page) {
         ("input", Some(page)) => page.id(),
         _ => id,
@@ -1378,7 +1381,7 @@ fn tether_offers(snapshot: Option<&lituus_nm::Snapshot>) -> std::collections::Ha
 /// The sidebar's pages; Network's statuses are filled in from the view.
 fn nav_entries(app: &App) -> Vec<nav::Entry> {
     let (keyboard, mouse) = input::status(&app.input);
-    vec![
+    let mut entries = vec![
         nav::Entry {
             id: "network",
             label: "Network",
@@ -1387,6 +1390,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "internet networkmanager saved connections hostname",
             status: String::new(),
             parent: None,
+            off: "",
         },
         nav::Entry {
             id: "wifi",
@@ -1396,6 +1400,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "wi-fi wifi wireless wlan networks hidden enterprise eduroam saved",
             status: String::new(),
             parent: Some("network"),
+            off: "",
         },
         nav::Entry {
             id: "wired",
@@ -1405,6 +1410,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "ethernet cable lan bridge bond vlan virtual interfaces profiles",
             status: String::new(),
             parent: Some("network"),
+            off: "",
         },
         nav::Entry {
             id: "vpn",
@@ -1414,6 +1420,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "wireguard openvpn openconnect tunnel import",
             status: String::new(),
             parent: Some("network"),
+            off: "",
         },
         nav::Entry {
             id: "hotspot",
@@ -1423,6 +1430,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "tethering share access point",
             status: String::new(),
             parent: Some("network"),
+            off: "",
         },
         nav::Entry {
             id: "bluetooth",
@@ -1432,6 +1440,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "pair pairing headphones headset keyboard mouse speaker devices visible discoverable pairable adapter",
             status: bluetooth::nav(&app.bt, false).sub.to_string(),
             parent: None,
+            off: "",
         },
         nav::Entry {
             id: "displays",
@@ -1441,6 +1450,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "monitors screens resolution refresh rate scale hdr vrr rotation mirror hyprland layout",
             status: displays::status(&app.displays),
             parent: None,
+            off: "",
         },
         nav::Entry {
             id: "sound",
@@ -1450,6 +1460,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "audio volume speakers headphones microphone input output pipewire mute apps",
             status: sound::status(&app.sound),
             parent: None,
+            off: "",
         },
         nav::Entry {
             id: "input",
@@ -1459,6 +1470,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "keyboard mouse touchpad trackpad pointer devices",
             status: keyboard.clone(),
             parent: None,
+            off: "",
         },
         nav::Entry {
             id: "keyboard",
@@ -1469,6 +1481,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
                        typing keys dvorak qwertz azerty",
             status: keyboard,
             parent: Some("input"),
+            off: "",
         },
         nav::Entry {
             id: "mouse",
@@ -1479,6 +1492,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
                        scroll speed left-handed tap to click disable while typing clickfinger",
             status: mouse,
             parent: Some("input"),
+            off: "",
         },
         nav::Entry {
             id: "shortcuts",
@@ -1488,6 +1502,7 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             keywords: "shortcuts shortcut keybinds keybind binds bind hotkeys hotkey keys super workspace launch",
             status: shortcuts::status(&app.shortcuts),
             parent: Some("input"),
+            off: "",
         },
         // Lituus's own look is in Settings; "Appearance" is kept for the desktop's (GTK) later.
         nav::Entry {
@@ -1499,8 +1514,30 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
                        notifications passwords keyring config",
             status: String::new(),
             parent: None,
+            off: "",
         },
-    ]
+    ];
+    // The pages that need Hyprland are turned off while it isn't running (the owner, 2026-11-07:
+    // "greyed out and can't be clicked in the first place", with a tooltip saying why).
+    for e in &mut entries {
+        let needs = match e.id {
+            "displays" => app.displays.not_running,
+            "input" | "keyboard" | "mouse" | "shortcuts" => app.input.not_running,
+            _ => false,
+        };
+        if needs {
+            e.off = NEEDS_HYPRLAND;
+        }
+    }
+    entries
+}
+
+/// Why a page that needs Hyprland can't be opened.
+const NEEDS_HYPRLAND: &str = "Needs Hyprland, which isn't running. This page opens once it is.";
+
+/// Whether the sidebar item `id` can be opened now.
+fn can_open(app: &App, id: &str) -> bool {
+    nav_entries(app).iter().find(|e| e.id == id).is_none_or(|e| e.off.is_empty())
 }
 
 fn render(window: &MainWindow) {
@@ -3027,6 +3064,27 @@ mod tests {
     }
 
     /// The window with the sidebar filled in, as the app shows it.
+    /// Without Hyprland, its pages don't open (the sidebar shows them turned off); with it, they do.
+    #[test]
+    fn pages_that_need_hyprland_dont_open_without_it() {
+        let mut app = super::App::default();
+        app.input.not_running = true;
+        app.displays.not_running = true;
+        let before = app.ui.page;
+        for id in ["displays", "input", "keyboard", "mouse", "shortcuts"] {
+            super::go(&mut app, id);
+            assert_eq!(app.ui.page, before, "{id}");
+        }
+        super::go(&mut app, "bluetooth");
+        assert_eq!(app.ui.page, super::view::Page::Bluetooth);
+        app.input.not_running = false;
+        super::go(&mut app, "shortcuts");
+        assert_eq!(app.ui.page, super::view::Page::Shortcuts);
+        let entries = super::nav_entries(&app);
+        let off = |id: &str| entries.iter().find(|e| e.id == id).unwrap().off;
+        assert_eq!((off("displays"), off("keyboard")), (super::NEEDS_HYPRLAND, ""));
+    }
+
     fn window() -> MainWindow {
         i_slint_backend_testing::init_no_event_loop();
         let window = MainWindow::new().unwrap();

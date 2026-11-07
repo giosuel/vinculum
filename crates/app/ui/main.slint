@@ -13,7 +13,7 @@ import { Button, IconButton, AddButton, Switch, PillSwitch, SectionLabel, Banner
 import { JoinDialog, TextField, Segmented, FormRow, Modal } from "dialogs.slint";
 import { QuickWindow, QuickRow } from "quick.slint";
 import { Action, Toggle, DetailItem, Chip, ChipRow, Details, DetailsPane } from "details.slint";
-import { Sidebar, Hero, HeroSubject, Card, ScrollCard, SettingRow, EmptyState, NavItem, NavGroup, HeroInfo } from "shell.slint";
+import { Sidebar, Tooltip, Hero, HeroSubject, Card, ScrollCard, SettingRow, EmptyState, NavItem, NavGroup, HeroInfo } from "shell.slint";
 import { SettingsHero, AppearanceSettings, ColourFiles, ThemeSwatch, ColourChip, SourceRow } from "appearance.slint";
 import { SendFilesDialog, IncomingFileDialog, FilesView, FileRow } from "files.slint";
 import { DisplaysPage, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeepDialog, ConfigDialog } from "displays.slint";
@@ -365,7 +365,7 @@ export component MainWindow inherits Window {
         }
 
         HorizontalLayout {
-            Sidebar {
+            sidebar := Sidebar {
                 groups: root.nav-groups;
                 settings-current: root.page == "settings";
                 airplane: root.airplane;
@@ -1113,6 +1113,12 @@ export component MainWindow inherits Window {
     if root.page == "displays" && root.displays.config-open: ConfigDialog {
         view: root.displays;
         closed => { root.displays-act("close-config", "", 0); keys.focus(); }
+    }
+    // Beside a page in the sidebar that can't be opened: why (it needs Hyprland).
+    if sidebar.tip != "": Tooltip {
+        x: 214px;
+        y: sidebar.tip-y - 4px;
+        text: sidebar.tip;
     }
     if root.page == "keyboard" && root.keyboard.add-open: AddLayoutDialog {
         view: root.keyboard;
