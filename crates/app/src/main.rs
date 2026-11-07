@@ -4242,11 +4242,11 @@ mod tests {
         assert_eq!((apply.accessible_enabled(), apply.computed_opacity()), (Some(false), 1.0));
     }
 
-    /// Settings: the card is as tall as its settings, "Follow wallpaper" is turned off (not only
+    /// Settings: the card reaches the bottom of the page, "Follow wallpaper" is turned off (not only
     /// faded) while there are no wallpaper colours, the passwords line isn't a setting row, and a
     /// short window gets the compact hero.
     #[test]
-    fn settings_has_a_compact_hero_and_a_card_as_tall_as_its_settings() {
+    fn settings_has_a_compact_hero_and_a_card_down_to_the_bottom() {
         let window = window();
         let acted = Rc::new(RefCell::new(Vec::new()));
         let a = acted.clone();
@@ -4257,8 +4257,9 @@ mod tests {
         window.set_ap_follow_available(false);
         window.window().set_size(LogicalSize::new(2000.0, 1070.0));
         let card = ElementHandle::find_by_element_id(&window, "MainWindow::settings-card").next().expect("the card");
+        // Above the key hints (30 px) and the page's padding.
         let bottom = card.absolute_position().y + card.size().height;
-        assert!(bottom < 980.0, "{bottom}");
+        assert!(bottom > 1000.0, "{bottom}");
         let follow = control(&window, "Follow wallpaper", AccessibleRole::Switch);
         assert_eq!(follow.accessible_enabled(), Some(false));
         follow.invoke_accessible_default_action();

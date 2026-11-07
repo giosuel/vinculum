@@ -6,7 +6,7 @@ import { Theme } from "theme.slint";
 import { Icon, Spinner } from "icons.slint";
 import { Button, IconButton, Switch, CardTitle, Banner, Scroll, Focusable, Focus } from "controls.slint";
 import { ViewSwitcher, Select } from "dialogs.slint";
-import { Hero, HeroInfo, Card, SettingRow, EmptyState } from "shell.slint";
+import { Hero, HeroInfo, Card, ScrollCard, SettingRow, EmptyState } from "shell.slint";
 
 /// An app playing. output: its output's place in `outputs`.
 export struct SoundApp { id: string, name: string, sub: string, volume: float, muted: bool, output: int }
@@ -227,15 +227,16 @@ export component SoundPage inherits VerticalLayout {
         }
     }
 
-    // Below the hero, the page scrolls when the window is too short for it. The cards are as
-    // tall as what's in them; only the not-running card fills the page.
+    // Below the hero the cards reach the bottom and scroll inside; the page scrolls only when
+    // the window is too short for them.
     Scroll {
         vertical-stretch: 1;
-        fill: root.page.state != "list";
+        fill: true;
         spacing: 14px;
         bar-inset: -16px;
         // What the server turned down, above what it's about.
         if root.page.state == "list" && root.page.error != "": Banner {
+            vertical-stretch: 0;
             tone: "danger";
             text: root.page.error;
             dismissed => { root.act("dismiss", "", 0); }
@@ -243,7 +244,8 @@ export component SoundPage inherits VerticalLayout {
 
         if root.page.state == "list" && (root.tab == 0 || (root.tab > 1 && root.page.cards.length == 0)): HorizontalLayout {
             spacing: 14px;
-            Card {
+            vertical-stretch: 1;
+            ScrollCard {
                 horizontal-stretch: 1;
                 // Setting rows stay at a width where the label is near its control.
                 HorizontalLayout {
@@ -318,7 +320,7 @@ export component SoundPage inherits VerticalLayout {
                     }
                 }
             }
-            Card {
+            ScrollCard {
                 horizontal-stretch: 1;
                 HorizontalLayout {
                     alignment: start;
@@ -378,7 +380,7 @@ export component SoundPage inherits VerticalLayout {
             }
         }
 
-        if root.page.state == "list" && root.tab == 1: Card {
+        if root.page.state == "list" && root.tab == 1: ScrollCard {
             HorizontalLayout {
                 alignment: start;
                 apps := VerticalLayout {
@@ -440,7 +442,7 @@ export component SoundPage inherits VerticalLayout {
             }
         }
 
-        if root.page.state == "list" && root.tab == 2 && root.page.cards.length > 0: Card {
+        if root.page.state == "list" && root.tab == 2 && root.page.cards.length > 0: ScrollCard {
             HorizontalLayout {
                 alignment: start;
                 cards := VerticalLayout {
