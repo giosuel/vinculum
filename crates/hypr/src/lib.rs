@@ -9,7 +9,10 @@ mod ipc;
 mod model;
 mod rules;
 
-pub use binds::{Action, Bind, Flags, LiveBind, Value as LuaValue, modifier_bit, read as read_binds};
+pub use binds::{
+    Action, Bind, Config as BindConfig, Flags, LiveBind, Unbind, Value as LuaValue, lua_string, modifier_bit,
+    normalized_keys, parse_lua, read as read_binds,
+};
 pub use config::{ConfigFile, config_dir, section, with_section};
 pub use input::{
     Device, DeviceSettings, Devices, InputSettings, Keyboard, KeyboardSettings, Layout, MouseSettings, OPTIONS,

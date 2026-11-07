@@ -1421,7 +1421,7 @@ thread_local! {
 }
 
 /// `rows` in `model`: the rows that changed are replaced, the others left as they are.
-fn kept<T: Clone + PartialEq + 'static>(model: &Rc<VecModel<T>>, rows: &ModelRc<T>) -> ModelRc<T> {
+pub fn kept<T: Clone + PartialEq + 'static>(model: &Rc<VecModel<T>>, rows: &ModelRc<T>) -> ModelRc<T> {
     let rows: Vec<T> = rows.iter().collect();
     if model.row_count() == rows.len() {
         for (i, row) in rows.into_iter().enumerate() {

@@ -399,7 +399,11 @@ export component Modal inherits Rectangle {
     in property <bool> backdrop-dismisses;
     callback dismissed();
     background: #05060799;
-    TouchArea { clicked => { if root.backdrop-dismisses { root.dismissed(); } } }
+    // The page underneath doesn't scroll with the wheel either.
+    TouchArea {
+        clicked => { if root.backdrop-dismisses { root.dismissed(); } }
+        scroll-event(event) => { accept }
+    }
     FocusTrap {
         width: root.card-width;
         height: body.preferred-height;

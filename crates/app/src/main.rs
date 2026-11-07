@@ -27,6 +27,7 @@ mod profiles;
 mod qr;
 mod quick;
 mod secrets;
+mod shortcut_edit;
 mod shortcuts;
 mod sound;
 mod theme;
@@ -3947,6 +3948,50 @@ mod tests {
         window.window().dispatch_event(WindowEvent::PointerMoved { position });
         window.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
         window.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+    }
+
+    /// A click on a shortcut's row opens it, and its switch turns it off.
+    #[test]
+    fn a_click_on_a_shortcut() {
+        let window = window();
+        let acted = Rc::new(RefCell::new(Vec::new()));
+        let a = acted.clone();
+        window.on_shortcuts_act(move |verb, arg| a.borrow_mut().push(format!("{verb} {arg}")));
+        window.window().set_size(LogicalSize::new(2000.0, 1070.0));
+        window.set_page("shortcuts".into());
+        let row = super::ShortcutRow {
+            id: "c0".into(),
+            title: "Open Kitty".into(),
+            keys: super::model(vec![SharedString::from("Super"), "Q".into()]),
+            on: true,
+            ..Default::default()
+        };
+        window.set_shortcuts(super::ShortcutsView {
+            state: "list".into(),
+            editable: true,
+            // Enough that the list scrolls.
+            rows: super::model(
+                std::iter::once(super::ShortcutRow { label: "APPS".into(), ..Default::default() })
+                    .chain(std::iter::once(row.clone()))
+                    .chain((1..60).map(|i| super::ShortcutRow {
+                        id: format!("c{i}").into(),
+                        title: format!("Other {i}").into(),
+                        ..row.clone()
+                    }))
+                    .collect(),
+            ),
+            ..Default::default()
+        });
+        mock_elapsed_time(Duration::from_millis(50));
+        let title = control(&window, "Open Kitty", AccessibleRole::Text);
+        let (p, size) = (title.absolute_position(), title.size());
+        click(&window, p.x + size.width / 2.0, p.y + size.height / 2.0);
+        mock_elapsed_time(Duration::from_millis(300));
+        let switch = control(&window, "Use Open Kitty", AccessibleRole::Switch);
+        let (p, size) = (switch.absolute_position(), switch.size());
+        click(&window, p.x + size.width / 2.0, p.y + size.height / 2.0);
+        mock_elapsed_time(Duration::from_millis(300));
+        assert_eq!(acted.borrow().as_slice(), ["open c0", "toggle c0"]);
     }
 
     /// The Wi-Fi and Hotspot switches are pills like Bluetooth's, switched by a click anywhere

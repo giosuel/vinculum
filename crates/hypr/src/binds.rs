@@ -66,6 +66,8 @@ pub struct Flags {
     pub long_press: bool,
     /// A mouse drag (moving or resizing a window).
     pub mouse: bool,
+    /// The window in focus gets the keys too.
+    pub non_consuming: bool,
 }
 
 /// A value in a Lua expression, as far as Lituus follows it.
@@ -142,6 +144,38 @@ pub fn modifier_bit(name: &str) -> Option<u32> {
 }
 
 impl Bind {
+    /// The keys as `hl.bind` takes them: "SUPER + SHIFT + Q".
+    pub fn keys(&self) -> String {
+        self.mods.iter().map(String::as_str).chain(std::iter::once(self.key.as_str())).collect::<Vec<_>>().join(" + ")
+    }
+
+    /// The bind as Lua writes it: `hl.bind("SUPER + Q", hl.dsp.window.close(), { locked = true })`;
+    /// none when its action can't be written.
+    pub fn to_lua(&self) -> Option<String> {
+        let action = self.action.to_lua()?;
+        let f = &self.flags;
+        let mut opts: Vec<String> = [
+            ("repeating", f.repeating),
+            ("locked", f.locked),
+            ("release", f.release),
+            ("long_press", f.long_press),
+            ("mouse", f.mouse),
+            ("non_consuming", f.non_consuming),
+        ]
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(name, _)| format!("{name} = true"))
+        .collect();
+        if !self.description.is_empty() {
+            opts.push(format!("description = {}", lua_string(&self.description)));
+        }
+        if !self.submap.is_empty() {
+            opts.push(format!("submap = {}", lua_string(&self.submap)));
+        }
+        let opts = if opts.is_empty() { String::new() } else { format!(", {{ {} }}", opts.join(", ")) };
+        Some(format!("hl.bind({}, {action}{opts})", lua_string(&self.keys())))
+    }
+
     /// The modifiers as `hyprctl binds` reports them.
     pub fn modmask(&self) -> u32 {
         self.mods.iter().filter_map(|m| modifier_bit(m)).fold(0, |mask, bit| mask | bit)
@@ -169,19 +203,105 @@ fn split_conf_mods(mods: &str) -> Vec<String> {
     found
 }
 
+/// An `hl.unbind("SUPER + Q")`: the binds on those keys made before it go.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unbind {
+    pub keys: String,
+    pub file: PathBuf,
+    pub line: usize,
+}
+
+/// What a config makes: its binds and unbinds in the order they run, and where it `require`s
+/// each file (the module's name, the file and line of the call).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Config {
+    pub binds: Vec<Bind>,
+    pub unbinds: Vec<Unbind>,
+    pub requires: Vec<(String, PathBuf, usize)>,
+}
+
 /// The binds in the config in `dir`: hyprland.lua and the files it requires, or else
 /// hyprland.conf and the files it sources.
-pub fn read(dir: &Path) -> Vec<Bind> {
+pub fn read(dir: &Path) -> Config {
     let lua = dir.join("hyprland.lua");
     if lua.exists() {
-        let mut reader = LuaReader { dir: dir.to_path_buf(), seen: Vec::new(), binds: Vec::new() };
+        let mut reader =
+            LuaReader { dir: dir.to_path_buf(), seen: Vec::new(), config: Config::default(), follow: true };
         reader.file(&lua);
-        reader.binds
+        reader.config
     } else {
-        let mut binds = Vec::new();
+        let mut config = Config::default();
         let mut vars = HashMap::new();
-        read_conf(&dir.join("hyprland.conf"), &mut vars, &mut binds, &mut Vec::new());
-        binds
+        read_conf(&dir.join("hyprland.conf"), &mut vars, &mut config.binds, &mut Vec::new());
+        config
+    }
+}
+
+/// The binds and unbinds in Lua `text` (a part of Lituus's file), as if it were `file`; its
+/// `require`s aren't followed.
+pub fn parse_lua(text: &str, file: &Path) -> Config {
+    let mut reader = LuaReader { dir: PathBuf::new(), seen: Vec::new(), config: Config::default(), follow: false };
+    reader.text(text, file);
+    reader.config
+}
+
+/// Keys as Hyprland compares them in `hl.unbind`: without spaces, in lower case.
+pub fn normalized_keys(keys: &str) -> String {
+    keys.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase()
+}
+
+/// A Lua string literal.
+pub fn lua_string(text: &str) -> String {
+    let mut out = String::from("\"");
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+impl Value {
+    /// The value as Lua writes it.
+    pub fn to_lua(&self) -> String {
+        match self {
+            Value::Text(t) => lua_string(t),
+            Value::Int(i) => i.to_string(),
+            Value::Float(f) => f.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Table(fields) => {
+                let items: Vec<String> = fields
+                    .iter()
+                    .map(|(k, v)| match k {
+                        Some(k) if k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
+                            format!("{k} = {}", v.to_lua())
+                        }
+                        Some(k) => format!("[{}] = {}", lua_string(k), v.to_lua()),
+                        None => v.to_lua(),
+                    })
+                    .collect();
+                if items.is_empty() { "{}".into() } else { format!("{{ {} }}", items.join(", ")) }
+            }
+            Value::Path(p) => p.clone(),
+            Value::Dispatcher(name, args) => {
+                format!("hl.dsp.{name}({})", args.iter().map(Value::to_lua).collect::<Vec<_>>().join(", "))
+            }
+            Value::Function | Value::Unknown => "nil".into(),
+        }
+    }
+}
+
+impl Action {
+    /// The dispatcher as Lua writes it, `hl.dsp.window.close()`; none for what Lituus can't read.
+    pub fn to_lua(&self) -> Option<String> {
+        match self {
+            Action::Dispatcher { name, args } => Some(Value::Dispatcher(name.clone(), args.clone()).to_lua()),
+            Action::Unread => None,
+        }
     }
 }
 
@@ -310,7 +430,9 @@ fn tokens(text: &str) -> Vec<(Tok, usize)> {
 struct LuaReader {
     dir: PathBuf,
     seen: Vec<PathBuf>,
-    binds: Vec<Bind>,
+    config: Config,
+    /// Reads the files `require` names.
+    follow: bool,
 }
 
 /// One file's tokens being read, with the names it has set.
@@ -331,7 +453,11 @@ impl LuaReader {
         }
         self.seen.push(canonical);
         let Ok(text) = std::fs::read_to_string(path) else { return };
-        let toks = tokens(&text);
+        self.text(&text, path);
+    }
+
+    fn text(&mut self, text: &str, path: &Path) {
+        let toks = tokens(text);
         let len = toks.len();
         let mut chunk = Chunk {
             reader: self,
@@ -345,7 +471,11 @@ impl LuaReader {
     }
 
     /// `require("monitors")`: monitors.lua (or monitors/init.lua) in the config folder.
-    fn require(&mut self, name: &str) {
+    fn require(&mut self, name: &str, from: &Path, line: usize) {
+        self.config.requires.push((name.to_owned(), from.to_path_buf(), line));
+        if !self.follow {
+            return;
+        }
         let rel = name.replace('.', "/");
         for candidate in [self.dir.join(format!("{rel}.lua")), self.dir.join(&rel).join("init.lua")] {
             if candidate.exists() {
@@ -829,10 +959,17 @@ impl Chunk<'_> {
                 self.bind(&args, line, end_line);
                 Value::Unknown
             }
+            Some("hl.unbind") => {
+                if let Some(Value::Text(keys)) = args.first() {
+                    self.reader.config.unbinds.push(Unbind { keys: keys.clone(), file: self.file.clone(), line });
+                }
+                Value::Unknown
+            }
             Some(p) if p.starts_with("hl.dsp.") => Value::Dispatcher(p["hl.dsp.".len()..].to_owned(), args),
             _ => {
                 if let (true, Some(Value::Text(name))) = (require, args.first()) {
-                    self.reader.require(name);
+                    let from = self.file.clone();
+                    self.reader.require(name, &from, line);
                 }
                 Value::Unknown
             }
@@ -856,6 +993,7 @@ impl Chunk<'_> {
             release: flag("release"),
             long_press: flag("long_press"),
             mouse: flag("mouse"),
+            non_consuming: flag("non_consuming"),
         };
         let description = opts
             .and_then(|o| o.field("description").or_else(|| o.field("desc")))
@@ -866,7 +1004,7 @@ impl Chunk<'_> {
             .and_then(|o| o.field("submap"))
             .and_then(Value::as_text)
             .map_or_else(|| self.submap.clone(), str::to_owned);
-        self.reader.binds.push(Bind {
+        self.reader.config.binds.push(Bind {
             mods,
             key,
             action,
@@ -1061,6 +1199,7 @@ fn read_conf(path: &Path, vars: &mut HashMap<String, String>, binds: &mut Vec<Bi
                         release: letters.contains('r'),
                         long_press: letters.contains('o'),
                         mouse,
+                        non_consuming: letters.contains('n'),
                     },
                     description,
                     file: path.to_path_buf(),
@@ -1127,7 +1266,7 @@ mod tests {
     fn reads_the_default_config() {
         let d = dir("default");
         std::fs::write(d.join("hyprland.lua"), include_str!("../tests/fixtures/default.lua")).unwrap();
-        let binds = read(&d);
+        let binds = read(&d).binds;
         assert_eq!(binds.len(), 48, "{binds:#?}");
         let first = &binds[0];
         assert_eq!((first.mods.as_slice(), first.key.as_str(), first.line), (&["SUPER".to_owned()][..], "Q", 268));
@@ -1177,7 +1316,7 @@ end)
         )
         .unwrap();
         std::fs::write(d.join("binds.lua"), "hl.bind('ALT + code:10', hl.dsp.focus({ workspace = 1 }))\n").unwrap();
-        let binds = read(&d);
+        let binds = read(&d).binds;
         let keys: Vec<(&str, usize, &str)> =
             binds.iter().map(|b| (b.key.as_str(), b.line, b.submap.as_str())).collect();
         assert_eq!(
@@ -1209,7 +1348,7 @@ end)
         )
         .unwrap();
         std::fs::write(d.join("more.conf"), "bindd = SUPER_SHIFT, B, Browser, exec, firefox\n").unwrap();
-        let binds = read(&d);
+        let binds = read(&d).binds;
         assert_eq!(binds.len(), 6);
         assert_eq!(dispatcher(&binds[0]), ("exec_cmd", &[Value::Text("kitty".into())][..]));
         assert_eq!(binds[1].mods, ["SUPER", "SHIFT"]);
@@ -1229,11 +1368,59 @@ end)
         let live: Vec<LiveBind> = serde_json::from_str(include_str!("../tests/fixtures/binds.json")).unwrap();
         let d = dir("live");
         std::fs::write(d.join("hyprland.lua"), include_str!("../tests/fixtures/default.lua")).unwrap();
-        let binds = read(&d);
+        let binds = read(&d).binds;
         let unmatched: Vec<&LiveBind> = live.iter().filter(|l| !binds.iter().any(|b| l.matches(b))).collect();
         assert_eq!(unmatched.len(), 1, "{unmatched:?}");
         assert_eq!(unmatched[0].key, "B");
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// Every bind of the example config, written back as Lua and read again, is the same bind.
+    #[test]
+    fn writes_binds_as_lua() {
+        let d = dir("write");
+        std::fs::write(d.join("hyprland.lua"), include_str!("../tests/fixtures/default.lua")).unwrap();
+        for b in read(&d).binds {
+            let lua = b.to_lua().unwrap();
+            let again = parse_lua(&lua, Path::new("x.lua")).binds;
+            assert_eq!(again.len(), 1, "{lua}");
+            assert_eq!(
+                (&again[0].mods, &again[0].key, &again[0].action, &again[0].flags),
+                (&b.mods, &b.key, &b.action, &b.flags),
+                "{lua}"
+            );
+        }
+        let b = Bind {
+            mods: vec!["SUPER".into()],
+            key: "D".into(),
+            action: Action::Dispatcher {
+                name: "exec_cmd".into(),
+                args: vec![Value::Text("rofi -show \"drun\"".into())],
+            },
+            flags: Flags { locked: true, ..Flags::default() },
+            description: "Open the app launcher".into(),
+            file: PathBuf::new(),
+            line: 0,
+            end_line: 0,
+            submap: String::new(),
+        };
+        assert_eq!(
+            b.to_lua().unwrap(),
+            r#"hl.bind("SUPER + D", hl.dsp.exec_cmd("rofi -show \"drun\""), { locked = true, description = "Open the app launcher" })"#
+        );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn reads_unbinds_and_requires() {
+        let c = parse_lua(
+            "hl.unbind(\"SUPER + Q\")\nrequire(\"lituus\")\nhl.bind(\"SUPER + Q\", hl.dsp.exit())\n",
+            Path::new("l.lua"),
+        );
+        assert_eq!(c.unbinds, [Unbind { keys: "SUPER + Q".into(), file: "l.lua".into(), line: 1 }]);
+        assert_eq!(c.requires, [("lituus".to_owned(), PathBuf::from("l.lua"), 2)]);
+        assert_eq!(c.binds.len(), 1);
+        assert_eq!(normalized_keys("SUPER + q"), normalized_keys("super+Q"));
     }
 
     #[test]
