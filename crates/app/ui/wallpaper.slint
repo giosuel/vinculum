@@ -1,0 +1,444 @@
+// Desktop › Wallpaper, following the "Wallpaper" mockups: the monitors with their pictures in the
+// hero, a folder's pictures in a grid beside one card of settings. What it shows comes from Rust
+// (src/wallpaper.rs); everything done goes back through `act`.
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+import { Button, SectionLabel, Scroll, Focusable } from "controls.slint";
+import { TextField, Select, CheckBox, Modal } from "dialogs.slint";
+import { Hero, Card, ScrollCard, SettingRow, EmptyState } from "shell.slint";
+import { Slider } from "sound.slint";
+
+/// A tile of the grid: a folder (its first pictures) or a picture. id: the file or folder.
+/// sub: its size, or the monitors it's on (`accent`).
+export struct WallpaperTile { id: string, folder: bool, name: string, sub: string, accent: bool, picture: image, pictures: [image], gif: bool }
+/// A monitor in the hero: where it is in the layout (fractions of it), and its picture. target:
+/// a click sets it.
+export struct WallpaperMonitor { name: string, model: string, file: string, x: float, y: float, w: float, h: float, picture: image, target: bool }
+/// state: "list", "loading", "none-installed" or "not-running" (empty-* say why and what to do).
+export struct WallpaperView {
+    state: string,
+    empty-title: string,
+    empty-text: string,
+    empty-command: string,
+    empty-action: string,
+    sub: string,
+    monitors: [WallpaperMonitor],
+    /// The monitors' layout: its width over its height.
+    aspect: float,
+    folder: string,
+    recent: [string],
+    subfolders: bool,
+    query: string,
+    sorts: [string],
+    sort: int,
+    count: string,
+    tiles: [WallpaperTile],
+    empty-folder: string,
+    targets: [string],
+    target: int,
+    fills: [string],
+    fill: int,
+    fill-note: string,
+    awww: bool,
+    bar-shown: bool,
+    bar-enabled: bool,
+    bar-colour: string,
+    transitions: [string],
+    transition: int,
+    duration: float,
+    duration-text: string,
+    programs: [string],
+    program-details: [string],
+    program: int,
+    program-note: string,
+    message: string,
+    takeover: bool,
+}
+
+// The folder button: the folder shown, and a menu of the folders before, the subfolders' pictures,
+// and the desktop's folder dialog.
+component FolderButton inherits Focusable {
+    in property <WallpaperView> view;
+    callback act(string, string, float);
+    height: 36px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.ctrl-border;
+    background: self.has-hover ? Theme.hovered(Theme.input-bg) : Theme.input-bg;
+    accessible-role: combobox;
+    accessible-label: "Folder";
+    accessible-value: root.view.folder;
+    activated => { menu.show(); }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 10px;
+        spacing: 8px;
+        Icon { name: "folder"; tint: Theme.muted; size: 15px; y: (parent.height - 15px) / 2; }
+        Text { text: root.view.folder; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+        Icon { name: "chevron"; tint: Theme.icon-soft; y: (parent.height - 16px) / 2; }
+    }
+    menu := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: max(root.width, 320px);
+        close-policy: close-on-click-outside;
+        Rectangle {
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border2;
+            background: Theme.surface;
+            drop-shadow-blur: 16px;
+            drop-shadow-color: #00000060;
+            VerticalLayout {
+                padding: 6px;
+                spacing: 2px;
+                if root.view.recent.length > 0: SectionLabel { text: "FOLDERS BEFORE"; height: 26px; vertical-alignment: center; x: 8px; }
+                for r in root.view.recent: Rectangle {
+                    height: 32px;
+                    border-radius: 6px;
+                    background: pick.has-hover ? Theme.hover : transparent;
+                    Text { x: 10px; text: r; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; height: parent.height; overflow: elide; width: parent.width - 20px; }
+                    pick := TouchArea { mouse-cursor: pointer; clicked => { root.act("folder", r, 0); menu.close(); } }
+                }
+                Rectangle { height: 1px; background: Theme.border; }
+                Rectangle {
+                    height: 36px;
+                    CheckBox {
+                        x: 10px;
+                        y: (parent.height - self.height) / 2;
+                        text: "Include pictures in subfolders";
+                        checked: root.view.subfolders;
+                        toggled => { root.act("subfolders", "", 0); }
+                    }
+                }
+                Rectangle {
+                    height: 32px;
+                    border-radius: 6px;
+                    background: choose.has-hover ? Theme.hover : transparent;
+                    Text { x: 10px; text: "Choose a folder…"; color: Theme.text; font-size: 13px; vertical-alignment: center; height: parent.height; }
+                    choose := TouchArea { mouse-cursor: pointer; clicked => { root.act("choose-folder", "", 0); menu.close(); } }
+                }
+            }
+        }
+    }
+}
+
+// A picture, or a folder with its first four pictures.
+component Tile inherits Focusable {
+    in property <WallpaperTile> tile;
+    in property <string> set-label;
+    callback act(string, string, float);
+    border-radius: 10px;
+    ring-gap: 2px;
+    accessible-role: button;
+    accessible-label: root.tile.folder ? root.tile.name + ", folder, " + root.tile.sub : root.tile.name + ", " + root.tile.sub;
+    activated => { root.act(root.tile.folder ? "folder" : "set", root.tile.id, 0); }
+    property <length> picture-height: self.width * 9 / 16;
+    Rectangle {
+        y: 0;
+        height: root.picture-height;
+        border-radius: 8px;
+        clip: true;
+        background: Theme.ctrl-bg;
+        border-width: root.tile.accent ? 2px : 0;
+        border-color: Theme.accent;
+        if !root.tile.folder: Image { width: parent.width; height: parent.height; source: root.tile.picture; image-fit: cover; }
+        // A folder: its first pictures, two by two.
+        for p[i] in root.tile.folder ? root.tile.pictures : []: Image {
+            x: mod(i, 2) * parent.width / 2;
+            y: floor(i / 2) * parent.height / 2;
+            width: parent.width / 2 - 1px;
+            height: parent.height / 2 - 1px;
+            source: p;
+            image-fit: cover;
+        }
+        if root.tile.folder: Rectangle {
+            x: 8px;
+            y: parent.height - self.height - 8px;
+            width: 26px;
+            height: 22px;
+            border-radius: 6px;
+            background: #000000a0;
+            Icon { name: "folder"; tint: #ffffff; size: 14px; x: 6px; y: 4px; }
+        }
+        if root.tile.gif: Rectangle {
+            x: parent.width - self.width - 8px;
+            y: 8px;
+            width: 34px;
+            height: 20px;
+            border-radius: 5px;
+            background: #000000b0;
+            Text { text: "GIF"; color: #ffffff; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        // On hover, what a click does.
+        if !root.tile.folder && root.has-hover: Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: parent.height - self.height - 10px;
+            width: hint.preferred-width + 20px;
+            height: 26px;
+            border-radius: 13px;
+            background: #000000b8;
+            hint := Text { text: root.set-label; color: #ffffff; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+    }
+    VerticalLayout {
+        y: root.picture-height + 6px;
+        height: root.height - root.picture-height - 6px;
+        spacing: 1px;
+        Text { text: root.tile.name; color: Theme.text; font-size: 13px; overflow: elide; }
+        Text { text: root.tile.sub; color: root.tile.accent ? Theme.accent : Theme.faint; font-size: 12px; overflow: elide; }
+    }
+}
+
+/// Lituus asks before it first writes hyprpaper.conf that's there already.
+export component WallpaperTakeoverDialog inherits Modal {
+    callback act(string, string, float);
+    card-width: 480px;
+    label: "Write hyprpaper.conf?";
+    dismissed => { root.act("takeover-no", "", 0); }
+    Text { text: "Write hyprpaper.conf?"; color: Theme.text; font-size: 17px; font-weight: 600; }
+    Text {
+        text: "hyprpaper shows the pictures in hyprpaper.conf when it starts, and forgets the ones it's told while it runs. Lituus writes a block for each monitor you set; the rest of your file stays as it is, and the file as it is now is kept as hyprpaper.conf.bak.";
+        color: Theme.muted;
+        font-size: 13px;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        alignment: end;
+        spacing: 8px;
+        Button { label: "Cancel"; button-height: 36px; clicked => { root.act("takeover-no", "", 0); } }
+        Button { label: "Write it"; kind: "primary"; button-height: 36px; clicked => { root.act("takeover-yes", "", 0); } }
+    }
+}
+
+export component WallpaperPage inherits VerticalLayout {
+    in property <WallpaperView> view;
+    in property <bool> compact;
+    /// A small window: the grid's toolbar keeps the folder, the search and Random.
+    in property <bool> narrow;
+    /// Goes up to put the keyboard in the search field ("/").
+    in property <int> search-requests;
+    callback act(string, string, float);
+    spacing: 14px;
+
+    Hero {
+        title: "Wallpaper";
+        sub: root.view.sub;
+        hero-height: root.compact || root.view.state != "list" ? 136px : 230px;
+        compact: root.compact;
+        picture-width: root.view.state == "list" ? layout.width + 24px : 0;
+        // The monitors, where they are, each with its picture; a click sets which one a picture
+        // goes to.
+        layout := Rectangle {
+            // The layout's shape, as large as fits beside the title.
+            property <length> room-height: parent.height - 40px;
+            property <length> room-width: min(parent.width * 0.45, 600px);
+            property <float> aspect: max(root.view.aspect, 0.1);
+            x: parent.width - self.width - 24px;
+            y: 20px + (self.room-height - self.height) / 2;
+            width: min(self.room-width, self.room-height * self.aspect);
+            height: self.width / self.aspect;
+            visible: root.view.state == "list";
+            for m[i] in root.view.monitors: Rectangle {
+                x: m.x * parent.width;
+                y: m.y * parent.height;
+                width: m.w * parent.width - 6px;
+                height: m.h * parent.height - 6px;
+                border-radius: 6px;
+                clip: true;
+                border-width: 2px;
+                border-color: m.target ? Theme.accent : Theme.border2;
+                background: Theme.ctrl-bg;
+                Image { x: 2px; y: 2px; width: parent.width - 4px; height: parent.height - 4px; source: m.picture; image-fit: cover; }
+                Rectangle {
+                    x: 6px;
+                    y: parent.height - self.height - 6px;
+                    width: label.preferred-width + 10px;
+                    height: 18px;
+                    border-radius: 4px;
+                    background: #000000b0;
+                    label := Text { text: m.name; color: #ffffff; font-size: 11px; font-family: "JetBrains Mono"; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                TouchArea { mouse-cursor: pointer; clicked => { root.act("target", "", i + 1); } }
+            }
+        }
+        // Each monitor's port, model and picture.
+        if root.view.state == "list" && !root.compact: VerticalLayout {
+            x: 24px;
+            y: 132px;
+            width: parent.width - layout.width - 72px;
+            height: self.preferred-height;
+            spacing: 4px;
+            for m in root.view.monitors: HorizontalLayout {
+                spacing: 14px;
+                Text { text: m.name; color: Theme.accent; font-size: 12px; font-family: "JetBrains Mono"; width: 80px; overflow: elide; }
+                Text { text: m.model; color: Theme.text; font-size: 13px; width: 150px; overflow: elide; }
+                Text { text: m.file; color: Theme.muted; font-size: 13px; overflow: elide; horizontal-stretch: 1; }
+            }
+        }
+    }
+    if root.view.state == "list": HorizontalLayout {
+        spacing: 14px;
+        vertical-stretch: 1;
+        grid-card := Card {
+            horizontal-stretch: 1;
+            // The tiles follow its width, so its own size can't follow them.
+            min-width: 0;
+            property <int> search-requests: root.search-requests;
+            changed search-requests => { search.focus(); }
+            VerticalLayout {
+                padding: 12px;
+                spacing: 12px;
+                HorizontalLayout {
+                    property <bool> narrow: root.narrow;
+                    spacing: 10px;
+                    FolderButton { min-width: 140px; preferred-width: 280px; max-width: parent.narrow ? 100000px : 280px; horizontal-stretch: parent.narrow ? 1 : 0; view: root.view; act(v, a, x) => { root.act(v, a, x); } }
+                    search := TextField {
+                        width: parent.narrow ? 150px : 220px;
+                        label: "Search pictures";
+                        placeholder: "Search pictures";
+                        text: root.view.query;
+                        edited => { root.act("query", self.text, 0); }
+                    }
+                    Select {
+                        width: parent.narrow ? 0 : 150px;
+                        visible: !parent.narrow;
+                        select-height: 36px;
+                        label: "Order";
+                        options: root.view.sorts;
+                        selected: root.view.sort;
+                        chosen(i) => { root.act("sort", "", i); }
+                    }
+                    Text {
+                        visible: !parent.narrow || root.view.message != "";
+                        text: root.view.message != "" ? root.view.message : root.view.count;
+                        color: root.view.message != "" ? Theme.danger : Theme.faint;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    Button { label: "Random"; horizontal-stretch: 0; min-width: self.preferred-width; clicked => { root.act("random", "", 0); } }
+                }
+                grid := Scroll {
+                    vertical-stretch: 1;
+                    min-width: 0;
+                    // As many columns as fit tiles of 180 px or more.
+                    property <int> columns: max(2, floor((self.width - 12px + 14px) / (180px + 14px)));
+                    property <length> tile-width: (self.width - 12px - (self.columns - 1) * 14px) / self.columns;
+                    property <length> tile-height: self.tile-width * 9 / 16 + 46px;
+                    Rectangle {
+                        height: ceil(root.view.tiles.length / grid.columns) * (grid.tile-height + 14px);
+                        for t[i] in root.view.tiles: Tile {
+                            x: mod(i, grid.columns) * (grid.tile-width + 14px);
+                            y: floor(i / grid.columns) * (grid.tile-height + 14px);
+                            width: grid.tile-width;
+                            height: grid.tile-height;
+                            tile: t;
+                            set-label: root.view.target == 0 ? "Set on all monitors" : "Set on " + root.view.monitors[root.view.target - 1].name;
+                            act(v, a, x) => { root.act(v, a, x); }
+                        }
+                    }
+                    if root.view.empty-folder != "": Text {
+                        text: root.view.empty-folder;
+                        color: Theme.faint;
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                        height: 80px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+        // The settings: one card beside the grid, as tall as the page, scrolling inside.
+        ScrollCard {
+            width: root.compact ? 340px : 420px;
+            VerticalLayout {
+                padding: 18px;
+                padding-top: 12px;
+                spacing: 0;
+                SectionLabel { text: "HOW IT'S SHOWN"; height: 30px; vertical-alignment: center; }
+                SettingRow {
+                    label: "Monitors";
+                    description: "Where a click sets it";
+                    first: true;
+                    Select { width: 190px; select-height: 34px; label: "Monitors"; options: root.view.targets; selected: root.view.target; chosen(i) => { root.act("target", "", i); } }
+                }
+                SettingRow {
+                    label: "Fill";
+                    description: root.view.fill-note;
+                    Select { width: 190px; select-height: 34px; label: "Fill"; options: root.view.fills; selected: root.view.fill; chosen(i) => { root.act("fill", "", i); } }
+                }
+                if root.view.bar-shown: SettingRow {
+                    label: "Bar colour";
+                    description: "Only with Fit inside or Centre";
+                    TextField {
+                        width: 110px;
+                        mono: true;
+                        label: "Bar colour";
+                        enabled: root.view.bar-enabled;
+                        text: root.view.bar-colour;
+                        committed => { root.act("bar", self.text, 0); }
+                    }
+                }
+                if root.view.awww: VerticalLayout {
+                    Rectangle { height: 14px; }
+                    Rectangle { height: 1px; background: Theme.border; }
+                    SectionLabel { text: "TRANSITION"; height: 40px; vertical-alignment: center; }
+                    SettingRow {
+                        label: "Type";
+                        first: true;
+                        Select { width: 190px; select-height: 34px; label: "Transition"; options: root.view.transitions; selected: root.view.transition; chosen(i) => { root.act("transition", "", i); } }
+                    }
+                    SettingRow {
+                        label: "Duration";
+                        HorizontalLayout {
+                            spacing: 12px;
+                            Slider {
+                                width: 150px;
+                                label: "Duration";
+                                minimum: 0.2;
+                                maximum: 5;
+                                step: 0.1;
+                                value: root.view.duration;
+                                y: (parent.height - self.height) / 2;
+                                moved(v) => { root.act("duration", "", v); }
+                            }
+                            Text { text: root.view.duration-text; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; vertical-alignment: center; width: 40px; }
+                        }
+                    }
+                }
+                Rectangle { height: 14px; }
+                Rectangle { height: 1px; background: Theme.border; }
+                SectionLabel { text: "PROGRAM"; height: 40px; vertical-alignment: center; }
+                SettingRow {
+                    label: "Program";
+                    description: root.view.program-note;
+                    first: true;
+                    Select {
+                        width: 190px;
+                        select-height: 34px;
+                        label: "Program";
+                        options: root.view.programs;
+                        details: root.view.program-details;
+                        selected: root.view.program;
+                        chosen(i) => { root.act("program", "", i); }
+                    }
+                }
+            }
+        }
+    }
+    if root.view.state != "list": Card {
+        vertical-stretch: 1;
+        EmptyState {
+            icon: "picture";
+            loading: root.view.state == "loading";
+            title: root.view.empty-title;
+            text: root.view.empty-text;
+            command: root.view.empty-command;
+            action: root.view.empty-action;
+            action-clicked => { root.act("start", "", 0); }
+        }
+    }
+}

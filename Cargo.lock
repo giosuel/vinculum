@@ -2333,6 +2333,9 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
+ "color_quant",
+ "gif",
+ "image-webp",
  "moxcms",
  "num-traits",
  "png",
@@ -2672,12 +2675,14 @@ dependencies = [
  "clap",
  "futures-util",
  "i-slint-backend-testing",
+ "image",
  "ksni",
  "lituus-bt",
  "lituus-hypr",
  "lituus-keyring",
  "lituus-nm",
  "lituus-sound",
+ "lituus-wallpaper",
  "pulseaudio",
  "qrcodegen",
  "resvg",
@@ -2750,6 +2755,16 @@ name = "lituus-sound"
 version = "0.0.0-dev"
 dependencies = [
  "pulseaudio",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "lituus-wallpaper"
+version = "0.0.0-dev"
+dependencies = [
+ "image",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

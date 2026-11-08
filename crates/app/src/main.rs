@@ -34,6 +34,7 @@ mod theme;
 mod tray;
 mod view;
 mod virt;
+mod wallpaper;
 mod wireguard;
 mod xkb;
 
@@ -186,6 +187,8 @@ struct App {
     input_page: Option<view::Page>,
     /// Input › Shortcuts.
     shortcuts: shortcuts::State,
+    /// Desktop › Wallpaper.
+    wallpapers: wallpaper::State,
     /// Airplane mode, from when it's turned on until it ends.
     airplane: Option<airplane::Airplane>,
     /// The sidebar's search.
@@ -681,6 +684,11 @@ fn connect_callbacks(window: &MainWindow) {
         if APP.with(|app| app.borrow().ui.page == view::Page::Shortcuts) {
             shortcuts::refresh(&weak);
         }
+        // The folder's pictures may have changed, and the program.
+        if APP.with(|app| app.borrow().ui.page == view::Page::Wallpaper) {
+            let w = weak.clone();
+            update(&weak, |app| wallpaper::open(&w, &mut app.wallpapers));
+        }
     });
     let weak = window.as_weak();
     window.on_nav_search(move |text| update(&weak, |app| app.nav_query = text.to_string()));
@@ -718,7 +726,7 @@ fn connect_callbacks(window: &MainWindow) {
                 view::Page::Bluetooth => return bluetooth::move_selection(&mut app.bt, delta),
                 view::Page::Keyboard => return input::move_layout_selection(&mut app.input, delta),
                 view::Page::Mouse => return input::move_selection(&mut app.input, delta),
-                view::Page::Shortcuts => return,
+                view::Page::Shortcuts | view::Page::Wallpaper => return,
                 _ => {}
             }
             let ids = &app.row_ids;
@@ -736,7 +744,7 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_activate_selected(move || {
         update(&weak, |app| match app.ui.page {
             view::Page::Bluetooth => bluetooth::activate(&mut app.bt),
-            view::Page::Keyboard | view::Page::Mouse | view::Page::Shortcuts => {}
+            view::Page::Keyboard | view::Page::Mouse | view::Page::Shortcuts | view::Page::Wallpaper => {}
             _ => act(app, "connect"),
         })
     });
@@ -829,6 +837,11 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_input_act(move |verb, arg, value| {
         let w = weak.clone();
         update(&weak, |app| input::act(&w, &mut app.input, &verb, &arg, value))
+    });
+    let weak = window.as_weak();
+    window.on_wallpaper_act(move |verb, arg, value| {
+        let w = weak.clone();
+        update(&weak, |app| wallpaper::act(&w, &mut app.wallpapers, &verb, &arg, value))
     });
     let weak = window.as_weak();
     window.on_shortcuts_act(move |verb, arg| {
@@ -1505,6 +1518,16 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             parent: Some("input"),
             off: "",
         },
+        nav::Entry {
+            id: "wallpaper",
+            label: "Wallpaper",
+            icon: "picture",
+            group: "DESKTOP",
+            keywords: "wallpaper wallpapers background backgrounds picture pictures awww swww hyprpaper slideshow",
+            status: wallpaper::status(&app.wallpapers),
+            parent: None,
+            off: "",
+        },
         // Lituus's own look is in Settings; "Appearance" is kept for the desktop's (GTK) later.
         nav::Entry {
             id: "settings",
@@ -1661,6 +1684,7 @@ fn render(window: &MainWindow) {
         let state = &mut *app;
         input::render(window, &mut state.input, state.bt.snapshot.as_ref());
         shortcuts::render(window, &app.shortcuts);
+        wallpaper::render(window, &app.wallpapers);
         files::render(window, &app.files);
         // The keys that work on this page now, after the pages above worked out their lists.
         let mut hints = vec![Hint::new("Ctrl K", "Find a setting"), Hint::new("F6", "Sidebar or page")];
@@ -1670,6 +1694,7 @@ fn render(window: &MainWindow) {
             view::Page::Keyboard => input::keyboard_keys(&app.input),
             view::Page::Mouse => input::mouse_keys(&app.input),
             view::Page::Shortcuts => shortcuts::keys(&app.shortcuts),
+            view::Page::Wallpaper => wallpaper::keys(&app.wallpapers),
             _ => Vec::new(),
         });
         window.set_hints(model(hints));

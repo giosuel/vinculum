@@ -55,6 +55,19 @@ pub async fn open_files(title: &str) -> Result<Vec<PathBuf>, Error> {
     request_all("OpenFile", title, options).await
 }
 
+/// Asks for a folder, starting in `folder` if given. `None` when the user cancelled.
+pub async fn choose_folder(title: &str, folder: Option<&std::path::Path>) -> Result<Option<PathBuf>, Error> {
+    let mut options: HashMap<&str, Value> = HashMap::new();
+    options.insert("directory", Value::from(true));
+    options.insert("modal", Value::from(true));
+    if let Some(folder) = folder {
+        let mut bytes = folder.as_os_str().as_encoded_bytes().to_vec();
+        bytes.push(0);
+        options.insert("current_folder", Value::from(bytes));
+    }
+    request("OpenFile", title, options).await
+}
+
 /// Asks where to save a file, suggesting `name`.
 pub async fn save_file(title: &str, name: &str) -> Result<Option<PathBuf>, Error> {
     let mut options: HashMap<&str, Value> = HashMap::new();
