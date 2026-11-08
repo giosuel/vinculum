@@ -139,7 +139,6 @@ export component Sidebar inherits Rectangle {
     in property <[NavGroup]> groups;
     in property <bool> settings-current;
     in property <bool> airplane;
-    in property <string> hostname;
     /// Incremented to move the keyboard focus into the search field (Ctrl+K).
     in property <int> focus-requests;
     /// Incremented to move it to the list of pages (F6 from the page).
@@ -155,7 +154,6 @@ export component Sidebar inherits Rectangle {
     /// Esc in the search field, to give the focus back to the window.
     callback search-left();
     callback airplane-toggled();
-    callback hostname-clicked();
     /// Why the page pointed at can't be opened, and where it is (y in the window), for the
     /// tooltip the window shows beside the sidebar.
     out property <string> tip;
@@ -284,26 +282,6 @@ export component Sidebar inherits Rectangle {
                 Icon { name: "plane"; tint: Theme.muted; size: 17px; y: (parent.height - 17px) / 2; }
                 Text { text: "Airplane mode"; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
                 Switch { on: root.airplane; label: "Airplane mode"; y: (parent.height - self.height) / 2; toggled => { root.airplane-toggled(); } }
-            }
-            if root.hostname != "": Focusable {
-                height: host-row.preferred-height;
-                border-radius: 8px;
-                ring-gap: -2px;
-                background: self.has-hover ? Theme.hover : transparent;
-                accessible-role: button;
-                accessible-label: "Change the hostname";
-                accessible-action-default => { root.hostname-clicked(); }
-                activated => { root.hostname-clicked(); }
-                host-row := HorizontalLayout {
-                    padding: 10px;
-                    padding-top: 6px;
-                    padding-bottom: 6px;
-                    spacing: 6px;
-                    Text { text: "Hostname"; color: Theme.faint; font-size: 12px; }
-                    Text { text: root.hostname; color: Theme.muted; font-size: 12px; font-family: "JetBrains Mono"; overflow: elide; horizontal-stretch: 1; }
-                    // It opens a dialog to change the name: the pencil says so.
-                    VerticalLayout { alignment: center; Icon { name: "pencil"; size: 12px; tint: Theme.faint; } }
-                }
             }
         }
     }

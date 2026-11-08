@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/app", "crates/bt", "crates/cli", "crates/hypr", "crates/keyring", "crates/nm", "crates/sound", "crates/wallpaper", "xtask"]
+members = ["crates/app", "crates/bt", "crates/cli", "crates/hypr", "crates/keyring", "crates/nm", "crates/sound", "crates/system", "crates/wallpaper", "xtask"]
 
 [workspace.package]
 version = "0.0.0-dev"
@@ -28,6 +28,7 @@ lituus-hypr = { path = "crates/hypr" }
 lituus-keyring = { path = "crates/keyring" }
 lituus-nm = { path = "crates/nm" }
 lituus-sound = { path = "crates/sound" }
+lituus-system = { path = "crates/system" }
 lituus-wallpaper = { path = "crates/wallpaper" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 slint-build = "1.18.1"

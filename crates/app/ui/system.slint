@@ -1,0 +1,268 @@
+// System › System, following the "System" mockups: the computer's names and what it is in the
+// hero, its hardware and drives on the left, the software Lituus's pages use and a copy of it all
+// for bug reports on the right. What it shows comes from Rust (src/system.rs).
+import { Theme } from "theme.slint";
+import { Icon } from "icons.slint";
+import { Button, CardTitle, SectionLabel, Focusable } from "controls.slint";
+import { Hero, Card, ScrollCard } from "shell.slint";
+
+/// A fact about the hardware: what it is (label), its name (title) and a line under it. link: it
+/// opens its page (Displays).
+export struct SystemFact { icon: string, label: string, title: string, detail: string, link: bool }
+/// A file system on a drive: where it's mounted, its kind, how full (0–1), and that in words.
+export struct SystemFs { mounts: string, kind: string, used: float, text: string, warn: bool }
+export struct SystemDrive { name: string, meta: string, filesystems: [SystemFs] }
+export struct SystemSoftware { name: string, version: string, note: string }
+/// state: "list" or "loading". name: the pretty name if there is one (`pretty`), else the
+/// hostname. report: the page as plain text, for Copy system info.
+export struct SystemView {
+    state: string,
+    sub: string,
+    name: string,
+    hostname: string,
+    pretty: bool,
+    line: string,
+    logo: image,
+    monogram: string,
+    facts: [SystemFact],
+    unknown: string,
+    drives: [SystemDrive],
+    drive-count: string,
+    software: [SystemSoftware],
+    uses: [SystemSoftware],
+    battery: bool,
+    battery-title: string,
+    battery-detail: string,
+    report: string,
+    copied: bool,
+}
+
+component Fact inherits Rectangle {
+    in property <SystemFact> fact;
+    callback opened();
+    HorizontalLayout {
+        padding: 10px;
+        spacing: 14px;
+        Rectangle {
+            width: 32px;
+            height: 32px;
+            y: 2px;
+            border-radius: 8px;
+            background: Theme.ctrl-bg;
+            Icon { name: root.fact.icon; tint: Theme.icon-soft; size: 16px; }
+        }
+        VerticalLayout {
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text { text: root.fact.label; color: Theme.faint; font-size: 12px; }
+            Text { text: root.fact.title; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
+            Text { text: root.fact.detail; color: Theme.muted; font-size: 12px; overflow: elide; }
+        }
+        if root.fact.link: Icon { name: "chevron"; tint: Theme.muted; size: 16px; y: (parent.height - 16px) / 2; transform-rotation: -90deg; }
+    }
+    if root.fact.link: TouchArea { mouse-cursor: pointer; clicked => { root.opened(); } }
+}
+
+component SoftwareRow inherits Rectangle {
+    in property <SystemSoftware> entry;
+    in property <bool> first;
+    height: 44px;
+    if !root.first: Rectangle { y: 0; height: 1px; background: Theme.border; }
+    HorizontalLayout {
+        spacing: 12px;
+        Text { text: root.entry.name; color: Theme.text; font-size: 13px; vertical-alignment: center; width: 150px; overflow: elide; }
+        Text { text: root.entry.version; color: root.entry.version == "Not installed" || root.entry.version == "Not running" ? Theme.faint : Theme.text; font-size: 13px; font-family: "JetBrains Mono"; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        Text { text: root.entry.note; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+    }
+}
+
+export component SystemPage inherits VerticalLayout {
+    in property <SystemView> view;
+    in property <bool> compact;
+    /// A small window: a narrower right column.
+    in property <bool> narrow;
+    callback rename();
+    callback copied();
+    callback open-displays();
+    spacing: 14px;
+
+    Hero {
+        title: "System";
+        sub: root.view.sub;
+        hero-height: root.compact ? 136px : 206px;
+        compact: root.compact;
+        if root.view.state == "list": HorizontalLayout {
+            x: 24px;
+            y: parent.height - self.height - (root.compact ? 16px : 22px);
+            height: root.compact ? 56px : 96px;
+            width: parent.width - 48px;
+            spacing: 20px;
+            alignment: start;
+            // The OS's logo, or its first letter.
+            Rectangle {
+                width: root.compact ? 56px : 88px;
+                height: self.width;
+                border-radius: self.width / 2;
+                background: Theme.accent-soft-bg;
+                Image { width: parent.width * 0.55; height: self.width; source: root.view.logo; image-fit: contain; }
+                if root.view.logo.width == 0: Text { text: root.view.monogram; color: Theme.accent; font-size: parent.width * 0.42; font-weight: 600; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 4px;
+                Text { text: root.view.name; color: Theme.text; font-size: 22px; font-weight: 600; overflow: elide; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    Text { text: root.view.hostname; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; }
+                    Text { text: "on the network"; color: Theme.muted; font-size: 13px; }
+                }
+                if !root.compact: Text { text: root.view.line; color: Theme.muted; font-size: 13px; overflow: elide; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Button { label: "Rename…"; horizontal-stretch: 0; clicked => { root.rename(); } }
+            }
+        }
+    }
+    if root.view.state == "list": HorizontalLayout {
+        spacing: 14px;
+        vertical-stretch: 1;
+        // The hardware and the drives; the drives reach the bottom.
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 14px;
+            Card {
+                vertical-stretch: 0;
+                VerticalLayout {
+                    padding: 18px;
+                    padding-top: 14px;
+                    spacing: 8px;
+                    CardTitle { text: "Hardware"; height: 30px; }
+                    facts := Rectangle {
+                        property <int> columns: self.width >= 460px ? 2 : 1;
+                        height: ceil(root.view.facts.length / self.columns) * 76px;
+                        for f[i] in root.view.facts: Fact {
+                            x: mod(i, facts.columns) * facts.width / facts.columns;
+                            y: floor(i / facts.columns) * 76px;
+                            width: facts.width / facts.columns;
+                            height: 76px;
+                            fact: f;
+                            opened => { root.open-displays(); }
+                        }
+                    }
+                    if root.view.unknown != "": Text { text: root.view.unknown; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
+                }
+            }
+            ScrollCard {
+                VerticalLayout {
+                    padding: 18px;
+                    padding-top: 14px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        height: 30px;
+                        CardTitle { text: "Storage"; horizontal-stretch: 1; }
+                        Text { text: root.view.drive-count; color: Theme.faint; font-size: 12px; vertical-alignment: center; }
+                    }
+                    for d in root.view.drives: VerticalLayout {
+                        spacing: 6px;
+                        padding-bottom: 10px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            height: 28px;
+                            Icon { name: "drive"; tint: Theme.muted; size: 16px; y: (parent.height - 16px) / 2; }
+                            Text { text: d.name; color: Theme.text; font-size: 14px; font-weight: 500; vertical-alignment: center; overflow: elide; }
+                            Text { text: d.meta; color: Theme.faint; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
+                        }
+                        for f in d.filesystems: HorizontalLayout {
+                            padding-left: 26px;
+                            spacing: 16px;
+                            height: 40px;
+                            VerticalLayout {
+                                width: root.narrow ? 110px : 180px;
+                                alignment: center;
+                                Text { text: f.mounts; color: Theme.text; font-size: 13px; font-family: "JetBrains Mono"; overflow: elide; }
+                                Text { text: f.kind; color: Theme.faint; font-size: 12px; }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                height: 6px;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 3px;
+                                background: Theme.ctrl-border;
+                                Rectangle {
+                                    x: 0;
+                                    width: parent.width * clamp(f.used, 0, 1);
+                                    border-radius: 3px;
+                                    background: f.warn ? Theme.warn-text : Theme.accent;
+                                }
+                            }
+                            Text { text: f.text; color: Theme.muted; font-size: 12px; vertical-alignment: center; horizontal-alignment: right; width: root.narrow ? 150px : 200px; overflow: elide; }
+                        }
+                    }
+                }
+            }
+        }
+        // The software, the battery, and the copy for bug reports, which reaches the bottom.
+        VerticalLayout {
+            width: root.narrow ? 360px : 560px;
+            spacing: 14px;
+            Card {
+                vertical-stretch: 0;
+                VerticalLayout {
+                    padding: 18px;
+                    padding-top: 14px;
+                    spacing: 0;
+                    CardTitle { text: "Software"; height: 34px; }
+                    for r[i] in root.view.software: SoftwareRow { entry: r; first: i == 0; }
+                    SectionLabel { text: "WHAT LITUUS'S PAGES USE"; height: 40px; vertical-alignment: center; }
+                    for r[i] in root.view.uses: SoftwareRow { entry: r; first: i == 0; }
+                }
+            }
+            if root.view.battery: Card {
+                vertical-stretch: 0;
+                VerticalLayout {
+                    padding: 18px;
+                    padding-top: 14px;
+                    spacing: 4px;
+                    CardTitle { text: "Battery"; height: 30px; }
+                    Text { text: root.view.battery-title; color: Theme.text; font-size: 14px; font-weight: 500; }
+                    Text { text: root.view.battery-detail; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                }
+            }
+            ScrollCard {
+                VerticalLayout {
+                    padding: 18px;
+                    padding-top: 14px;
+                    spacing: 8px;
+                    CardTitle { text: "For bug reports"; height: 30px; }
+                    Text {
+                        text: "This page as plain text, for an issue or a forum post. It leaves out the computer's names and serial numbers.";
+                        color: Theme.muted;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                        // Two lines at least: in the scrolling card its height came out as one.
+                        min-height: 36px;
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        padding-top: 4px;
+                        // The text to copy, kept out of the layout beside the button.
+                        Rectangle {
+                            width: 170px;
+                            height: copy.preferred-height;
+                            copy-field := TextInput { visible: false; text: root.view.report; read-only: true; }
+                            copy := Button {
+                                width: parent.width;
+                                // The same width either way, so it doesn't jump.
+                                label: root.view.copied ? "Copied" : "Copy system info";
+                                clicked => { copy-field.select-all(); copy-field.copy(); root.copied(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if root.view.state != "list": Card { vertical-stretch: 1; }
+}

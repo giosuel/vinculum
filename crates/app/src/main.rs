@@ -30,6 +30,7 @@ mod secrets;
 mod shortcut_edit;
 mod shortcuts;
 mod sound;
+mod system;
 mod theme;
 mod tray;
 mod view;
@@ -189,6 +190,8 @@ struct App {
     shortcuts: shortcuts::State,
     /// Desktop › Wallpaper.
     wallpapers: wallpaper::State,
+    /// System › System.
+    system: system::State,
     /// Airplane mode, from when it's turned on until it ends.
     airplane: Option<airplane::Airplane>,
     /// The sidebar's search.
@@ -684,6 +687,9 @@ fn connect_callbacks(window: &MainWindow) {
         if APP.with(|app| app.borrow().ui.page == view::Page::Shortcuts) {
             shortcuts::refresh(&weak);
         }
+        if APP.with(|app| app.borrow().ui.page == view::Page::System) {
+            system::refresh(&weak);
+        }
         // The folder's pictures may have changed, and the program.
         if APP.with(|app| app.borrow().ui.page == view::Page::Wallpaper) {
             let w = weak.clone();
@@ -726,7 +732,7 @@ fn connect_callbacks(window: &MainWindow) {
                 view::Page::Bluetooth => return bluetooth::move_selection(&mut app.bt, delta),
                 view::Page::Keyboard => return input::move_layout_selection(&mut app.input, delta),
                 view::Page::Mouse => return input::move_selection(&mut app.input, delta),
-                view::Page::Shortcuts | view::Page::Wallpaper => return,
+                view::Page::Shortcuts | view::Page::Wallpaper | view::Page::System => return,
                 _ => {}
             }
             let ids = &app.row_ids;
@@ -744,7 +750,11 @@ fn connect_callbacks(window: &MainWindow) {
     window.on_activate_selected(move || {
         update(&weak, |app| match app.ui.page {
             view::Page::Bluetooth => bluetooth::activate(&mut app.bt),
-            view::Page::Keyboard | view::Page::Mouse | view::Page::Shortcuts | view::Page::Wallpaper => {}
+            view::Page::Keyboard
+            | view::Page::Mouse
+            | view::Page::Shortcuts
+            | view::Page::Wallpaper
+            | view::Page::System => {}
             _ => act(app, "connect"),
         })
     });
@@ -838,6 +848,8 @@ fn connect_callbacks(window: &MainWindow) {
         let w = weak.clone();
         update(&weak, |app| input::act(&w, &mut app.input, &verb, &arg, value))
     });
+    let weak = window.as_weak();
+    window.on_system_copied(move || system::copied(&weak));
     let weak = window.as_weak();
     window.on_wallpaper_act(move |verb, arg, value| {
         let w = weak.clone();
@@ -1528,6 +1540,17 @@ fn nav_entries(app: &App) -> Vec<nav::Entry> {
             parent: None,
             off: "",
         },
+        nav::Entry {
+            id: "system",
+            label: "System",
+            icon: "computer",
+            group: "SYSTEM",
+            keywords: "system about computer hostname name rename hardware processor cpu graphics gpu memory ram \
+                       storage disk drive battery firmware bios kernel version os bug report",
+            status: system::status(&app.system),
+            parent: None,
+            off: "",
+        },
         // Lituus's own look is in Settings; "Appearance" is kept for the desktop's (GTK) later.
         nav::Entry {
             id: "settings",
@@ -1685,6 +1708,12 @@ fn render(window: &MainWindow) {
         input::render(window, &mut state.input, state.bt.snapshot.as_ref());
         shortcuts::render(window, &app.shortcuts);
         wallpaper::render(window, &app.wallpapers);
+        let state = &mut *app;
+        if let Some(snap) = &state.snapshot {
+            state.system.hostname = snap.hostname.clone();
+            state.system.nm_version = snap.version.clone();
+        }
+        system::render(window, &app.system);
         files::render(window, &app.files);
         // The keys that work on this page now, after the pages above worked out their lists.
         let mut hints = vec![Hint::new("Ctrl K", "Find a setting"), Hint::new("F6", "Sidebar or page")];
@@ -1695,6 +1724,7 @@ fn render(window: &MainWindow) {
             view::Page::Mouse => input::mouse_keys(&app.input),
             view::Page::Shortcuts => shortcuts::keys(&app.shortcuts),
             view::Page::Wallpaper => wallpaper::keys(&app.wallpapers),
+            view::Page::System => vec![Hint::new("F2", "Rename…")],
             _ => Vec::new(),
         });
         window.set_hints(model(hints));
@@ -3183,11 +3213,9 @@ mod tests {
         assert_eq!(tab_to(&window, &nav_label(&window, "wifi")), 2);
         assert_eq!(tab_to(&window, "Settings"), 1);
         assert_eq!(tab_to(&window, "Airplane mode"), 1);
-        assert_eq!(tab_to(&window, "Change the hostname"), 1);
-        // After the sidebar, the page: the hero's button.
+        // After the sidebar, the page: the hero's button. (The hostname moved to System.)
         assert_eq!(tab_to(&window, "Add a connection"), 1);
 
-        press(&window, Key::Backtab);
         press(&window, Key::Backtab);
         assert!(ring_on(&window, "Airplane mode"));
         press(&window, " ");
@@ -3391,7 +3419,7 @@ mod tests {
         let window = window();
         let weak = window.as_weak();
         window.on_hostname_cancelled(move || weak.unwrap().set_hostname_open(false));
-        tab_to(&window, "Change the hostname");
+        tab_to(&window, "Airplane mode");
         window.set_hostname_input("thinkpad-x1".into());
         window.set_hostname_open(true);
         mock_elapsed_time(Duration::ZERO);
@@ -3410,7 +3438,7 @@ mod tests {
         press(&window, Key::Escape);
         assert!(!window.get_hostname_open());
         mock_elapsed_time(Duration::ZERO);
-        assert!(ring_on(&window, "Change the hostname"));
+        assert!(ring_on(&window, "Airplane mode"));
     }
 
     /// Tab and Shift+Tab go round a dialog's controls instead of on to the page behind it, and
