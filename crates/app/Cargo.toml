@@ -31,6 +31,8 @@ lituus-hypr.workspace = true
 lituus-keyring.workspace = true
 lituus-nm.workspace = true
 lituus-sound.workspace = true
+lituus-wallpaper.workspace = true
+image.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true

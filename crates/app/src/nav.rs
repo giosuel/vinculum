@@ -22,7 +22,7 @@ pub struct Entry {
     pub off: &'static str,
 }
 
-const GROUPS: [&str; 3] = ["CONNECTIONS", "DEVICES", LITUUS];
+const GROUPS: [&str; 4] = ["CONNECTIONS", "DEVICES", "DESKTOP", LITUUS];
 /// The group of the pages that are only listed while searching.
 pub const LITUUS: &str = "LITUUS";
 

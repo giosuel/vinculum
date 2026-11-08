@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/app", "crates/bt", "crates/cli", "crates/hypr", "crates/keyring", "crates/nm", "crates/sound", "xtask"]
+members = ["crates/app", "crates/bt", "crates/cli", "crates/hypr", "crates/keyring", "crates/nm", "crates/sound", "crates/wallpaper", "xtask"]
 
 [workspace.package]
 version = "0.0.0-dev"
@@ -28,6 +28,7 @@ lituus-hypr = { path = "crates/hypr" }
 lituus-keyring = { path = "crates/keyring" }
 lituus-nm = { path = "crates/nm" }
 lituus-sound = { path = "crates/sound" }
+lituus-wallpaper = { path = "crates/wallpaper" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 slint-build = "1.18.1"
 toml = "1.1.6"
@@ -35,6 +36,8 @@ toml_edit = { version = "0.25.15", default-features = false, features = ["parse"
 # The same runtime as Slint's own tray (async-io): ksni can't have both.
 ksni = { version = "0.3.6", default-features = false, features = ["async-io", "blocking"] }
 resvg = { version = "0.48.1", default-features = false }
+# Thumbnails of wallpapers: the formats awww and hyprpaper both show.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 
 [workspace.lints.rust]
 # deny, not forbid: Slint's generated code allows it locally.
@@ -42,3 +45,13 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Wallpapers' thumbnails take seconds each with unoptimised decoders: optimised in debug builds too.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3

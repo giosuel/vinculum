@@ -612,7 +612,7 @@ pub fn keys(state: &State) -> Vec<Hint> {
 }
 
 pub fn status(state: &State) -> String {
-    if has_list(state) { state.config.binds.len().to_string() } else { String::new() }
+    if has_list(state) && !state.config.binds.is_empty() { state.config.binds.len().to_string() } else { String::new() }
 }
 
 /// The main key: the modifier most binds use.

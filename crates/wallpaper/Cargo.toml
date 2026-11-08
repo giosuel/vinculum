@@ -1,0 +1,18 @@
+[package]
+name = "lituus-wallpaper"
+description = "Wallpapers through awww or hyprpaper: which is installed and running, the pictures shown, setting them, hyprpaper.conf, folders of pictures and their thumbnails"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+image.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

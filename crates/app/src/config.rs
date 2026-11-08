@@ -12,6 +12,43 @@ pub struct Config {
     pub notifications: NotificationsConfig,
     pub sound: SoundConfig,
     pub bluetooth: BluetoothConfig,
+    pub wallpaper: WallpaperConfig,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct WallpaperConfig {
+    /// The folder of pictures shown; empty: ~/Pictures/Wallpapers if there is one, else
+    /// ~/Pictures.
+    pub folder: String,
+    /// Folders shown before, the last first.
+    pub recent: Vec<String>,
+    /// The folder's subfolders' pictures shown with its own.
+    pub subfolders: bool,
+    /// "newest" or "name".
+    pub sort: String,
+    /// How a picture covers its monitor: "cover", "contain", "stretch", "center" or "tile".
+    pub fill: String,
+    /// The bars' colour around a picture that doesn't fill its monitor (awww), "rrggbb".
+    pub bar_colour: String,
+    /// awww's transition, and its length in seconds.
+    pub transition: String,
+    pub duration: f64,
+}
+
+impl Default for WallpaperConfig {
+    fn default() -> Self {
+        Self {
+            folder: String::new(),
+            recent: Vec::new(),
+            subfolders: false,
+            sort: "newest".into(),
+            fill: "cover".into(),
+            bar_colour: "000000".into(),
+            transition: "fade".into(),
+            duration: 1.5,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq)]

@@ -19,11 +19,12 @@ import { SendFilesDialog, IncomingFileDialog, FilesView, FileRow } from "files.s
 import { DisplaysPage, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeepDialog, ConfigDialog } from "displays.slint";
 import { SoundPage, SoundView, SoundApp, SoundCard } from "sound.slint";
 import { KeyboardPage, MousePage, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, AddLayoutDialog, OwnSettingsDialog } from "input.slint";
+import { WallpaperPage, WallpaperView, WallpaperTile, WallpaperMonitor, WallpaperTakeoverDialog } from "wallpaper.slint";
 import { ShortcutsPage, ShortcutsView, ShortcutRow, ShortcutDialog, ShortcutEditDialog, ShortcutDeleteDialog } from "shortcuts.slint";
 import { BluetoothPage, BtPage, BtSection, BtRow, BtPair, BtPairDialog, BtAdapterDialog, BtRenameDialog } from "bluetooth.slint";
 import { Editor, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi } from "editor.slint";
 
-export { Theme, Focus, Hint, FilesView, FileRow, ShortcutsView, ShortcutRow, ShortcutDialog, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
+export { Theme, Focus, Hint, FilesView, FileRow, WallpaperView, WallpaperTile, WallpaperMonitor, ShortcutsView, ShortcutRow, ShortcutDialog, DisplaysView, DragSnap, LayoutMonitor, WorkspaceRow, ProfileRow, KeyboardView, MouseView, InputRow, InputSection, PointerSetting, LayoutRow, InputBar, SoundView, SoundApp, SoundCard, ThemeSwatch, ColourChip, SourceRow, NavItem, NavGroup, HeroInfo, Action, Toggle, DetailItem, Chip, ChipRow, Details, BtPage, BtSection, BtRow, BtPair, QuickWindow, QuickRow, EditorForm, EditorErrors, EditorOptions, EditorTab, AddressRow, RouteRow, IpFormUi, EapFormUi, PeerRow, WgFormUi, OvpnFormUi, VirtFormUi, PortRowUi, PortCandidateUi }
 
 /// icon: "bars" (signal bars), or an icon name. tone: "accent", "danger", "muted", "faint".
 /// indent: a port under its bridge or bond, or a VLAN under its device.
@@ -145,6 +146,9 @@ export component MainWindow inherits Window {
     in property <MouseView> mouse;
     /// Everything done on them: (verb, argument, value).
     callback input-act(string, string, float);
+    in property <WallpaperView> wallpaper;
+    callback wallpaper-act(string, string, float);
+    property <int> wallpaper-search-requests;
     in property <ShortcutsView> shortcuts;
     callback shortcuts-act(string, string);
     property <int> shortcuts-search-requests;
@@ -309,9 +313,12 @@ export component MainWindow inherits Window {
     // the layout, and the heroes' heights on this.
     property <length> window-height: 760px;
     changed height => { root.window-height = root.height; }
-    init => { root.window-height = root.height; }
+    init => { root.window-height = root.height; root.window-width = root.width; }
     // A short window: the heroes are smaller, so the lists keep their room.
     property <bool> compact: root.window-height < 720px;
+    // The same for the width (changed, not bound: a page's layout depends on it).
+    property <length> window-width: 1200px;
+    changed width => { root.window-width = root.width; }
 
     title: "Lituus";
     icon: @image-url("assets/logo-mark.svg");
@@ -344,6 +351,7 @@ export component MainWindow inherits Window {
             if root.page == "keyboard" && event.modifiers.alt && event.text == Key.DownArrow { root.input-act("layout-down", "", 0); return accept; }
             if root.page == "keyboard" && event.text == Key.Delete { root.input-act("layout-remove-selected", "", 0); return accept; }
             if event.text == "/" && root.page == "shortcuts" { root.shortcuts-search-requests += 1; return accept; }
+            if event.text == "/" && root.page == "wallpaper" { root.wallpaper-search-requests += 1; return accept; }
             if event.text == "/" && root.show-search { root.search-focus-requests += 1; return accept; }
             if event.text == Key.DownArrow { root.follow-selection = true; root.move-selection(1); return accept; }
             if event.text == Key.UpArrow { root.follow-selection = true; root.move-selection(-1); return accept; }
@@ -731,6 +739,14 @@ export component MainWindow inherits Window {
                         view: root.mouse;
                         act(verb, arg, value) => { root.input-act(verb, arg, value); }
                     }
+                    if root.page == "wallpaper": WallpaperPage {
+                        vertical-stretch: 1;
+                        compact: root.compact;
+                        narrow: root.window-width < 1600px;
+                        view: root.wallpaper;
+                        search-requests: root.wallpaper-search-requests;
+                        act(verb, arg, value) => { root.wallpaper-act(verb, arg, value); }
+                    }
                     if root.page == "shortcuts": ShortcutsPage {
                         vertical-stretch: 1;
                         compact: root.compact;
@@ -848,7 +864,8 @@ export component MainWindow inherits Window {
         || root.bt-pair-open || root.bt-adapter-open || root.bt-rename-open || root.files.sending || root.files.incoming
         || (root.page == "displays" && (root.displays.keep-open || root.displays.config-open))
         || (root.page == "keyboard" && root.keyboard.add-open) || (root.page == "mouse" && root.mouse.own-open)
-        || (root.page == "shortcuts" && (root.shortcuts.dialog.open || root.shortcuts.deleting != ""));
+        || (root.page == "shortcuts" && (root.shortcuts.dialog.open || root.shortcuts.deleting != ""))
+        || (root.page == "wallpaper" && root.wallpaper.takeover);
     changed modal-open => { if !self.modal-open { keys.focus(); Focus.give-back(); } }
 
     // The control with the focus can go away (a dialog closes, a button isn't offered any more),
@@ -1120,6 +1137,9 @@ export component MainWindow inherits Window {
         x: 214px;
         y: sidebar.tip-y - 4px;
         text: sidebar.tip;
+    }
+    if root.page == "wallpaper" && root.wallpaper.takeover: WallpaperTakeoverDialog {
+        act(verb, arg, value) => { root.wallpaper-act(verb, arg, value); }
     }
     if root.page == "shortcuts" && root.shortcuts.dialog.open: ShortcutEditDialog {
         dialog: root.shortcuts.dialog;
