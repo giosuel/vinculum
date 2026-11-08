@@ -182,7 +182,7 @@ impl Env {
 
     /// Runs a command and gives what it printed, or why it failed.
     fn run(&self, command: &str, args: &[&str]) -> Result<String, Error> {
-        let out = self.command(command).args(args).output()?;
+        let out = busy_retry(|| self.command(command).args(args).output())?;
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
         if out.status.success() {
             Ok(text)
@@ -314,8 +314,20 @@ pub fn start(env: &Env, program: Program) -> Result<(), Error> {
     if env.find(program.daemon()).is_none() {
         return Err(Error::NotInstalled(program.name()));
     }
-    env.command(program.daemon()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    busy_retry(|| env.command(program.daemon()).stdout(Stdio::null()).stderr(Stdio::null()).spawn())?;
     Ok(())
+}
+
+/// Starts a command again while its file is busy (ETXTBSY): a script just written can't run for a
+/// moment while another thread forks (the tests' stand-ins).
+fn busy_retry<T>(mut run: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    for _ in 0..20 {
+        match run() {
+            Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            done => return done,
+        }
+    }
+    run()
 }
 
 /// Stops the program (to start the other).
@@ -325,6 +337,18 @@ pub fn stop(env: &Env, program: Program) -> Result<(), Error> {
         // hyprpaper has no command to stop it; its process goes by name, as Waypaper does it.
         Program::Hyprpaper => env.run("pkill", &["-x", "hyprpaper"]).map(|_| ()),
     }
+}
+
+/// The command to run after a picture changed, `{file}` replaced by its path (quoted for the
+/// shell): `matugen image {file}`.
+pub fn after_command(template: &str, file: &Path) -> String {
+    let quoted = format!("'{}'", file.display().to_string().replace('\'', "'\\''"));
+    template.replace("{file}", &quoted)
+}
+
+/// Runs the command after a change through the shell, and waits for it.
+pub fn run_after(env: &Env, template: &str, file: &Path) -> Result<(), Error> {
+    env.run("/bin/sh", &["-c", &after_command(template, file)]).map(|_| ())
 }
 
 /// The line that starts it with Hyprland, in Lua or in hyprlang.
@@ -446,6 +470,18 @@ mod tests {
             "hl.on(\"hyprland.start\", function() hl.exec_cmd(\"awww-daemon\") end)"
         );
         assert_eq!(autostart_line(Program::Hyprpaper, false), "exec-once = hyprpaper");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_command_after_a_change() {
+        let file = Path::new("/w/it's here.jpg");
+        assert_eq!(after_command("matugen image {file}", file), "matugen image '/w/it'\\''s here.jpg'");
+        let (env, d) = stand_ins("after", &[("matugen", "")]);
+        run_after(&env, "matugen image {file} && echo done > /dev/null", file).unwrap();
+        assert_eq!(calls(&d), ["matugen image /w/it's here.jpg"]);
+        let failed = run_after(&env, "echo 'no such scheme' >&2; exit 1", file);
+        assert!(matches!(failed, Err(Error::Refused(text)) if text == "no such scheme"));
         std::fs::remove_dir_all(&d).unwrap();
     }
 }

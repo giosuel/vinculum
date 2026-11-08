@@ -302,6 +302,17 @@ fn main() -> Result<(), slint::PlatformError> {
     displays::refresh(&window.as_weak());
     input::refresh(&window.as_weak());
     shortcuts::refresh(&window.as_weak());
+    // Lituus's slideshow (with awww): checks every 15 seconds whether the next picture is due.
+    APP.with(|app| wallpaper::init(&mut app.borrow_mut().wallpapers, background));
+    let weak = window.as_weak();
+    let slideshow = slint::Timer::default();
+    slideshow.start(slint::TimerMode::Repeated, Duration::from_secs(15), move || {
+        if APP.with(|app| wallpaper::due(&app.borrow().wallpapers, std::time::Instant::now())) {
+            let w = weak.clone();
+            update(&weak, |app| wallpaper::next(&w, &mut app.wallpapers));
+        }
+    });
+    std::mem::forget(slideshow);
     spawn_hyprland_watcher(window.as_weak());
     // The Displays page's countdown after Apply.
     let weak = window.as_weak();
@@ -1722,6 +1733,7 @@ fn render(window: &MainWindow) {
         let state = &mut *app;
         input::render(window, &mut state.input, state.bt.snapshot.as_ref());
         shortcuts::render(window, &app.shortcuts);
+        app.wallpapers.stays = app.wallpapers.background || (app.tray.is_some() && app.settings.keep_running);
         wallpaper::render(window, &app.wallpapers);
         let state = &mut *app;
         if let Some(snap) = &state.snapshot {
