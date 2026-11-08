@@ -352,6 +352,24 @@ pub fn modifier(text: &str) -> Option<&'static str> {
     })
 }
 
+/// The keysym Hyprland binds a key by, from the text Slint gives the key and the layout in use: a
+/// character by the key that types it on that layout (see keymap.rs), letters in capitals, keys
+/// without a character by their names ("Return", "left", "F5"). Without the layout, as `keysym`.
+pub fn key_by_layout(text: &str, keymap: Option<&crate::keymap::Keymap>) -> Option<String> {
+    let mut chars = text.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() || c.is_control() || c == ' ' || ('\u{F700}'..='\u{F8FF}').contains(&c) {
+        return keysym(text);
+    }
+    match keymap.and_then(|k| k.key_name(c)) {
+        Some(name) if name.len() == 1 && name.chars().all(|n| n.is_ascii_alphabetic()) => {
+            Some(name.to_ascii_uppercase())
+        }
+        Some(name) => Some(name),
+        None => keysym(text),
+    }
+}
+
 /// The keysym Hyprland binds a key by, from the text Slint gives the key: letters in capitals,
 /// keys without a character by their names ("Return", "left", "F5"). Hyprland matches the key's
 /// symbol without Shift, so a shifted symbol is named by its key, as on a US layout (Shift+1 is

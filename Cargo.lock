@@ -2696,6 +2696,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "x25519-dalek",
+ "xkbcommon",
  "zbus",
 ]
 

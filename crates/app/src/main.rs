@@ -19,6 +19,7 @@ mod hostnamed;
 mod hotspot;
 mod input;
 mod instance;
+mod keymap;
 mod nav;
 mod notify;
 mod openconnect;

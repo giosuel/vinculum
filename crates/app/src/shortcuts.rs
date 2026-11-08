@@ -14,6 +14,7 @@ use lituus_hypr::{
 use slint::{ModelRc, SharedString, VecModel};
 
 use crate::input::kept;
+use crate::keymap::Keymap;
 use crate::shortcut_edit::{self, DIRECTIONS, Field, Form, KINDS, Mine, SECTION};
 use crate::{HeroInfo, Hint, MainWindow, ShortcutDialog, ShortcutRow, ShortcutsView, update};
 
@@ -34,6 +35,8 @@ pub struct State {
     hypr: Option<Hyprland>,
     /// Hyprland's own shortcuts are paused while the dialog listens for keys.
     paused: bool,
+    /// The keyboard layout in use, read when the dialog starts listening: keys are named by it.
+    keymap: Option<Keymap>,
     pub query: String,
     pub dialog: Option<Dialog>,
     /// The bind of Lituus's own about to be deleted (an index into `mine`), once confirmed.
@@ -537,6 +540,12 @@ pub fn key_name(key: &str) -> String {
     }
     if let Some(rest) = key.strip_prefix("XF86") {
         return rest.to_owned();
+    }
+    // A symbol by what it types: "adiaeresis" is Ä, "ampersand" &.
+    if key.chars().count() > 1
+        && let Some(c) = crate::keymap::character(key)
+    {
+        return c.to_uppercase().collect();
     }
     if key.chars().count() == 1 { key.to_uppercase() } else { capitalised(key) }
 }
@@ -1244,6 +1253,16 @@ fn close(state: &mut State) {
     pause(state, false);
 }
 
+/// The layout of Hyprland's main keyboard now (it may have switched since the last time); the one
+/// read before if Hyprland doesn't say.
+fn read_keymap(state: &mut State) {
+    if let Some(keymap) =
+        state.hypr.as_ref().and_then(|h| h.devices().ok()).and_then(|d| d.main_keyboard().and_then(Keymap::of))
+    {
+        state.keymap = Some(keymap);
+    }
+}
+
 /// Pauses Hyprland's own shortcuts while the dialog listens for keys, or lets them work again.
 fn pause(state: &mut State, on: bool) {
     if state.paused == on {
@@ -1364,6 +1383,7 @@ fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &st
         "d-cancel" => close(state),
         "add" if state.editable() => {
             state.dialog = Some(Dialog { listening: true, ..Dialog::new(Target::New, Form::default()) });
+            read_keymap(state);
             pause(state, true);
         }
         "d-listen" => {
@@ -1371,12 +1391,14 @@ fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &st
                 d.listening = true;
                 d.held.clear();
                 d.unnamed = false;
+                read_keymap(state);
                 pause(state, true);
             }
         }
         // A key pressed while listening: its text and the modifiers held ("MS": Meta and Shift).
         "d-key" => {
             let (text, flags) = arg.split_once('\t').unwrap_or((arg, ""));
+            let key = shortcut_edit::key_by_layout(text, state.keymap.as_ref());
             let Some(d) = &mut state.dialog else { return };
             if let Some(m) = shortcut_edit::modifier(text) {
                 if !d.held.iter().any(|h| h == m) {
@@ -1384,7 +1406,7 @@ fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &st
                 }
                 return;
             }
-            match shortcut_edit::keysym(text) {
+            match key {
                 Some(key) => {
                     d.keys = Some((shortcut_edit::held(flags), key));
                     d.listening = false;
@@ -1655,6 +1677,26 @@ mod tests {
         let v = view(&state);
         assert!(v.not_loaded);
         assert_eq!(row(&v, "Open Foot").from, "Changed in Lituus");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// On a Swiss keyboard Shift+1 types "+": the shortcut is Super + Shift + 1, as Hyprland
+    /// matches it. ä is a key of its own there, and shows as Ä.
+    #[test]
+    fn keys_by_the_layout_in_use() {
+        let (mut state, d) = state_with("layout", "require(\"lituus\")\n", None);
+        act_with(None, &mut state, "add", "");
+        state.keymap = Keymap::new("ch", "", "");
+        let keys = |state: &State| state.dialog.as_ref().and_then(|d| d.keys.clone());
+        act_with(None, &mut state, "d-key", "+\tMS");
+        assert_eq!(keys(&state), Some((vec!["SUPER".to_owned(), "SHIFT".to_owned()], "1".to_owned())));
+        act_with(None, &mut state, "d-listen", "");
+        act_with(None, &mut state, "d-key", "ä\tM");
+        assert_eq!(keys(&state), Some((vec!["SUPER".to_owned()], "adiaeresis".to_owned())));
+        assert_eq!(key_name("adiaeresis"), "Ä");
+        act_with(None, &mut state, "d-listen", "");
+        act_with(None, &mut state, "d-key", "z\tM");
+        assert_eq!(keys(&state).unwrap().1, "Z");
         std::fs::remove_dir_all(&d).unwrap();
     }
 
