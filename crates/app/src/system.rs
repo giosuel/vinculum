@@ -24,8 +24,10 @@ pub struct Info {
     pub adapters: Vec<lituus_system::Adapter>,
     pub drives: Vec<Drive>,
     pub batteries: Vec<Battery>,
-    /// The pretty name (/etc/machine-info), if one is set.
+    /// The pretty name, if one is set, and the network (static) name, from hostnamed (else
+    /// /etc/machine-info, and NetworkManager's hostname).
     pub pretty: String,
+    pub network: String,
     /// Versions: Hyprland's (empty: not running), BlueZ's, PipeWire's, and the wallpaper program's.
     pub hyprland: String,
     pub bluez: String,
@@ -67,11 +69,18 @@ fn read_root(root: &Path) -> Info {
         .filter(|m| !m.disabled)
         .map(|m| if m.model.is_empty() { m.name } else { m.model })
         .collect();
-    let pretty = std::fs::read_to_string(root.join("etc/machine-info"))
-        .unwrap_or_default()
-        .lines()
-        .find_map(|l| l.strip_prefix("PRETTY_HOSTNAME=").map(|v| v.trim().trim_matches('"').to_owned()))
-        .unwrap_or_default();
+    let from_hostnamed =
+        tokio::runtime::Builder::new_current_thread().enable_all().build().ok().and_then(|rt| {
+            rt.block_on(async { crate::hostnamed::names(&zbus::Connection::system().await.ok()?).await })
+        });
+    let (pretty, network) = from_hostnamed.unwrap_or_else(|| {
+        let pretty = std::fs::read_to_string(root.join("etc/machine-info"))
+            .unwrap_or_default()
+            .lines()
+            .find_map(|l| l.strip_prefix("PRETTY_HOSTNAME=").map(|v| v.trim().trim_matches('"').to_owned()))
+            .unwrap_or_default();
+        (pretty, String::new())
+    });
     Info {
         os: lituus_system::os(root),
         kernel: lituus_system::kernel(root),
@@ -85,6 +94,7 @@ fn read_root(root: &Path) -> Info {
         drives: lituus_system::drives(root, &lituus_system::df()),
         batteries: lituus_system::batteries(root),
         pretty,
+        network,
         hyprland,
         bluez: lituus_system::version_of("bluetoothctl", &["--version"]).unwrap_or_default(),
         pipewire: lituus_system::version_of("pipewire", &["--version"]).unwrap_or_default(),
@@ -393,7 +403,7 @@ fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
 }
 
 pub fn status(state: &State) -> String {
-    state.hostname.clone()
+    state.info.as_ref().map(|i| i.network.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| state.hostname.clone())
 }
 
 /// The OS's logo, as an image (os-release names it; the file is in /usr/share/pixmaps).
@@ -409,8 +419,9 @@ pub fn view(state: &State) -> SystemView {
     };
     v.state = s("list");
     v.sub = s(info.uptime.map(|u| format!("Up {}", uptime_text(u))).unwrap_or_default());
-    v.name = s(if info.pretty.is_empty() { &state.hostname } else { &info.pretty });
-    v.hostname = s(&state.hostname);
+    let network = if info.network.is_empty() { &state.hostname } else { &info.network };
+    v.name = s(if info.pretty.is_empty() { network } else { &info.pretty });
+    v.hostname = s(network);
     v.pretty = !info.pretty.is_empty();
     v.line = s(device_line(info));
     v.logo = logo(info.os.logo_file.as_ref());

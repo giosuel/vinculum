@@ -220,6 +220,9 @@ export component MainWindow inherits Window {
     in property <bool> add-open;
     in property <bool> hostname-open;
     in-out property <string> hostname-input;
+    in-out property <string> hostname-name-input;
+    callback hostname-name-edited(string);
+    callback hostname-network-edited();
     in property <string> hostname-error;
     // The hotspot page.
     in property <bool> hotspot-available;
@@ -1073,28 +1076,48 @@ export component MainWindow inherits Window {
         }
     }
 
+    // The computer's two names: its name (any text) and its network name, suggested from the name
+    // until it's typed itself.
     if root.hostname-open: Modal {
-        card-width: 420px;
-        card-spacing: 12px;
-        label: "Hostname";
+        card-width: 560px;
+        card-spacing: 14px;
+        label: "Rename this computer";
         dismissed => { root.hostname-cancelled(); keys.focus(); }
-        Text { text: "Hostname"; color: Theme.text; font-size: 17px; font-weight: 600; }
-        Text { text: "The computer's name on the network. Changing it needs an admin password."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-        TextField {
-            text <=> root.hostname-input;
-            mono: true;
-            autofocus: true;
-            label: "Hostname";
-            invalid: root.hostname-error != "";
-            accepted => { if root.hostname-error == "" { root.hostname-save(); keys.focus(); } }
+        Text { text: "Rename this computer"; color: Theme.text; font-size: 17px; font-weight: 600; }
+        FormRow {
+            label: "Name";
+            TextField {
+                text <=> root.hostname-name-input;
+                autofocus: true;
+                label: "Name";
+                edited => { root.hostname-name-edited(self.text); }
+                accepted => { if root.hostname-error == "" { root.hostname-save(); keys.focus(); } }
+            }
+            Text { text: "What this page and Bluetooth devices show. Any words, such as Giosuel's desk."; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
         }
-        if root.hostname-error != "": Text { text: root.hostname-error; color: Theme.danger; font-size: 12px; }
+        FormRow {
+            label: "Network name";
+            TextField {
+                text <=> root.hostname-input;
+                mono: true;
+                label: "Network name";
+                invalid: root.hostname-error != "";
+                edited => { root.hostname-network-edited(); }
+                accepted => { if root.hostname-error == "" { root.hostname-save(); keys.focus(); } }
+            }
+            Text {
+                text: root.hostname-error != "" ? root.hostname-error : "What your router and other computers see: letters a–z, digits and hyphens.";
+                color: root.hostname-error != "" ? Theme.danger : Theme.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
         HorizontalLayout {
             padding-top: 6px;
             spacing: 8px;
-            alignment: end;
-            Button { label: "Cancel"; button-height: 36px; clicked => { root.hostname-cancelled(); keys.focus(); } }
-            Button { label: "Save"; kind: "primary"; button-height: 36px; enabled: root.hostname-error == ""; clicked => { root.hostname-save(); keys.focus(); } }
+            Text { text: "Saving asks for an admin password"; color: Theme.faint; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; }
+            Button { label: "Cancel"; button-height: 36px; horizontal-stretch: 0; clicked => { root.hostname-cancelled(); keys.focus(); } }
+            Button { label: "Save"; kind: "primary"; button-height: 36px; horizontal-stretch: 0; enabled: root.hostname-error == ""; clicked => { root.hostname-save(); keys.focus(); } }
         }
     }
 
