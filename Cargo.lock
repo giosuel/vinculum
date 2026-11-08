@@ -2682,6 +2682,7 @@ dependencies = [
  "lituus-keyring",
  "lituus-nm",
  "lituus-sound",
+ "lituus-system",
  "lituus-wallpaper",
  "pulseaudio",
  "qrcodegen",
@@ -2757,6 +2758,10 @@ dependencies = [
  "pulseaudio",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "lituus-system"
+version = "0.0.0-dev"
 
 [[package]]
 name = "lituus-wallpaper"

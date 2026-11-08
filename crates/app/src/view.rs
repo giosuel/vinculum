@@ -23,6 +23,7 @@ pub enum Page {
     Mouse,
     Shortcuts,
     Wallpaper,
+    System,
     Settings,
 }
 
@@ -40,6 +41,7 @@ impl Page {
             "mouse" => Self::Mouse,
             "shortcuts" => Self::Shortcuts,
             "wallpaper" => Self::Wallpaper,
+            "system" => Self::System,
             // Lituus's own look moved to Settings.
             "settings" | "appearance" => Self::Settings,
             _ => return None,
@@ -74,6 +76,7 @@ impl Page {
             Self::Mouse => "mouse",
             Self::Shortcuts => "shortcuts",
             Self::Wallpaper => "wallpaper",
+            Self::System => "system",
             Self::Settings => "settings",
         }
     }
@@ -383,6 +386,7 @@ pub fn build(snapshot: Option<&Snapshot>, error: Option<&str>, state: &UiState) 
         | Page::Mouse
         | Page::Shortcuts
         | Page::Wallpaper
+        | Page::System
         | Page::Settings => Vec::new(),
     };
     // Rows grouped by section title, the selection resolved, and the selected row's details.
@@ -456,6 +460,7 @@ fn page_title(page: Page) -> &'static str {
         Page::Mouse => "Mouse & touchpad",
         Page::Shortcuts => "Shortcuts",
         Page::Wallpaper => "Wallpaper",
+        Page::System => "System",
         Page::Settings => "Settings",
     }
 }

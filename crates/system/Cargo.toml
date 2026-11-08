@@ -1,0 +1,14 @@
+[package]
+name = "lituus-system"
+description = "This computer, read from /proc, /sys and os-release without root: the OS, the device and its firmware, processor, graphics, memory, network adapters, drives and battery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
