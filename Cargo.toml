@@ -38,6 +38,8 @@ toml_edit = { version = "0.25.15", default-features = false, features = ["parse"
 ksni = { version = "0.3.6", default-features = false, features = ["async-io", "blocking"] }
 resvg = { version = "0.48.1", default-features = false }
 # Thumbnails of wallpapers: the formats awww and hyprpaper both show.
+# The keyboard layout in use, for recording shortcuts by their keys.
+xkbcommon = { version = "0.9.0", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 
 [workspace.lints.rust]

@@ -34,6 +34,7 @@ lituus-sound.workspace = true
 lituus-system.workspace = true
 lituus-wallpaper.workspace = true
 image.workspace = true
+xkbcommon.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
@@ -55,7 +56,7 @@ extended-description = """\
 The settings app for Linux desktops that don't come with one, such as Hyprland. Network through \
 NetworkManager (Wi-Fi, wired, VPN, every connection setting), Bluetooth through BlueZ (pairing, \
 audio, files, a phone's internet), sound through PipeWire, and displays through Hyprland."""
-# $auto adds the libraries the binary links against; xkbcommon and EGL are loaded at runtime.
+# $auto adds the libraries the binary links against (xkbcommon among them); EGL is loaded at runtime.
 depends = "$auto, network-manager, libxkbcommon0, libegl1"
 # Optional: OpenVPN, Cisco AnyConnect, file dialogs (certificates, VPN files), and a keyring for "for me only".
 recommends = "xdg-desktop-portal, gnome-keyring | kwalletmanager, bluez, bluez-obexd, pipewire-pulse | pulseaudio"
