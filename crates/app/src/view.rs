@@ -1557,7 +1557,12 @@ pub enum Command {
         key: &'static str,
         value: SettingValue,
     },
-    SaveHostname(String),
+    /// The computer's name and network name (systemd-hostnamed; without it, NetworkManager sets
+    /// the network name).
+    SaveNames {
+        name: String,
+        network: String,
+    },
     /// The file dialog, for one of the editor's path fields.
     ChooseFile {
         field: String,

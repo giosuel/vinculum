@@ -15,6 +15,7 @@ mod displays;
 mod editing;
 mod editor;
 mod files;
+mod hostnamed;
 mod hotspot;
 mod input;
 mod instance;
@@ -163,6 +164,8 @@ struct App {
     share: Option<(String, String, String)>,
     hostname_open: bool,
     hostname_error: String,
+    /// The network name was typed, not suggested by the name.
+    hostname_edited: bool,
     /// config.toml's `[tray]` and `[notifications]`.
     settings: Settings,
     /// The tray icon, while a tray host shows it, and what it and the popup show.
@@ -986,24 +989,50 @@ fn connect_callbacks(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_hostname_clicked(move || {
         let Some(window) = weak.upgrade() else { return };
-        let hostname = APP.with(|app| app.borrow().snapshot.as_ref().map(|s| s.hostname.clone()).unwrap_or_default());
+        let (hostname, pretty) = APP.with(|app| {
+            let app = app.borrow();
+            let info = app.system.info.as_ref();
+            let from_nm = app.snapshot.as_ref().map(|s| s.hostname.clone()).unwrap_or_default();
+            let hostname = info.map(|i| i.network.clone()).filter(|n| !n.is_empty()).unwrap_or(from_nm);
+            let pretty = info.map(|i| i.pretty.clone()).unwrap_or_default();
+            (hostname, pretty)
+        });
+        window.set_hostname_name_input(if pretty.is_empty() { hostname.clone() } else { pretty }.into());
         window.set_hostname_input(hostname.into());
         update(&weak, |app| {
             app.hostname_open = true;
             app.hostname_error.clear();
+            // A network name that isn't what the name suggests was chosen: it's kept.
+            app.hostname_edited = false;
         });
+    });
+    let weak = window.as_weak();
+    window.on_hostname_name_edited(move |name| {
+        let Some(window) = weak.upgrade() else { return };
+        if !APP.with(|app| app.borrow().hostname_edited) {
+            window.set_hostname_input(hostnamed::network_name(&name).into());
+        }
+        update(&weak, |app| app.hostname_error.clear());
+    });
+    let weak = window.as_weak();
+    window.on_hostname_network_edited(move || {
+        update(&weak, |app| {
+            app.hostname_edited = true;
+            app.hostname_error.clear();
+        })
     });
     let weak = window.as_weak();
     window.on_hostname_cancelled(move || update(&weak, |app| app.hostname_open = false));
     let weak = window.as_weak();
     window.on_hostname_save(move || {
         let Some(window) = weak.upgrade() else { return };
-        let name = window.get_hostname_input().trim().to_owned();
-        update(&weak, |app| match hostname_problem(&name) {
+        let network = window.get_hostname_input().trim().to_owned();
+        let name = window.get_hostname_name_input().trim().to_owned();
+        update(&weak, |app| match hostnamed::network_name_problem(&network) {
             Some(problem) => app.hostname_error = problem.into(),
             None => {
                 app.hostname_open = false;
-                send(app, view::Command::SaveHostname(name));
+                send(app, view::Command::SaveNames { name, network });
             }
         });
     });
@@ -1090,20 +1119,6 @@ fn connect_callbacks(window: &MainWindow) {
             next_prompt(app);
         })
     });
-}
-
-/// What's wrong with a hostname: letters, digits and hyphens, in dot-separated labels.
-fn hostname_problem(name: &str) -> Option<&'static str> {
-    if name.is_empty() || name.len() > 64 {
-        return Some("From 1 to 64 characters.");
-    }
-    let label_ok = |l: &str| {
-        !l.is_empty()
-            && !l.starts_with('-')
-            && !l.ends_with('-')
-            && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-    };
-    if name.split('.').all(label_ok) { None } else { Some("Letters, digits and hyphens only, such as thinkpad-x1.") }
 }
 
 /// Goes to a page (a sidebar item's id); Network and Input open their sub-page used last.
@@ -2047,7 +2062,27 @@ async fn run(
             };
             return client.set_setting(connection, setting, key, value).await.map(|()| None);
         }
-        SaveHostname(name) => return client.save_hostname(name).await.map(|()| None),
+        SaveNames { name, network } => {
+            let result = match zbus::Connection::system().await {
+                Ok(conn) if hostnamed::available(&conn).await => hostnamed::set_names(&conn, name, network).await,
+                // No hostnamed (a system without systemd): NetworkManager sets the network name.
+                _ => client.save_hostname(&network.to_lowercase()).await.map_err(|e| e.to_string()),
+            };
+            let w = weak.clone();
+            let _ = weak.upgrade_in_event_loop(move |window| {
+                APP.with(|app| {
+                    if let Err(e) = result {
+                        let mut app = app.borrow_mut();
+                        app.message_title = "Couldn't rename the computer".into();
+                        app.message = Some((e, "danger"));
+                    }
+                });
+                render(&window);
+                // The System page shows the new name.
+                system::refresh(&w);
+            });
+            return Ok(None);
+        }
         ShareWifi { connection, name } => {
             let settings = client.settings(connection).await?;
             let secrets = client.secrets(connection, secrets::WIFI_SECURITY).await.unwrap_or_default();
@@ -2600,7 +2635,7 @@ fn report(weak: &slint::Weak<MainWindow>, command: &view::Command, error: &lituu
         OpenEditor { .. } | NewEnterprise { .. } => "Couldn't read the connection",
         SaveConnection { .. } => "Couldn't save the connection",
         SetSetting { .. } => "Couldn't change the connection",
-        SaveHostname(_) => "Couldn't change the hostname",
+        SaveNames { .. } => "Couldn't rename the computer",
         ChooseFile { .. } => "Couldn't open the file dialog",
         ImportFile => "Couldn't import the file",
         ExportWireGuard { .. } => "Couldn't export the configuration",
@@ -2931,11 +2966,11 @@ mod dialog_tests {
 
         esc(
             &|| {
-                window.set_hostname_input("thinkpad".into());
+                window.set_hostname_name_input("thinkpad".into());
                 window.set_hostname_open(true);
-                // The field has the keyboard, with its text selected.
+                // The name has the keyboard, with its text selected.
                 press(&window, "x");
-                assert_eq!(window.get_hostname_input(), "x");
+                assert_eq!(window.get_hostname_name_input(), "x");
             },
             "hostname-cancelled",
         );
@@ -3423,15 +3458,18 @@ mod tests {
         window.set_hostname_input("thinkpad-x1".into());
         window.set_hostname_open(true);
         mock_elapsed_time(Duration::ZERO);
-        // The field has the focus; Tab goes to the buttons and round.
+        // The name has the focus; Tab goes to the network name, the buttons, and round.
+        press(&window, Key::Tab);
         press(&window, Key::Tab);
         assert!(ring_on(&window, "Cancel"));
         press(&window, Key::Tab);
         assert!(ring_on(&window, "Save"));
         press(&window, Key::Tab);
         press(&window, Key::Tab);
+        press(&window, Key::Tab);
         assert!(ring_on(&window, "Cancel"));
-        // Back past the field, round to the last button.
+        // Back past the two fields, round to the last button.
+        press(&window, Key::Backtab);
         press(&window, Key::Backtab);
         press(&window, Key::Backtab);
         assert!(ring_on(&window, "Save"));

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs a command against a mock NetworkManager on a private bus, with the networks from the
-# mockups (connected to "Lumen Home", a few others in range, an unplugged Ethernet port), and a
-# mock BlueZ with the mockups' Bluetooth devices (MOCK_BLUEZ=0 leaves it out):
+# mockups (connected to "Lumen Home", a few others in range, an unplugged Ethernet port), a mock
+# BlueZ with the mockups' Bluetooth devices (MOCK_BLUEZ=0 leaves it out), and a mock hostnamed:
 #   scripts/mock-nm.sh lituus-cli list
 #   scripts/mock-nm.sh target/debug/lituus
 # The command sees the mock as its system bus; the real one is never touched. Needs dbus-daemon
@@ -123,6 +123,25 @@ for name in self.connection.list_names():
 '
   gdbus call --session -d org.bluez -o / -m org.freedesktop.DBus.Mock.AddMethod \
     org.freedesktop.DBus.Mock.Test AskAgent ssav '' "$ask_agent" >/dev/null
+fi
+# A systemd-hostnamed that keeps the names it's given (MOCK_HOSTNAMED=0 leaves it out), for
+# renaming the computer on the System page.
+if [ "${MOCK_HOSTNAMED:-1}" != 0 ]; then
+  "$python" -m dbusmock --session org.freedesktop.hostname1 /org/freedesktop/hostname1 org.freedesktop.hostname1 \
+    >>"${MOCK_NM_LOG:-/dev/null}" 2>&1 &
+  hostnamed=$!
+  trap 'kill $mock ${bluez:-} $hostnamed 2>/dev/null' EXIT
+  for _ in $(seq 100); do
+    gdbus introspect --session -d org.freedesktop.hostname1 -o /org/freedesktop/hostname1 >/dev/null 2>&1 && break
+    sleep 0.05
+  done
+  hn() { gdbus call --session -d org.freedesktop.hostname1 -o /org/freedesktop/hostname1 -m "$@" >/dev/null; }
+  hn org.freedesktop.DBus.Mock.AddProperties org.freedesktop.hostname1 \
+    "{'Hostname': <'thinkpad-x1'>, 'StaticHostname': <'thinkpad-x1'>, 'PrettyHostname': <''>}"
+  hn org.freedesktop.DBus.Mock.AddMethod org.freedesktop.hostname1 SetStaticHostname sb '' \
+    'self.UpdateProperties("org.freedesktop.hostname1", {"StaticHostname": args[0], "Hostname": args[0]})'
+  hn org.freedesktop.DBus.Mock.AddMethod org.freedesktop.hostname1 SetPrettyHostname sb '' \
+    'self.UpdateProperties("org.freedesktop.hostname1", {"PrettyHostname": args[0]})'
 fi
 mock_bus="$DBUS_SESSION_BUS_ADDRESS"
 [ -n "${MOCK_NM_ADDRESS_FILE:-}" ] && echo "$mock_bus" > "$MOCK_NM_ADDRESS_FILE"
