@@ -1,15 +1,21 @@
 //! The Wallpaper page (Desktop › Wallpaper), following the "Wallpaper" mockups: the monitors and
 //! the pictures they show in the hero, a folder's pictures in a grid (a click sets one), and one
 //! card of settings beside it: which monitors a click sets, how the picture fills them, awww's
-//! transition, and the program (awww or hyprpaper, lituus-wallpaper).
+//! transition, the slideshow, and the program (awww or hyprpaper, lituus-wallpaper) with a command
+//! to run after each change.
 //!
 //! awww's daemon shows the last pictures again by itself after a restart; hyprpaper forgets what
 //! it's told, so Lituus also writes hyprpaper.conf, asking once when there is one already and
 //! keeping it as hyprpaper.conf.bak.
+//!
+//! The slideshow: hyprpaper has its own (a folder in hyprpaper.conf, read when it starts, so
+//! Lituus restarts it); with awww, Lituus's own process changes the picture, while it runs (in the
+//! background, or the tray).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use lituus_wallpaper::{Env, Fill, Folder, HyprpaperEntry, Program, Set, Status, TRANSITIONS};
 use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
@@ -22,6 +28,17 @@ const THUMB: (u32, u32) = (384, 216);
 
 /// Lituus's mark in hyprpaper.conf: the file is Lituus's to write (asked once).
 const MARK: &str = "# Lituus writes the wallpaper blocks in this file; the rest of it is yours.";
+
+/// The slideshow's choices, in minutes.
+const EVERY: [u32; 8] = [5, 10, 15, 30, 60, 120, 360, 1440];
+
+/// What waits for the answer to taking over hyprpaper.conf: pictures to set (and whether the
+/// command after a change runs), or hyprpaper's slideshow.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Pending {
+    Pictures(Vec<Set>, bool),
+    Slideshow,
+}
 
 /// A monitor, as the hero draws it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -52,9 +69,16 @@ pub struct State {
     pub query: String,
     /// What a click sets: 0 all monitors, else that monitor (1-based).
     target: usize,
-    /// A picture waiting for the answer to taking over hyprpaper.conf.
-    pub takeover: Option<Set>,
+    /// Waiting for the answer to taking over hyprpaper.conf.
+    pub takeover: Option<Pending>,
     message: Option<String>,
+    /// When Lituus last set a picture (the slideshow waits its time from then), and whether its
+    /// next one is being set.
+    last_change: Option<Instant>,
+    changing: bool,
+    /// Lituus started in the background; it keeps running when the window closes (`stays`).
+    pub background: bool,
+    pub stays: bool,
     /// Where things are, if not the usual places (tests).
     env: Option<Env>,
     config_path: Option<PathBuf>,
@@ -300,35 +324,82 @@ fn needs_takeover(state: &State) -> bool {
         .is_ok_and(|text| !text.contains(MARK) && !text.trim().is_empty())
 }
 
-/// Sets a picture, at once, on a thread; with hyprpaper, hyprpaper.conf too (after asking once).
-fn set_picture(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, set: Set) {
+/// Sets pictures, at once and in turn, on a thread; with hyprpaper, hyprpaper.conf too (after
+/// asking once). `after`: the command after a change runs, with the last picture.
+fn set_picture(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, mut sets: Vec<Set>, after: bool) {
     let Some(program) = state.program() else { return };
     if program == Program::Hyprpaper && needs_takeover(state) {
-        state.takeover = Some(set);
+        state.takeover = Some(Pending::Pictures(sets, after));
         return;
     }
-    let env = state.env();
     let monitors: Vec<String> = state.monitors.iter().map(|m| m.name.clone()).collect();
+    if program == Program::Hyprpaper && state.settings.slideshow {
+        // hyprpaper's slideshow stops on a monitor told a picture: it ends on every monitor, the
+        // others keeping the picture they show.
+        state.settings.slideshow = false;
+        save(state, "slideshow", false);
+        let set: Vec<String> = sets.iter().flat_map(|s| s.monitors.clone()).collect();
+        let all = sets.iter().any(|s| s.monitors.is_empty());
+        let mut kept: Vec<Set> = state
+            .current
+            .clone()
+            .into_iter()
+            .filter(|(m, _)| !all && !set.contains(m))
+            .map(|(m, path)| Set { monitors: vec![m], transition: String::new(), ..set_for(state, path) })
+            .collect();
+        kept.append(&mut sets);
+        sets = kept;
+    }
+    state.last_change = Some(Instant::now());
     let conf = (program == Program::Hyprpaper).then(|| {
         // Every monitor set gets its block; the others keep theirs.
-        let names = if set.monitors.is_empty() { monitors.clone() } else { set.monitors.clone() };
-        let entries: Vec<HyprpaperEntry> = names
-            .into_iter()
-            .map(|monitor| HyprpaperEntry {
-                monitor,
-                path: set.path.display().to_string(),
-                fit_mode: lituus_wallpaper::hyprpaper_fit_mode(set.fill).to_owned(),
-            })
-            .collect();
+        let mut entries: Vec<HyprpaperEntry> = Vec::new();
+        for set in &sets {
+            let names = if set.monitors.is_empty() { monitors.clone() } else { set.monitors.clone() };
+            for monitor in names {
+                entries.retain(|e| e.monitor != monitor);
+                entries.push(HyprpaperEntry::picture(
+                    &monitor,
+                    &set.path.display().to_string(),
+                    lituus_wallpaper::hyprpaper_fit_mode(set.fill),
+                ));
+            }
+        }
         (lituus_wallpaper::hyprpaper_conf(&state.hypr_dir()), entries)
     });
+    let after = if after { state.settings.after.trim().to_owned() } else { String::new() };
+    let env = state.env();
     let work = move || -> Result<(), String> {
-        lituus_wallpaper::set(&env, program, &set, &monitors).map_err(|e| format!("Couldn't set the picture: {e}."))?;
+        for set in &sets {
+            lituus_wallpaper::set(&env, program, set, &monitors)
+                .map_err(|e| format!("Couldn't set the picture: {e}."))?;
+        }
         if let Some((path, entries)) = conf {
             write_conf(&path, &entries).map_err(|e| format!("Set, but hyprpaper.conf couldn't be saved: {e}."))?;
         }
-        Ok(())
+        run_after(&env, &after, sets.last().map(|s| s.path.as_path()))
     };
+    run(weak, state, work);
+}
+
+/// Runs the command after a change, if there is one.
+fn run_after(env: &Env, after: &str, file: Option<&Path>) -> Result<(), String> {
+    match file {
+        Some(file) if !after.is_empty() => lituus_wallpaper::run_after(env, after, file).map_err(|e| match e {
+            lituus_wallpaper::Error::Refused(text) if text.is_empty() => "Set, but the command after it failed.".into(),
+            e => format!("Set, but the command after it failed: {e}"),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Does `work` on a thread, then shows its failure, if any, and reads what's shown again; in
+/// tests (no window), at once.
+fn run(
+    weak: Option<&slint::Weak<MainWindow>>,
+    state: &mut State,
+    work: impl FnOnce() -> Result<(), String> + Send + 'static,
+) {
     match weak {
         Some(weak) => {
             let weak = weak.clone();
@@ -340,6 +411,138 @@ fn set_picture(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, set: S
             });
         }
         None => state.message = work().err(),
+    }
+}
+
+// ---- the slideshow -----------------------------------------------------------------------------
+
+/// The settings from config.toml, when Lituus starts: the slideshow waits its time from then.
+pub fn init(state: &mut State, background: bool) {
+    state.settings = config::load(&state.config_path()).wallpaper;
+    state.background = background;
+    state.last_change = Some(Instant::now());
+}
+
+/// The slideshow's next picture is due (Lituus's own, for awww: whether awww runs is read then).
+pub fn due(state: &State, now: Instant) -> bool {
+    let every = Duration::from_secs(u64::from(state.settings.every.max(1)) * 60);
+    state.settings.slideshow
+        && !state.changing
+        && !(state.read && state.program() == Some(Program::Hyprpaper))
+        && state.last_change.is_none_or(|t| now.duration_since(t) >= every)
+}
+
+/// The slideshow's next picture, on a thread.
+pub fn next(weak: &slint::Weak<MainWindow>, state: &mut State) {
+    state.changing = true;
+    state.last_change = Some(Instant::now());
+    let mut job = State {
+        settings: state.settings.clone(),
+        env: state.env.clone(),
+        config_path: state.config_path.clone(),
+        hypr_dir: state.hypr_dir.clone(),
+        home: state.home.clone(),
+        ..Default::default()
+    };
+    let weak = weak.clone();
+    std::thread::spawn(move || {
+        let done = next_picture(&mut job);
+        let w = weak.clone();
+        let _ = weak.upgrade_in_event_loop(move |_| {
+            update(&w, move |app| {
+                app.wallpapers.changing = false;
+                if let Err(e) = done {
+                    app.wallpapers.message = Some(e);
+                }
+            })
+        });
+        refresh(&weak);
+    });
+}
+
+/// Reads what runs and is shown, and with awww sets the folder's next picture on every monitor.
+fn next_picture(job: &mut State) -> Result<(), String> {
+    let env = job.env();
+    loaded(job, read(&env));
+    if job.program() != Some(Program::Awww) {
+        return Ok(());
+    }
+    let pictures = sorted(&job.folder_path(), &job.settings)?;
+    let now = job.current.first().map(|(_, p)| p.clone());
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    let Some(path) = following(&pictures, now.as_deref(), job.settings.order != "in-order", seed as usize) else {
+        return Ok(());
+    };
+    job.target = 0;
+    let set = set_for(job, path);
+    lituus_wallpaper::set(&env, Program::Awww, &set, &[]).map_err(|e| format!("Couldn't set the picture: {e}."))?;
+    run_after(&env, job.settings.after.trim(), Some(&set.path))
+}
+
+/// The folder's pictures in the grid's order.
+fn sorted(dir: &Path, settings: &WallpaperConfig) -> Result<Vec<PathBuf>, String> {
+    let folder =
+        lituus_wallpaper::read_folder(dir, settings.subfolders).map_err(|e| format!("{}: {e}.", dir.display()))?;
+    let mut pictures = folder.pictures;
+    if settings.sort != "name" {
+        pictures.sort_by_key(|p| std::cmp::Reverse(p.modified));
+    }
+    Ok(pictures.into_iter().map(|p| p.path).collect())
+}
+
+/// The picture after `now`: the next one in order, or any other one (`seed`) when shuffled.
+fn following(pictures: &[PathBuf], now: Option<&Path>, shuffle: bool, seed: usize) -> Option<PathBuf> {
+    let at = now.and_then(|n| pictures.iter().position(|p| p == n));
+    if shuffle {
+        let others: Vec<&PathBuf> =
+            pictures.iter().enumerate().filter(|(i, _)| Some(*i) != at).map(|(_, p)| p).collect();
+        let pool = if others.is_empty() { pictures.iter().collect() } else { others };
+        return pool.get(seed % pool.len().max(1)).map(|p| (*p).clone());
+    }
+    pictures.get(at.map_or(0, |i| (i + 1) % pictures.len())).cloned()
+}
+
+/// hyprpaper's slideshow: the folder on every monitor in hyprpaper.conf, which hyprpaper reads
+/// when it starts, so it's started again.
+fn hyprpaper_slideshow(weak: Option<&slint::Weak<MainWindow>>, state: &mut State) {
+    if needs_takeover(state) {
+        state.takeover = Some(Pending::Slideshow);
+        return;
+    }
+    let mut names: Vec<String> = state.monitors.iter().map(|m| m.name.clone()).collect();
+    if names.is_empty() {
+        names = state.current.iter().map(|(m, _)| m.clone()).collect();
+    }
+    let folder = state.folder_path().display().to_string();
+    let entries: Vec<HyprpaperEntry> = names
+        .iter()
+        .map(|m| HyprpaperEntry {
+            timeout: state.settings.every.max(1) * 60,
+            order: if state.settings.order == "in-order" { "default" } else { "random-shuffle" }.into(),
+            recursive: state.settings.subfolders,
+            ..HyprpaperEntry::picture(m, &folder, lituus_wallpaper::hyprpaper_fit_mode(state.fill()))
+        })
+        .collect();
+    let path = lituus_wallpaper::hyprpaper_conf(&state.hypr_dir());
+    let env = state.env();
+    let wait = weak.is_some();
+    let work = move || -> Result<(), String> {
+        write_conf(&path, &entries).map_err(|e| format!("hyprpaper.conf couldn't be saved: {e}."))?;
+        let _ = lituus_wallpaper::stop(&env, Program::Hyprpaper);
+        if wait {
+            // Gone before the next one opens its socket.
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        lituus_wallpaper::start(&env, Program::Hyprpaper).map_err(|e| format!("Couldn't start hyprpaper again: {e}."))
+    };
+    run(weak, state, work);
+}
+
+/// A slideshow setting changed: hyprpaper's is written and started again; Lituus's own takes it
+/// from its next picture.
+fn slideshow_changed(weak: Option<&slint::Weak<MainWindow>>, state: &mut State) {
+    if state.settings.slideshow && state.program() == Some(Program::Hyprpaper) {
+        hyprpaper_slideshow(weak, state);
     }
 }
 
@@ -638,6 +841,27 @@ pub fn view(state: &State) -> WallpaperView {
             format!("Saved in {}", shorten(&lituus_wallpaper::hyprpaper_conf(&state.hypr_dir()), &home))
         }
     });
+    v.slideshow = state.settings.slideshow;
+    v.slideshow_note = s(match program {
+        Program::Hyprpaper => "hyprpaper does it by itself, also when Lituus is closed",
+        Program::Awww if state.stays => "Lituus does it while it runs in the background",
+        Program::Awww => "Only while Lituus is open; lituus --background keeps it going",
+    });
+    v.everys = strings(EVERY.iter().map(|m| match m {
+        1440 => "1 day".to_owned(),
+        60 => "1 hour".to_owned(),
+        m if m % 60 == 0 => format!("{} hours", m / 60),
+        m => format!("{m} minutes"),
+    }));
+    v.every = EVERY.iter().position(|m| *m == state.settings.every).unwrap_or(3) as i32;
+    v.orders = strings(["Shuffle".to_owned(), "In order".to_owned()]);
+    v.order = i32::from(state.settings.order == "in-order");
+    v.after = s(&state.settings.after);
+    v.after_note = s(if program == Program::Hyprpaper && state.settings.slideshow {
+        "{file} is the picture. Not for hyprpaper's slideshow, which changes them by itself"
+    } else {
+        "{file} is the picture"
+    });
     v.message = s(state.message.clone().unwrap_or_default());
     v.takeover = state.takeover.is_some();
     v
@@ -661,7 +885,7 @@ fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &st
         "set" => {
             let path = PathBuf::from(arg);
             let set = set_for(state, path);
-            set_picture(weak, state, set);
+            set_picture(weak, state, vec![set], true);
         }
         "random" => {
             let pictures: Vec<PathBuf> =
@@ -674,7 +898,7 @@ fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &st
                 let seed =
                     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
                 let set = set_for(state, pool[seed as usize % pool.len()].clone());
-                set_picture(weak, state, set);
+                set_picture(weak, state, vec![set], true);
             }
         }
         "folder" => {
@@ -695,6 +919,7 @@ fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &st
             } else {
                 state.folder = lituus_wallpaper::read_folder(&state.folder_path(), state.settings.subfolders).ok();
             }
+            slideshow_changed(weak, state);
         }
         "choose-folder" => {
             if let Some(weak) = weak {
@@ -710,6 +935,7 @@ fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &st
                     state.folder = lituus_wallpaper::read_folder(&state.folder_path(), state.settings.subfolders).ok()
                 }
             }
+            slideshow_changed(weak, state);
         }
         "query" => state.query = arg.to_owned(),
         "sort" => {
@@ -744,6 +970,41 @@ fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &st
             state.settings.duration = (f64::from(value) * 10.0).round() / 10.0;
             save(state, "duration", state.settings.duration);
         }
+        "slideshow" => {
+            state.settings.slideshow = !state.settings.slideshow;
+            save(state, "slideshow", state.settings.slideshow);
+            state.last_change = Some(Instant::now());
+            if state.program() == Some(Program::Hyprpaper) {
+                if state.settings.slideshow {
+                    hyprpaper_slideshow(weak, state);
+                } else {
+                    // Each monitor keeps the picture it shows now.
+                    let sets = state
+                        .current
+                        .clone()
+                        .into_iter()
+                        .map(|(m, path)| Set { monitors: vec![m], transition: String::new(), ..set_for(state, path) })
+                        .collect();
+                    set_picture(weak, state, sets, false);
+                }
+            }
+        }
+        "every" => {
+            if let Some(every) = EVERY.get(index) {
+                state.settings.every = *every;
+                save(state, "every", i64::from(*every));
+                slideshow_changed(weak, state);
+            }
+        }
+        "order" => {
+            state.settings.order = if index == 1 { "in-order".into() } else { "shuffle".into() };
+            save(state, "order", state.settings.order.clone());
+            slideshow_changed(weak, state);
+        }
+        "after" => {
+            state.settings.after = arg.trim().to_owned();
+            save(state, "after", state.settings.after.clone());
+        }
         "program" => {
             if let Some(p) = state.status.installed.get(index).copied() {
                 switch(weak, state, p);
@@ -762,35 +1023,41 @@ fn act_with(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, verb: &st
             }
         }
         "takeover-yes" => {
-            if let Some(set) = state.takeover.take() {
-                match take_over(state) {
-                    Ok(()) => set_picture(weak, state, set),
-                    Err(e) => {
+            if let Some(pending) = state.takeover.take() {
+                match (take_over(state), pending) {
+                    (Ok(()), Pending::Pictures(sets, after)) => set_picture(weak, state, sets, after),
+                    (Ok(()), Pending::Slideshow) => hyprpaper_slideshow(weak, state),
+                    (Err(e), _) => {
                         state.message = Some(format!("hyprpaper.conf couldn't be kept as hyprpaper.conf.bak: {e}."))
                     }
                 }
             }
         }
-        "takeover-no" => state.takeover = None,
+        "takeover-no" => {
+            // The slideshow needs the file; without it, it stays off.
+            let pending = state.takeover.take();
+            if pending == Some(Pending::Slideshow) {
+                state.settings.slideshow = false;
+                save(state, "slideshow", false);
+            }
+        }
         _ => {}
     }
 }
 
 /// The pictures shown, set again (a new fill or bar colour), each on its monitor.
 fn reapply(weak: Option<&slint::Weak<MainWindow>>, state: &mut State) {
-    let current = state.current.clone();
-    let target = state.target;
-    for (monitor, path) in current {
-        state.target = state.monitors.iter().position(|m| m.name == monitor).map_or(0, |i| i + 1);
-        if state.target == 0 && !state.monitors.is_empty() {
-            continue;
-        }
-        let mut set = set_for(state, path);
-        set.monitors = vec![monitor];
-        set.transition.clear();
-        set_picture(weak, state, set);
+    if state.settings.slideshow && state.program() == Some(Program::Hyprpaper) {
+        return hyprpaper_slideshow(weak, state);
     }
-    state.target = target;
+    let sets: Vec<Set> = state
+        .current
+        .clone()
+        .into_iter()
+        .filter(|(m, _)| state.monitors.is_empty() || state.monitors.iter().any(|x| x.name == *m))
+        .map(|(m, path)| Set { monitors: vec![m], transition: String::new(), ..set_for(state, path) })
+        .collect();
+    set_picture(weak, state, sets, false);
 }
 
 /// Stops the program running and starts `to`, then shows the same pictures with it.
@@ -1024,6 +1291,129 @@ mod tests {
         render(&window, &state);
         assert!(has("fjord.png, On DP-3"));
         assert!(!has("alps.png, On DP-3"));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// A stand-in command in the test's folder, recording its calls as the others do.
+    fn stand_in(d: &Path, command: &str, body: &str) {
+        let p = d.join("bin").join(command);
+        std::fs::write(&p, format!("#!/bin/sh\necho \"{command} $*\" >> {}/calls\n{body}\n", d.display())).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn the_next_picture() {
+        let p: Vec<PathBuf> = ["/a.png", "/b.png", "/c.png"].iter().map(PathBuf::from).collect();
+        assert_eq!(following(&p, Some(Path::new("/b.png")), false, 0), Some(p[2].clone()));
+        assert_eq!(following(&p, Some(Path::new("/c.png")), false, 0), Some(p[0].clone()));
+        assert_eq!(following(&p, Some(Path::new("/elsewhere.png")), false, 0), Some(p[0].clone()));
+        // Shuffled: never the one shown, unless it's the only one.
+        for seed in 0..6 {
+            assert_ne!(following(&p, Some(Path::new("/b.png")), true, seed), Some(p[1].clone()));
+        }
+        assert_eq!(following(&p[..1], Some(Path::new("/a.png")), true, 3), Some(p[0].clone()));
+        assert_eq!(following(&[], None, true, 3), None);
+    }
+
+    /// With awww, Lituus's slideshow sets the folder's next picture on every monitor, and runs the
+    /// command after a change; a click runs it too, and the slideshow waits its time from then.
+    #[test]
+    fn the_slideshow_with_awww() {
+        use slint::Model;
+        let (mut state, d) = state_in("show-awww", Some(Program::Awww));
+        stand_in(&d, "matugen", "");
+        act_with(None, &mut state, "sort", "", 1.0);
+        act_with(None, &mut state, "order", "", 1.0);
+        act_with(None, &mut state, "every", "", 4.0);
+        act_with(None, &mut state, "after", "  matugen image {file} ", 0.0);
+        act_with(None, &mut state, "slideshow", "", 0.0);
+        let saved = config::load(&state.config_path()).wallpaper;
+        assert_eq!(
+            (saved.slideshow, saved.every, saved.order.as_str(), saved.after.as_str()),
+            (true, 60, "in-order", "matugen image {file}")
+        );
+        let v = view(&state);
+        assert_eq!((v.every, v.order, v.everys.row_data(4).unwrap().as_str()), (4, 1, "1 hour"));
+        assert_eq!(v.slideshow_note, "Only while Lituus is open; lituus --background keeps it going");
+        // Not yet: an hour from the switch.
+        let now = Instant::now();
+        assert!(!due(&state, now));
+        assert!(due(&state, now + Duration::from_secs(3601)));
+        // alps.png is shown; in order by name, fjord.png is next.
+        let mut job = State { settings: state.settings.clone(), ..Default::default() };
+        job.env = state.env.clone();
+        job.home = state.home.clone();
+        next_picture(&mut job).unwrap();
+        let fjord = state.folder_path().join("fjord.png");
+        let c = calls(&d);
+        assert!(
+            c.contains(&format!(
+                "awww img {} --resize crop --transition-type fade --transition-duration 1.5",
+                fjord.display()
+            )),
+            "{c:?}"
+        );
+        assert_eq!(c.last().unwrap(), &format!("matugen image {}", fjord.display()));
+        // A click runs it with that picture.
+        let alps = state.folder_path().join("alps.png");
+        act_with(None, &mut state, "set", &alps.display().to_string(), 0.0);
+        assert_eq!(calls(&d).last().unwrap(), &format!("matugen image {}", alps.display()));
+        assert!(state.last_change.unwrap() > now);
+        // A command that fails says so.
+        act_with(None, &mut state, "after", "false", 0.0);
+        act_with(None, &mut state, "set", &alps.display().to_string(), 0.0);
+        assert!(view(&state).message.starts_with("Set, but the command after it failed"), "{}", view(&state).message);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// hyprpaper has its own slideshow: the folder in hyprpaper.conf, and hyprpaper started again
+    /// to read it. A click on a picture ends it.
+    #[test]
+    fn the_slideshow_with_hyprpaper() {
+        use slint::Model;
+        let (mut state, d) = state_in("show-hyprpaper", Some(Program::Hyprpaper));
+        stand_in(&d, "pkill", "");
+        let conf = d.join("hypr/hyprpaper.conf");
+        act_with(None, &mut state, "slideshow", "", 0.0);
+        let entries = lituus_wallpaper::hyprpaper_entries(&std::fs::read_to_string(&conf).unwrap());
+        let folder = state.folder_path().display().to_string();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            (entries[1].monitor.as_str(), entries[1].path.as_str(), entries[1].timeout, entries[1].order.as_str()),
+            ("DP-5", folder.as_str(), 1800, "random-shuffle")
+        );
+        // hyprpaper starts on its own; its call comes when it's up.
+        for _ in 0..50 {
+            if calls(&d).last().is_some_and(|c| c == "hyprpaper ") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        let c = calls(&d);
+        assert_eq!(c[c.len() - 2..], ["pkill -x hyprpaper".to_owned(), "hyprpaper ".to_owned()]);
+        assert!(!due(&state, Instant::now() + Duration::from_secs(7200)), "hyprpaper does it itself");
+        assert_eq!(view(&state).slideshow_note, "hyprpaper does it by itself, also when Lituus is closed");
+        // A new order: written and started again.
+        act_with(None, &mut state, "order", "", 1.0);
+        let entries = lituus_wallpaper::hyprpaper_entries(&std::fs::read_to_string(&conf).unwrap());
+        assert_eq!(entries[0].order, "default");
+        // A picture on DP-5: the slideshow ends; DP-3 keeps the picture it shows.
+        state.current =
+            vec![("DP-3".into(), PathBuf::from("/w/now.png")), ("DP-5".into(), PathBuf::from("/w/then.png"))];
+        act_with(None, &mut state, "target", "", 2.0);
+        let alps = state.folder_path().join("alps.png");
+        act_with(None, &mut state, "set", &alps.display().to_string(), 0.0);
+        assert!(!view(&state).slideshow && !config::load(&state.config_path()).wallpaper.slideshow);
+        let text = std::fs::read_to_string(&conf).unwrap();
+        let entries = lituus_wallpaper::hyprpaper_entries(&text);
+        assert!(entries.iter().all(|e| e.timeout == 0), "{text}");
+        assert_eq!(
+            entries.iter().map(|e| (e.monitor.clone(), e.path.clone())).collect::<Vec<_>>(),
+            [("DP-3".to_owned(), "/w/now.png".to_owned()), ("DP-5".to_owned(), alps.display().to_string())]
+        );
+        let c = calls(&d);
+        assert!(c.contains(&"hyprctl hyprpaper wallpaper DP-3, /w/now.png, cover".to_owned()), "{c:?}");
+        assert_eq!(view(&state).everys.row_count(), EVERY.len());
         std::fs::remove_dir_all(&d).unwrap();
     }
 

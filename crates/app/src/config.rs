@@ -15,7 +15,7 @@ pub struct Config {
     pub wallpaper: WallpaperConfig,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct WallpaperConfig {
     /// The folder of pictures shown; empty: ~/Pictures/Wallpapers if there is one, else
@@ -34,6 +34,12 @@ pub struct WallpaperConfig {
     /// awww's transition, and its length in seconds.
     pub transition: String,
     pub duration: f64,
+    /// The slideshow: a picture from the folder every `every` minutes, "shuffle" or "in-order".
+    pub slideshow: bool,
+    pub every: u32,
+    pub order: String,
+    /// A command run after each change, `{file}` the picture: `matugen image {file}`.
+    pub after: String,
 }
 
 impl Default for WallpaperConfig {
@@ -47,6 +53,10 @@ impl Default for WallpaperConfig {
             bar_colour: "000000".into(),
             transition: "fade".into(),
             duration: 1.5,
+            slideshow: false,
+            every: 30,
+            order: "shuffle".into(),
+            after: String::new(),
         }
     }
 }

@@ -1,7 +1,8 @@
 //! hyprpaper.conf (hyprpaper 0.8 and later): `wallpaper { monitor = …  path = …  fit_mode = … }`
 //! blocks, which hyprpaper reads at start; what it's told while it runs isn't kept anywhere. Lituus
 //! writes one block per monitor it sets, and keeps the rest of the file (splash, other blocks,
-//! comments) as it is.
+//! comments) as it is. A block whose path is a folder is hyprpaper's slideshow: a picture from it
+//! every `timeout` seconds, in the folder's order or shuffled.
 
 /// A `wallpaper` block.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,6 +12,26 @@ pub struct Entry {
     pub path: String,
     /// "cover", "contain", "tile" or "fill" (stretched).
     pub fit_mode: String,
+    /// A slideshow (`path` is a folder): seconds per picture; 0 for none.
+    pub timeout: u32,
+    /// The slideshow's order: "default" (the folder's) or "random-shuffle"; empty for none.
+    pub order: String,
+    /// The slideshow takes the pictures in the folder's subfolders too.
+    pub recursive: bool,
+}
+
+impl Entry {
+    /// One picture on a monitor.
+    pub fn picture(monitor: &str, path: &str, fit_mode: &str) -> Entry {
+        Entry {
+            monitor: monitor.into(),
+            path: path.into(),
+            fit_mode: fit_mode.into(),
+            timeout: 0,
+            order: String::new(),
+            recursive: false,
+        }
+    }
 }
 
 /// The fit mode as hyprpaper.conf writes it.
@@ -32,7 +53,7 @@ fn blocks(text: &str) -> Vec<(usize, usize, Entry)> {
         let line = lines[i].split('#').next().unwrap_or_default().trim();
         if line.starts_with("wallpaper") && line.trim_start_matches("wallpaper").trim_start().starts_with('{') {
             let start = i;
-            let mut entry = Entry { monitor: String::new(), path: String::new(), fit_mode: "cover".into() };
+            let mut entry = Entry::picture("", "", "cover");
             // `wallpaper { monitor = DP-1 }` on one line, or over several.
             let mut body = line.split_once('{').map(|(_, b)| b.to_owned()).unwrap_or_default();
             while !body.contains('}') && i + 1 < lines.len() {
@@ -47,6 +68,9 @@ fn blocks(text: &str) -> Vec<(usize, usize, Entry)> {
                         "monitor" => entry.monitor = v,
                         "path" => entry.path = v,
                         "fit_mode" => entry.fit_mode = v,
+                        "timeout" => entry.timeout = v.parse().unwrap_or(0),
+                        "order" => entry.order = v,
+                        "recursive" => entry.recursive = matches!(v.as_str(), "1" | "true" | "yes" | "on"),
                         _ => {}
                     }
                 }
@@ -69,7 +93,21 @@ pub fn conf_text(text: &str, set: &[Entry]) -> String {
     let found = blocks(text);
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
     let block = |e: &Entry| {
-        format!("wallpaper {{\n    monitor = {}\n    path = {}\n    fit_mode = {}\n}}", e.monitor, e.path, e.fit_mode)
+        let mut b = format!(
+            "wallpaper {{\n    monitor = {}\n    path = {}\n    fit_mode = {}\n",
+            e.monitor, e.path, e.fit_mode
+        );
+        if e.timeout > 0 {
+            b.push_str(&format!("    timeout = {}\n", e.timeout));
+            if !e.order.is_empty() {
+                b.push_str(&format!("    order = {}\n", e.order));
+            }
+            if e.recursive {
+                b.push_str("    recursive = true\n");
+            }
+        }
+        b.push('}');
+        b
     };
     let mut added = Vec::new();
     // From the end, so the earlier spans stay where they are.
@@ -104,17 +142,11 @@ mod tests {
         let text = "# My hyprpaper\nsplash = false\n\nwallpaper {\n    monitor = DP-3\n    path = ~/w/old.jpg # the old one\n}\n\nwallpaper { monitor = DP-4\n path = ~/w/b.png\n fit_mode = tile }\n";
         assert_eq!(
             entries(text),
-            [
-                Entry { monitor: "DP-3".into(), path: "~/w/old.jpg".into(), fit_mode: "cover".into() },
-                Entry { monitor: "DP-4".into(), path: "~/w/b.png".into(), fit_mode: "tile".into() },
-            ]
+            [Entry::picture("DP-3", "~/w/old.jpg", "cover"), Entry::picture("DP-4", "~/w/b.png", "tile"),]
         );
         let new = conf_text(
             text,
-            &[
-                Entry { monitor: "DP-3".into(), path: "/w/alps.jpg".into(), fit_mode: "fill".into() },
-                Entry { monitor: "HDMI-A-3".into(), path: "/w/lake.png".into(), fit_mode: "cover".into() },
-            ],
+            &[Entry::picture("DP-3", "/w/alps.jpg", "fill"), Entry::picture("HDMI-A-3", "/w/lake.png", "cover")],
         );
         assert!(new.starts_with("# My hyprpaper\nsplash = false\n\nwallpaper {\n    monitor = DP-3\n    path = /w/alps.jpg\n    fit_mode = fill\n}\n"), "{new}");
         assert!(new.contains("wallpaper { monitor = DP-4\n path = ~/w/b.png\n fit_mode = tile }"), "{new}");
@@ -123,8 +155,21 @@ mod tests {
             "{new}"
         );
         assert_eq!(entries(&new).len(), 3);
+        // A slideshow: the folder, a picture every 30 minutes, shuffled, with its subfolders.
+        let show = Entry {
+            timeout: 1800,
+            order: "random-shuffle".into(),
+            recursive: true,
+            ..Entry::picture("DP-3", "/w", "cover")
+        };
+        let new = conf_text(&new, std::slice::from_ref(&show));
+        assert!(new.contains("wallpaper {\n    monitor = DP-3\n    path = /w\n    fit_mode = cover\n    timeout = 1800\n    order = random-shuffle\n    recursive = true\n}\n"), "{new}");
+        assert_eq!(entries(&new)[0], show);
+        // And back to one picture.
+        let new = conf_text(&new, &[Entry::picture("DP-3", "/w/a.jpg", "cover")]);
+        assert!(!new.contains("timeout") && !new.contains("recursive"), "{new}");
         assert_eq!(
-            conf_text("", &[Entry { monitor: "DP-1".into(), path: "/a".into(), fit_mode: "cover".into() }]),
+            conf_text("", &[Entry::picture("DP-1", "/a", "cover")]),
             "wallpaper {\n    monitor = DP-1\n    path = /a\n    fit_mode = cover\n}\n"
         );
     }

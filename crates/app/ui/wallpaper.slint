@@ -3,8 +3,8 @@
 // (src/wallpaper.rs); everything done goes back through `act`.
 import { Theme } from "theme.slint";
 import { Icon } from "icons.slint";
-import { Button, SectionLabel, Scroll, Focusable } from "controls.slint";
-import { TextField, Select, CheckBox, Modal } from "dialogs.slint";
+import { Button, SectionLabel, Scroll, Focusable, Switch } from "controls.slint";
+import { TextField, Select, CheckBox, Modal, Segmented } from "dialogs.slint";
 import { Hero, Card, ScrollCard, SettingRow, EmptyState } from "shell.slint";
 import { Slider } from "sound.slint";
 
@@ -51,6 +51,16 @@ export struct WallpaperView {
     program-details: [string],
     program: int,
     program-note: string,
+    /// The slideshow: on, why it runs where it does, every how long, and in which order.
+    slideshow: bool,
+    slideshow-note: string,
+    everys: [string],
+    every: int,
+    orders: [string],
+    order: int,
+    /// The command run after a change.
+    after: string,
+    after-note: string,
     message: string,
     takeover: bool,
 }
@@ -411,6 +421,30 @@ export component WallpaperPage inherits VerticalLayout {
                 }
                 Rectangle { height: 14px; }
                 Rectangle { height: 1px; background: Theme.border; }
+                SectionLabel { text: "SLIDESHOW"; height: 40px; vertical-alignment: center; }
+                SettingRow {
+                    label: "Change it by itself";
+                    description: root.view.slideshow-note;
+                    first: true;
+                    Switch { on: root.view.slideshow; label: "Change it by itself"; toggled => { root.act("slideshow", "", 0); } }
+                }
+                if root.view.slideshow: SettingRow {
+                    label: "Every";
+                    Select { width: 150px; select-height: 34px; label: "Every"; options: root.view.everys; selected: root.view.every; chosen(i) => { root.act("every", "", i); } }
+                }
+                if root.view.slideshow: SettingRow {
+                    label: "Order";
+                    Segmented {
+                        label: "Order";
+                        height: 34px;
+                        horizontal-stretch: 0;
+                        options: root.view.orders;
+                        selected: root.view.order;
+                        changed(i) => { root.act("order", "", i); }
+                    }
+                }
+                Rectangle { height: 14px; }
+                Rectangle { height: 1px; background: Theme.border; }
                 SectionLabel { text: "PROGRAM"; height: 40px; vertical-alignment: center; }
                 SettingRow {
                     label: "Program";
@@ -425,6 +459,26 @@ export component WallpaperPage inherits VerticalLayout {
                         selected: root.view.program;
                         chosen(i) => { root.act("program", "", i); }
                     }
+                }
+                // The command fills the card's width, under its name.
+                Rectangle { height: 1px; background: Theme.border; }
+                VerticalLayout {
+                    spacing: 6px;
+                    padding-top: 10px;
+                    padding-bottom: 6px;
+                    Text { text: "Run after a change"; color: Theme.text; font-size: 13px; }
+                    TextField {
+                        height: 34px;
+                        // As wide as the card, however long the command: its text scrolls inside.
+                        min-width: 0;
+                        preferred-width: 0;
+                        mono: true;
+                        label: "Run after a change";
+                        placeholder: "matugen image {file}";
+                        text: root.view.after;
+                        committed => { root.act("after", self.text, 0); }
+                    }
+                    Text { text: root.view.after-note; color: Theme.faint; font-size: 12px; wrap: word-wrap; }
                 }
             }
         }
