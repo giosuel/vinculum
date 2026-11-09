@@ -665,7 +665,6 @@ export component OwnSettingsDialog inherits Modal {
     callback closed();
     card-width: 440px;
     label: "Give a device its own settings";
-    backdrop-dismisses: true;
     dismissed => { root.closed(); }
     Text { text: "Give a device its own settings"; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
     Text { text: "They start as the defaults; what you change then is for that device alone."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }

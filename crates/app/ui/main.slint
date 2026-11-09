@@ -903,7 +903,6 @@ export component MainWindow inherits Window {
     if root.confirm-open: Modal {
         card-width: 420px;
         label: root.confirm-title;
-        backdrop-dismisses: true;
         dismissed => { root.confirm-cancelled(); keys.focus(); }
         Text { text: root.confirm-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
         Text { text: root.confirm-text; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
@@ -1015,7 +1014,6 @@ export component MainWindow inherits Window {
     if root.add-open: add-modal := Modal {
         card-width: min(760px, self.width - 32px);
         label: "Add a connection";
-        backdrop-dismisses: true;
         dismissed => { root.add-cancelled(); keys.focus(); }
         Text { text: "Add a connection"; color: Theme.text; font-size: 17px; font-weight: 600; }
         for group in [
@@ -1124,7 +1122,6 @@ export component MainWindow inherits Window {
     if root.share-open: Modal {
         card-width: 400px;
         label: root.share-title;
-        backdrop-dismisses: true;
         dismissed => { root.share-closed(); keys.focus(); }
         VerticalLayout {
             spacing: 3px;
