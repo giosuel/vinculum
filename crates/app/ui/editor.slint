@@ -1398,7 +1398,6 @@ export component Editor inherits Rectangle {
         card-width: min(560px, self.width - 48px);
         card-spacing: 12px;
         label: "Add a port";
-        backdrop-dismisses: true;
         dismissed => { root.port-chosen(""); }
         Text { text: "Add a port to " + (root.form.virt.interface == "" ? root.form.name : root.form.virt.interface); color: Theme.text; font-size: 17px; font-weight: 600; }
         Text { text: "The device becomes part of it, with a small connection of its own."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
