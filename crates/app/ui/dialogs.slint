@@ -396,6 +396,8 @@ export component Select inherits Focusable {
 export component Modal inherits Rectangle {
     in property <length> card-width: 440px;
     in property <length> card-spacing: 14px;
+    /// 0 for a dialog that draws to its edges (a band at the top) and pads its own parts.
+    in property <length> card-padding: 24px;
     in property <string> label;
     callback dismissed();
     background: #05060799;
@@ -431,7 +433,7 @@ export component Modal inherits Rectangle {
                 reject
             }
             body := VerticalLayout {
-                padding: 24px;
+                padding: root.card-padding;
                 spacing: root.card-spacing;
                 @children
             }

@@ -14,16 +14,18 @@ import { Hero, HeroSubject, HeroInfo, Card, EmptyState, LoadBanner } from "shell
 /// where it's written. summary: the detail, the options and `from` on one line, for a narrow
 /// table.
 export struct ShortcutRow { label: string, id: string, keys: [string], title: string, detail: string, mono: bool, options: string, from: string, marker: bool, summary: string, on: bool, can-restore: bool, can-delete: bool, unread: bool, warn: bool }
-/// The edit dialog. unread: a bind Lituus can't read (kept, turned off, or replaced). kinds: the
-/// actions, `kind` the one chosen; field: what it needs ("command", "workspace", "direction",
-/// "special" or none). problem: why it can't be saved yet.
+/// The edit dialog. unread: a bind Lituus can't read (kept, turned off, or replaced). title: its
+/// name, for screen readers; note: a line under the keys. kinds: the actions, `kind` the one
+/// chosen; field: what it needs ("command", "workspace", "direction", "special" or none).
+/// problem: why it can't be saved yet. source: where it's from; source-note above its code,
+/// source-under below it.
 export struct ShortcutDialog {
     open: bool,
     unread: bool,
     title: string,
     keys: [string],
-    word: string,
-    word-tone: string,
+    keys-label: string,
+    note: string,
     kinds: [string],
     kind: int,
     field: string,
@@ -45,9 +47,12 @@ export struct ShortcutDialog {
     problem: string,
     source: string,
     source-note: string,
+    source-under: string,
     snippet: string,
     can-restore: bool,
     use-on: bool,
+    use-shown: bool,
+    use-hint: string,
     has-keys: bool,
     listening: bool,
     held: [string],
@@ -282,258 +287,298 @@ component Check inherits VerticalLayout {
     }
 }
 
-// A row of the dialog: a label beside its control, the dialog's label column.
-component Row inherits HorizontalLayout {
-    in property <string> label;
-    in property <string> hint;
-    in property <length> label-top: 9px;
-    VerticalLayout {
-        width: 136px;
-        alignment: start;
-        padding-top: root.label-top;
-        padding-right: 12px;
-        Text { text: root.label; color: Theme.text; font-size: 13px; wrap: word-wrap; }
-    }
-    VerticalLayout {
-        horizontal-stretch: 1;
-        spacing: 6px;
-        alignment: start;
-        @children
-        Text { text: root.hint; visible: root.hint != ""; height: root.hint != "" ? self.preferred-height : 0; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
-    }
-}
-
-// The options of a shortcut, as check boxes.
-component Options inherits VerticalLayout {
-    in property <ShortcutDialog> dialog;
-    callback act(string, string);
-    spacing: 10px;
-    SectionLabel { text: "OPTIONS"; }
-    Check { text: "Works on the lock screen"; hint: root.dialog.mouse ? root.dialog.mouse-note : "Also while hyprlock is showing"; checked: root.dialog.locked; enabled: !root.dialog.mouse; toggled => { root.act("d-flag", "locked"); } }
-    Check { text: "Repeats while held"; hint: root.dialog.mouse ? root.dialog.mouse-note : "Like a held letter key"; checked: root.dialog.repeating; enabled: !root.dialog.mouse; toggled => { root.act("d-flag", "repeating"); } }
-    Check { text: "Runs on release"; hint: root.dialog.release-note; checked: root.dialog.release; enabled: !root.dialog.mouse && !root.dialog.repeating; toggled => { root.act("d-flag", "release"); } }
-    Check { text: "Apps get the keys too"; hint: "The window in focus also sees them"; checked: root.dialog.apps; toggled => { root.act("d-flag", "apps"); } }
-}
-
-// Where a shortcut comes from: the config's file and line, with its text, or Lituus's file.
-component Source inherits VerticalLayout {
-    in property <ShortcutDialog> dialog;
-    callback act(string, string);
-    spacing: 8px;
-    SectionLabel { text: "WHERE IT COMES FROM"; }
-    Text { text: root.dialog.source; color: Theme.text; font-size: 13px; wrap: word-wrap; }
-    Text { text: root.dialog.source-note; visible: root.dialog.source-note != ""; height: root.dialog.source-note != "" ? self.preferred-height : 0; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
-    if root.dialog.snippet != "": Rectangle {
-        border-radius: 8px;
-        border-width: 1px;
-        border-color: Theme.border;
-        background: Theme.input-bg;
-        height: code.preferred-height + 20px;
-        code := Text {
-            x: 12px;
-            y: 10px;
-            width: parent.width - 24px;
-            text: root.dialog.snippet;
-            color: Theme.muted;
-            font-size: 12px;
-            font-family: "JetBrains Mono";
-            wrap: word-wrap;
-        }
-    }
-    if root.dialog.can-restore: VerticalLayout {
-        spacing: 6px;
-        HorizontalLayout {
-            alignment: start;
-            Button { label: "Back to your config's version"; button-height: 34px; clicked => { root.act("d-restore", ""); } }
-        }
-        Text { text: "Fills in your config's version; Save puts it back"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+// A big key cap, like a keyboard's: a face over a darker lip.
+component BigKey inherits Rectangle {
+    in property <string> key;
+    width: max(80px, label.preferred-width + 48px);
+    height: 80px;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.border2;
+    background: Theme.bg;
+    Rectangle {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 2px;
+        height: parent.height - 8px;
+        border-radius: 11px;
+        background: @linear-gradient(180deg, Theme.ctrl-bg.brighter(0.18) 0%, Theme.ctrl-bg 100%);
+        label := Text { text: root.key; color: Theme.text; font-size: 26px; font-family: "JetBrains Mono"; vertical-alignment: center; horizontal-alignment: center; }
     }
 }
 
-// The keys: listening for new ones (Hyprland's own shortcuts paused meanwhile), or the ones it
-// has, with a button to change them; and what already has them.
-component KeysField inherits VerticalLayout {
+// The top of the dialog: the keys big on a band with the glow, and under them the button that
+// changes them (or replaces a bind Lituus can't read); while it listens, the box that takes the
+// new keys (Hyprland's own shortcuts paused meanwhile).
+component KeysBand inherits Rectangle {
     in property <ShortcutDialog> dialog;
     callback act(string, string);
-    spacing: 8px;
-    if root.dialog.listening: VerticalLayout {
-        spacing: 8px;
-        Rectangle {
-            width: 300px;
-            height: 116px;
-            border-radius: 10px;
-            border-width: 1.5px;
-            border-color: Theme.accent;
-            background: Theme.input-bg;
-            accessible-role: AccessibleRole.text;
-            accessible-label: "Press the new shortcut";
-            // Every key goes here while it listens: Esc stops, Backspace clears.
-            capture := FocusScope {
-                init => { self.focus(); }
-                key-pressed(event) => {
-                    if event.text == Key.Escape { root.act("d-stop", ""); return accept; }
-                    if event.text == Key.Backspace && !event.modifiers.meta && !event.modifiers.control && !event.modifiers.alt { root.act("d-clear", ""); return accept; }
-                    root.act("d-key", event.text + "\u{9}" + (event.modifiers.meta ? "M" : "") + (event.modifiers.control ? "C" : "") + (event.modifiers.alt ? "A" : "") + (event.modifiers.shift ? "S" : ""));
-                    accept
-                }
-                key-released(event) => { root.act("d-key-up", event.text); accept }
-            }
-            VerticalLayout {
+    height: band.preferred-height;
+    border-top-left-radius: 13px;
+    border-top-right-radius: 13px;
+    background: Theme.surface.brighter(0.04);
+    clip: true;
+    if Theme.gradient: Rectangle {
+        width: 840px;
+        height: self.width;
+        x: (parent.width - self.width) / 2;
+        y: -self.height / 2;
+        background: @radial-gradient(circle, Theme.glow 0%, Theme.surface.brighter(0.04) 75%);
+    }
+    band := VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding: 24px;
+        padding-top: 30px;
+        spacing: 14px;
+        alignment: center;
+        if root.dialog.listening: VerticalLayout {
+            spacing: 8px;
+            alignment: center;
+            HorizontalLayout {
                 alignment: center;
-                spacing: 10px;
-                Text { text: "Press the new shortcut"; color: Theme.text; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: 6px;
-                    Keys { keys: root.dialog.held; large: true; }
-                    Rectangle {
-                        width: 30px;
-                        height: 30px;
-                        border-radius: 5px;
-                        border-width: 1px;
-                        border-color: Theme.accent;
+                Rectangle {
+                    width: 340px;
+                    height: 124px;
+                    border-radius: 10px;
+                    border-width: 1.5px;
+                    border-color: Theme.accent;
+                    background: Theme.input-bg;
+                    accessible-role: AccessibleRole.text;
+                    accessible-label: "Press the new shortcut";
+                    // Every key goes here while it listens: Esc stops, Backspace clears.
+                    capture := FocusScope {
+                        init => { self.focus(); }
+                        key-pressed(event) => {
+                            if event.text == Key.Escape { root.act("d-stop", ""); return accept; }
+                            if event.text == Key.Backspace && !event.modifiers.meta && !event.modifiers.control && !event.modifiers.alt { root.act("d-clear", ""); return accept; }
+                            root.act("d-key", event.text + "\u{9}" + (event.modifiers.meta ? "M" : "") + (event.modifiers.control ? "C" : "") + (event.modifiers.alt ? "A" : "") + (event.modifiers.shift ? "S" : ""));
+                            accept
+                        }
+                        key-released(event) => { root.act("d-key-up", event.text); accept }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 10px;
+                        Text { text: "Press the new shortcut"; color: Theme.text; font-size: 13px; font-weight: 600; horizontal-alignment: center; }
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: 6px;
+                            Keys { keys: root.dialog.held; large: true; }
+                            Rectangle {
+                                width: 30px;
+                                height: 30px;
+                                border-radius: 5px;
+                                border-width: 1px;
+                                border-color: Theme.accent;
+                            }
+                        }
+                        Text { text: root.dialog.listen-note; color: Theme.muted; font-size: 12px; horizontal-alignment: center; }
                     }
                 }
-                Text { text: root.dialog.listen-note; color: Theme.muted; font-size: 12px; horizontal-alignment: center; }
+            }
+            Text { text: "Esc cancels · Backspace clears"; color: Theme.faint; font-size: 12px; horizontal-alignment: center; }
+            Text {
+                text: "Hyprland's shortcuts are paused while Lituus listens, so the keys you press don't run anything.";
+                color: Theme.muted;
+                font-size: 12px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+        if !root.dialog.listening && root.dialog.has-keys: HorizontalLayout {
+            alignment: center;
+            spacing: 14px;
+            accessible-role: AccessibleRole.text;
+            accessible-label: root.dialog.keys-label;
+            for k[i] in root.dialog.keys: HorizontalLayout {
+                spacing: 14px;
+                if i > 0: Text { text: "+"; color: Theme.faint; font-size: 24px; vertical-alignment: center; }
+                BigKey { key: k; }
+            }
+        }
+        if !root.dialog.listening && !root.dialog.has-keys: Text {
+            height: 80px;
+            text: "No keys yet";
+            color: Theme.faint;
+            font-size: 20px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+        if !root.dialog.listening: HorizontalLayout {
+            alignment: center;
+            if root.dialog.unread: Button { label: "Replace with a new shortcut…"; clicked => { root.act("d-replace", ""); } }
+            if !root.dialog.unread: Button {
+                label: root.dialog.has-keys ? "Change keys…" : "Choose keys…";
+                clicked => { root.act("d-listen", ""); }
+            }
+        }
+        if root.dialog.note != "": Text { text: root.dialog.note; color: Theme.muted; font-size: 12px; horizontal-alignment: center; wrap: word-wrap; }
+    }
+    Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+}
+
+// A part of the dialog: an icon, its title (and a line under it), a switch on the right if it
+// has one, and what it holds under the title.
+component Part inherits VerticalLayout {
+    in property <string> icon;
+    in property <string> title;
+    in property <string> sub;
+    in property <bool> line: true;
+    in property <bool> has-under: true;
+    in property <bool> switch-shown;
+    in property <bool> on;
+    callback toggled();
+    Rectangle { height: root.line ? 1px : 0; background: Theme.border; }
+    VerticalLayout {
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: root.has-under ? 10px : 0;
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 9px;
+                background: Theme.hover;
+                Icon { name: root.icon; tint: Theme.muted; }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+                Text { text: root.title; color: Theme.text; font-size: 14px; }
+                if root.sub != "": Text { text: root.sub; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+            }
+            if root.switch-shown: Switch {
+                y: (parent.height - self.height) / 2;
+                on: root.on;
+                label: root.title;
+                toggled => { root.toggled(); }
             }
         }
         HorizontalLayout {
-            spacing: 16px;
-            alignment: start;
-            Text { text: "Esc cancels · Backspace clears"; color: Theme.faint; font-size: 12px; }
-        }
-        Text {
-            width: 300px;
-            text: "Hyprland's shortcuts are paused while Lituus listens, so the keys you press don't run anything.";
-            color: Theme.muted;
-            font-size: 12px;
-            wrap: word-wrap;
-        }
-    }
-    if !root.dialog.listening: HorizontalLayout {
-        spacing: 12px;
-        alignment: start;
-        Keys { keys: root.dialog.keys; large: true; visible: root.dialog.has-keys; }
-        if !root.dialog.unread: Button {
-            label: root.dialog.has-keys ? "Change keys…" : "Choose keys…";
-            button-height: 34px;
-            clicked => { root.act("d-listen", ""); }
-        }
-    }
-    if root.dialog.conflict-title != "": Rectangle {
-        border-radius: 8px;
-        border-width: 1px;
-        border-color: Theme.warn-border;
-        background: Theme.warn-bg;
-        height: conflict.preferred-height;
-        conflict := VerticalLayout {
-            padding: 12px;
-            padding-top: 10px;
-            padding-bottom: 10px;
-            spacing: 4px;
-            Text { text: root.dialog.conflict-title; color: Theme.text; font-size: 13px; font-weight: 600; wrap: word-wrap; }
-            Text { text: root.dialog.conflict-text; color: Theme.warn-text; font-size: 13px; wrap: word-wrap; }
-            if root.dialog.conflict-open: HorizontalLayout {
-                padding-top: 6px;
+            padding-left: 46px;
+            VerticalLayout {
                 spacing: 8px;
-                alignment: start;
-                Button { label: "Replace it"; button-height: 28px; clicked => { root.act("d-replace-keys", ""); } }
-                Button { label: "Pick other keys"; button-height: 28px; clicked => { root.act("d-listen", ""); } }
+                @children
             }
         }
     }
 }
 
-/// Changing a shortcut: its action and what that needs, a description, the options; or, for a
-/// bind Lituus can't read, keeping it, turning it off or replacing it. Two columns in a wide
-/// window, one that scrolls in a small one; Cancel and Save stay in view.
+// Code from the config, as written there.
+component Code inherits Rectangle {
+    in property <string> text;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: Theme.border;
+    background: Theme.input-bg;
+    height: code.preferred-height + 20px;
+    code := Text {
+        x: 12px;
+        y: 10px;
+        width: parent.width - 24px;
+        text: root.text;
+        color: Theme.muted;
+        font-size: 12px;
+        font-family: "JetBrains Mono";
+        wrap: word-wrap;
+    }
+}
+
+// A muted line under a control.
+component Note inherits Text {
+    color: Theme.muted;
+    font-size: 12px;
+    wrap: word-wrap;
+}
+
+/// Changing a shortcut, following mockup E (the owner, 2026-11-09): the keys big at the top with
+/// Change keys…, then Enabled, the action, the description, the options and where it's from. A
+/// bind Lituus can't read has only Enabled, its line as the action, where it's from, and Replace
+/// at the top. The parts scroll in a short window; Cancel and Save stay in view.
 export component ShortcutEditDialog inherits Modal {
     in property <ShortcutDialog> dialog;
     callback act(string, string);
-    property <bool> wide: self.width >= 1100px;
-    card-width: root.wide ? 960px : min(560px, self.width - 48px);
-    card-spacing: 18px;
+    // Wide enough for the options' hints on one line each, two to a row.
+    card-width: min(600px, self.width - 48px);
+    card-padding: 0;
+    card-spacing: 0;
     label: root.dialog.title;
     dismissed => { root.act("d-cancel", ""); }
+    band := KeysBand { dialog: root.dialog; act(v, a) => { root.act(v, a); } }
     VerticalLayout {
-        spacing: 6px;
-        Text { text: root.dialog.title; color: Theme.text; font-size: 17px; font-weight: 600; overflow: elide; }
-        HorizontalLayout {
-            spacing: 10px;
-            alignment: start;
-            Keys { keys: root.dialog.keys; }
+        padding: 24px;
+        padding-top: 8px;
+        spacing: 14px;
+        if root.dialog.conflict-title != "": VerticalLayout {
+            padding-top: 10px;
             Rectangle {
-                width: 6px;
-                height: 6px;
-                y: (parent.height - self.height) / 2;
-                border-radius: 3px;
-                background: root.dialog.word-tone == "warn" ? Theme.warn-text : root.dialog.word-tone == "accent" ? Theme.accent : Theme.faint;
-            }
-            Text {
-                text: root.dialog.word;
-                color: root.dialog.word-tone == "warn" ? Theme.warn-text : root.dialog.word-tone == "accent" ? Theme.accent : Theme.muted;
-                font-size: 13px;
-                vertical-alignment: center;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: Theme.warn-border;
+                background: Theme.warn-bg;
+                height: conflict.preferred-height;
+                conflict := VerticalLayout {
+                    padding: 12px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    spacing: 4px;
+                    Text { text: root.dialog.conflict-title; color: Theme.text; font-size: 13px; font-weight: 600; wrap: word-wrap; }
+                    Text { text: root.dialog.conflict-text; color: Theme.warn-text; font-size: 13px; wrap: word-wrap; }
+                    if root.dialog.conflict-open: HorizontalLayout {
+                        padding-top: 6px;
+                        spacing: 8px;
+                        alignment: start;
+                        Button { label: "Replace it"; button-height: 28px; clicked => { root.act("d-replace-keys", ""); } }
+                        Button { label: "Pick other keys"; button-height: 28px; clicked => { root.act("d-listen", ""); } }
+                    }
+                }
             }
         }
-    }
-    Rectangle { height: 1px; background: Theme.border; }
-    Scroll {
-        // As tall as what's in it, up to what the window leaves.
-        height: min(self.content-height, root.height - 220px);
-        bar-inset: -14px;
-        spacing: 14px;
-        // The form: the action and its needs, the description, then where it's from; the options
-        // beside them, or under them in one column.
-        if !root.dialog.unread: HorizontalLayout {
-            spacing: 40px;
-            VerticalLayout {
-                horizontal-stretch: 1;
-                spacing: 14px;
-                alignment: start;
-                Row { label: "Keys"; label-top: 6px; KeysField { dialog: root.dialog; act(v, a) => { root.act(v, a); } } }
-                Row {
-                    label: "Action";
-                    HorizontalLayout {
-                        alignment: start;
-                        Select {
-                            width: 300px;
-                            select-height: 34px;
-                            label: "Action";
-                            options: root.dialog.kinds;
-                            selected: root.dialog.kind;
-                            chosen(i) => { root.act("d-kind", "" + i); }
-                        }
+        Scroll {
+            // As tall as what's in it, up to what the window leaves.
+            height: min(self.content-height, root.height - band.height - 150px);
+            bar-inset: -14px;
+            if root.dialog.use-shown: Part {
+                icon: "power";
+                title: "Enabled";
+                sub: root.dialog.use-hint;
+                line: false;
+                has-under: false;
+                switch-shown: true;
+                on: root.dialog.use-on;
+                toggled => { root.act("d-use", ""); }
+            }
+            if root.dialog.unread: Part {
+                icon: "code";
+                title: "Action";
+                sub: "Lituus can't tell what it does, so here is its code";
+                line: root.dialog.use-shown;
+                Code { text: root.dialog.snippet; }
+            }
+            if !root.dialog.unread: Part {
+                icon: "terminal";
+                title: "Action";
+                line: root.dialog.use-shown;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Select {
+                        width: 220px;
+                        select-height: 34px;
+                        label: "Action";
+                        options: root.dialog.kinds;
+                        selected: root.dialog.kind;
+                        chosen(i) => { root.act("d-kind", "" + i); }
                     }
-                }
-                if root.dialog.field == "command": Row {
-                    label: "Command";
-                    hint: "Runs with sh, as Hyprland's exec does";
-                    HorizontalLayout {
-                        alignment: start;
-                        TextField { width: 300px; mono: true; label: "Command"; text: root.dialog.command; edited => { root.act("d-command", self.text); } }
-                    }
-                }
-                if root.dialog.field == "workspace": Row {
-                    label: "Workspace";
-                    hint: "A number, or a workspace's name";
-                    HorizontalLayout {
+                    if root.dialog.field == "command": TextField { horizontal-stretch: 1; mono: true; label: "Command"; text: root.dialog.command; edited => { root.act("d-command", self.text); } }
+                    if root.dialog.field == "workspace": HorizontalLayout {
                         alignment: start;
                         TextField { width: 120px; label: "Workspace"; text: root.dialog.workspace; edited => { root.act("d-workspace", self.text); } }
                     }
-                }
-                if root.dialog.follow-shown: Row {
-                    label: "";
-                    Check {
-                        text: "Follow the window";
-                        hint: "Off: the window goes, you stay where you are";
-                        checked: root.dialog.follow;
-                        toggled => { root.act("d-follow", ""); }
-                    }
-                }
-                if root.dialog.field == "direction": Row {
-                    label: "Direction";
-                    HorizontalLayout {
+                    if root.dialog.field == "direction": HorizontalLayout {
                         alignment: start;
                         Select {
                             width: 160px;
@@ -544,64 +589,64 @@ export component ShortcutEditDialog inherits Modal {
                             chosen(i) => { root.act("d-direction", "" + i); }
                         }
                     }
+                    if root.dialog.field == "special": TextField { horizontal-stretch: 1; label: "Special workspace"; text: root.dialog.special; edited => { root.act("d-special", self.text); } }
                 }
-                if root.dialog.field == "special": Row {
-                    label: "Special workspace";
-                    hint: "Its name, such as magic";
-                    HorizontalLayout {
-                        alignment: start;
-                        TextField { width: 200px; label: "Special workspace"; text: root.dialog.special; edited => { root.act("d-special", self.text); } }
+                if root.dialog.field == "command": Note { text: "Runs with sh, as Hyprland's exec does"; }
+                if root.dialog.field == "workspace": Note { text: "A number, or a workspace's name"; }
+                if root.dialog.field == "special": Note { text: "The special workspace's name, such as magic"; }
+                if root.dialog.follow-shown: Check {
+                    text: "Follow the window";
+                    hint: "Off: the window goes, you stay where you are";
+                    checked: root.dialog.follow;
+                    toggled => { root.act("d-follow", ""); }
+                }
+            }
+            if !root.dialog.unread: Part {
+                icon: "pencil";
+                title: "Description";
+                TextField { label: "Description"; text: root.dialog.description; placeholder: "Optional"; edited => { root.act("d-description", self.text); } }
+                Note { text: "Its name here and in hyprctl binds"; }
+            }
+            if !root.dialog.unread: Part {
+                icon: "settings";
+                title: "Options";
+                GridLayout {
+                    spacing-horizontal: 16px;
+                    spacing-vertical: 12px;
+                    Row {
+                        Check { text: "Works on the lock screen"; hint: root.dialog.mouse ? root.dialog.mouse-note : "Also while hyprlock is showing"; checked: root.dialog.locked; enabled: !root.dialog.mouse; toggled => { root.act("d-flag", "locked"); } }
+                        Check { text: "Repeats while held"; hint: root.dialog.mouse ? root.dialog.mouse-note : "Like a held letter key"; checked: root.dialog.repeating; enabled: !root.dialog.mouse; toggled => { root.act("d-flag", "repeating"); } }
+                    }
+                    Row {
+                        Check { text: "Runs on release"; hint: root.dialog.release-note; checked: root.dialog.release; enabled: !root.dialog.mouse && !root.dialog.repeating; toggled => { root.act("d-flag", "release"); } }
+                        Check { text: "Apps get the keys too"; hint: "The window in focus also sees them"; checked: root.dialog.apps; toggled => { root.act("d-flag", "apps"); } }
                     }
                 }
-                Row {
-                    label: "Description";
-                    hint: "Its name here and in hyprctl binds";
+            }
+            Part {
+                icon: "file";
+                title: "Where it's from";
+                sub: root.dialog.source;
+                has-under: root.dialog.source-note != "" || (root.dialog.snippet != "" && !root.dialog.unread) || root.dialog.source-under != "" || root.dialog.can-restore;
+                if root.dialog.source-note != "": Note { text: root.dialog.source-note; }
+                if root.dialog.snippet != "" && !root.dialog.unread: Code { text: root.dialog.snippet; }
+                if root.dialog.source-under != "": Note { text: root.dialog.source-under; }
+                if root.dialog.can-restore: VerticalLayout {
+                    spacing: 6px;
                     HorizontalLayout {
                         alignment: start;
-                        TextField { width: 300px; label: "Description"; text: root.dialog.description; placeholder: "Optional"; edited => { root.act("d-description", self.text); } }
+                        Button { label: "Back to your config's version"; button-height: 34px; clicked => { root.act("d-restore", ""); } }
                     }
+                    Note { text: "Fills in your config's version; Save puts it back"; }
                 }
-                if !root.wide: Options { dialog: root.dialog; act(v, a) => { root.act(v, a); } }
-                Source { dialog: root.dialog; act(v, a) => { root.act(v, a); } }
-            }
-            if root.wide: Options {
-                horizontal-stretch: 1;
-                alignment: start;
-                dialog: root.dialog;
-                act(v, a) => { root.act(v, a); }
             }
         }
-        // A bind Lituus can't read: its keys, kept or turned off, or replaced.
-        if root.dialog.unread: VerticalLayout {
-            spacing: 14px;
-            Row { label: "Keys"; label-top: 6px; Keys { keys: root.dialog.keys; large: true; } }
-            Row {
-                label: "Action";
-                label-top: 0;
-                hint: "Your config makes it with Lua code that Lituus doesn't read, so Lituus can't change it.";
-                Text { text: "Runs Lua code"; color: Theme.text; font-size: 13px; }
-            }
-            Check {
-                text: "Use this shortcut";
-                hint: "Off: Hyprland ignores it; your config keeps it";
-                checked: root.dialog.use-on;
-                toggled => { root.act("d-use", ""); }
-            }
-            Text {
-                text: "Replace makes a new shortcut on the same keys, which you choose the action for, and turns this one off when you save.";
-                color: Theme.muted;
-                font-size: 13px;
-                wrap: word-wrap;
-            }
-            Source { dialog: root.dialog; act(v, a) => { root.act(v, a); } }
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: root.dialog.problem; color: Theme.faint; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            Button { horizontal-stretch: 0; min-width: self.preferred-width; label: "Cancel"; button-height: 36px; clicked => { root.act("d-cancel", ""); } }
+            Button { horizontal-stretch: 0; min-width: self.preferred-width; label: "Save"; kind: "primary"; button-height: 36px; enabled: root.dialog.problem == ""; clicked => { root.act("d-save", ""); } }
         }
-    }
-    HorizontalLayout {
-        spacing: 8px;
-        if root.dialog.unread: Button { horizontal-stretch: 0; min-width: self.preferred-width; label: "Replace…"; button-height: 36px; clicked => { root.act("d-replace", ""); } }
-        Text { text: root.dialog.problem; color: Theme.faint; font-size: 12px; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-        Button { horizontal-stretch: 0; min-width: self.preferred-width; label: "Cancel"; button-height: 36px; clicked => { root.act("d-cancel", ""); } }
-        Button { horizontal-stretch: 0; min-width: self.preferred-width; label: "Save"; kind: "primary"; button-height: 36px; enabled: root.dialog.problem == ""; clicked => { root.act("d-save", ""); } }
     }
 }
 

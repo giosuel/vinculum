@@ -590,6 +590,15 @@ fn from(bind: &Bind, dir: &Path) -> String {
     }
 }
 
+/// Which lines of its file a bind is on: "line 12", "lines 85–87".
+fn lines(bind: &Bind) -> String {
+    if bind.end_line > bind.line {
+        format!("lines {}–{}", bind.line, bind.end_line)
+    } else {
+        format!("line {}", bind.line)
+    }
+}
+
 fn shorten_home(path: &str) -> String {
     match std::env::var("HOME") {
         Ok(home) if !home.is_empty() && path.starts_with(&home) => format!("~{}", &path[home.len()..]),
@@ -1031,6 +1040,7 @@ fn dialog_view(state: &State, d: &Dialog) -> ShortcutDialog {
     let f = &d.form;
     let mut v = ShortcutDialog { open: true, unread: d.unread && !d.replacing, ..Default::default() };
     v.keys = strings(caps(&bind));
+    v.keys_label = s(caps(&bind).join(" + "));
     v.has_keys = !bind.key.is_empty();
     v.listening = d.listening;
     v.held = strings(d.held.iter().map(|m| key_name(m)).collect());
@@ -1048,16 +1058,16 @@ fn dialog_view(state: &State, d: &Dialog) -> ShortcutDialog {
         v.conflict_open = !d.replace;
     }
     let over = config_bind.and_then(|b| state.over(b));
-    let (word, tone) = match (d.target, over) {
-        (Target::New, _) => ("It works as soon as you save it", "faint"),
-        (Target::Added(_), _) => (ADDED, "accent"),
-        (_, Some(Some(_))) => (CHANGED, "accent"),
-        (_, Some(None)) => (TURNED_OFF, "faint"),
-        _ if d.unread && !d.replacing => ("Lituus can't read what it does", "warn"),
-        _ => ("From your config", "faint"),
-    };
-    v.word = s(word);
-    v.word_tone = s(tone);
+    // Under the keys, when there's something to say about them.
+    v.note = s(if d.target == Target::New {
+        "It works as soon as you save it"
+    } else if d.unread && !d.replacing {
+        "Lituus can't change it: your config makes it with Lua code Lituus doesn't read"
+    } else if d.replacing {
+        "Saving turns the one in your config off"
+    } else {
+        ""
+    });
     v.title = s(if d.target == Target::New {
         "Add a shortcut".to_owned()
     } else if d.unread && !d.replacing {
@@ -1107,25 +1117,37 @@ fn dialog_view(state: &State, d: &Dialog) -> ShortcutDialog {
     v.mouse_note = s("Not with a mouse drag");
     v.problem = s(problem(state, d).unwrap_or_default());
     // Where it comes from.
+    let mine = shorten_home(&state.file().path().display().to_string());
     match (d.target, config_bind) {
         (Target::Config(_), Some(b)) => {
-            let place = from(b, &dir);
             if matches!(over, Some(Some(_))) {
-                v.source = s(format!("{CHANGED} · {}", shorten_home(&state.file().path().display().to_string())));
-                v.source_note = s(format!("Your config's version, {place}:"));
+                v.source = s(format!("{CHANGED}, saved in {mine}"));
+                v.source_note = s(format!("Your config's version, {}:", from(b, &dir)));
                 v.can_restore = !d.unread;
             } else {
-                v.source = s(format!("From your config · {}", shorten_home(&b.file.display().to_string())));
-                v.source_note = s(place);
+                v.source = s(format!("{}, {}", shorten_home(&b.file.display().to_string()), lines(b)));
+                v.source_under = s(if d.unread && !d.replacing {
+                    "Change it there, or replace it here."
+                } else if d.replacing {
+                    "Saving turns this one off; the line stays as it is."
+                } else if matches!(over, Some(None)) {
+                    "Turned off in Lituus; the line stays as it is."
+                } else {
+                    "A change is saved in Lituus's file; this line stays as it is."
+                });
             }
             v.snippet = s(snippet(b));
         }
-        (Target::New, _) => {
-            v.source = s(format!("Saved in {}", shorten_home(&state.file().path().display().to_string())))
-        }
-        _ => v.source = s(format!("{ADDED} · {}", shorten_home(&state.file().path().display().to_string()))),
+        (Target::New, _) => v.source = s(format!("Saved in {mine}")),
+        _ => v.source = s(format!("{ADDED}, saved in {mine}")),
     }
     v.use_on = d.use_on;
+    v.use_shown = d.target != Target::New;
+    v.use_hint = s(if matches!(d.target, Target::Added(_)) {
+        "Off: Hyprland ignores it; Lituus keeps it"
+    } else {
+        "Off: Hyprland ignores it; your config keeps it"
+    });
     v
 }
 
@@ -1163,23 +1185,26 @@ fn save(weak: Option<&slint::Weak<MainWindow>>, state: &mut State) {
     match d.target {
         Target::Config(i) => {
             let Some(b) = state.config.binds.get(i).cloned() else { return };
-            if d.unread && !d.replacing {
-                // Kept, or turned off.
-                let (mine, lua) = if d.use_on { without_over(state, &b) } else { with_over(state, &b, None) };
-                if mine != state.mine {
-                    change(weak, state, mine, lua);
-                }
-                return;
-            }
             let new = d.form.bind(&b);
-            // The config's own version again: nothing of Lituus's left.
-            let same = new.action == b.action && new.flags == b.flags && new.description == b.description;
-            let (mine, lua) = if same { without_over(state, &b) } else { with_over(state, &b, Some(new)) };
-            change(weak, state, mine, lua);
+            // The config's own version again (or one Lituus can't read, kept): nothing of
+            // Lituus's left.
+            let same = d.unread && !d.replacing
+                || new.action == b.action && new.flags == b.flags && new.description == b.description;
+            let (mine, lua) = if !d.use_on {
+                with_over(state, &b, None)
+            } else if same {
+                without_over(state, &b)
+            } else {
+                with_over(state, &b, Some(new))
+            };
+            if mine != state.mine {
+                change(weak, state, mine, lua);
+            }
         }
         Target::Added(i) => {
-            let Some(Mine::Added { bind, on }) = state.mine.get(i).cloned() else { return };
+            let Some(Mine::Added { bind, .. }) = state.mine.get(i).cloned() else { return };
             let new = d.form.bind(&bind);
+            let on = d.use_on;
             let mut mine = state.mine.clone();
             mine[i] = Mine::Added { bind: new.clone(), on };
             let lua = format!(
@@ -1235,15 +1260,17 @@ fn save_keys(weak: Option<&slint::Weak<MainWindow>>, state: &mut State, d: &Dial
         mine.retain(|m| !matches!(m, Mine::Over { .. } if m.keys() == norm));
         mine.push(Mine::Over {
             keys: b.keys(),
-            bind: Some(Bind { mods: b.mods.clone(), key: b.key.clone(), ..new.clone() }),
+            bind: d.use_on.then(|| Bind { mods: b.mods.clone(), key: b.key.clone(), ..new.clone() }),
         });
         placed = true;
     }
     if !placed {
-        mine.push(Mine::Added { bind: new.clone(), on: true });
+        mine.push(Mine::Added { bind: new.clone(), on: d.use_on });
     }
     lua.push(format!("hl.unbind({})", lua_string(&new.keys())));
-    lua.push(new.to_lua().unwrap_or_default());
+    if d.use_on {
+        lua.push(new.to_lua().unwrap_or_default());
+    }
     change(weak, state, mine, Some(lua.join(" ")));
 }
 
@@ -1606,10 +1633,8 @@ mod tests {
         act_with(None, &mut state, "open", &id);
         let dv = view(&state).dialog;
         assert!(dv.open && !dv.unread);
-        assert_eq!(
-            (dv.field.as_str(), dv.command.as_str(), dv.word.as_str()),
-            ("command", "kitty", "From your config")
-        );
+        assert_eq!((dv.field.as_str(), dv.command.as_str(), dv.note.as_str()), ("command", "kitty", ""));
+        assert!(dv.source.ends_with("hyprland.lua, line 2") && dv.use_shown, "{}", dv.source);
         assert_eq!(dv.snippet, "hl.bind(mainMod .. \" + D\", hl.dsp.exec_cmd(\"kitty\"))");
         act_with(None, &mut state, "d-command", "fuzzel");
         act_with(None, &mut state, "d-flag", "locked");
@@ -1653,6 +1678,12 @@ mod tests {
         reread(&mut state, &d);
         assert!(row(&view(&state), "Switch split direction").on);
         assert!(state.mine.is_empty());
+        // The dialog's Enabled switch does the same when it's saved.
+        act_with(None, &mut state, "open", &id);
+        act_with(None, &mut state, "d-use", "");
+        act_with(None, &mut state, "d-save", "");
+        reread(&mut state, &d);
+        assert!(!row(&view(&state), "Switch split direction").on);
         std::fs::remove_dir_all(&d).unwrap();
     }
 
