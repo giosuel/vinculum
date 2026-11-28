@@ -50,7 +50,9 @@ impl MonitorRule {
         }
     }
 
-    /// `hl.monitor({ … })`, for the file.
+    /// `hl.monitor({ … })`, for the file. An enabled monitor says `disabled = false`: Hyprland
+    /// merges the rules for one output, so without it a rule loaded earlier that turns the
+    /// monitor off (another tool's monitors.lua) keeps it off.
     pub fn lua(&self) -> String {
         self.lua_rule(None)
     }
@@ -91,9 +93,7 @@ impl MonitorRule {
             None if live.is_some() => fields.push("mirror = \"\"".into()),
             None => {}
         }
-        if live.is_some() {
-            fields.push("disabled = false".into());
-        }
+        fields.push("disabled = false".into());
         if live.is_some() || self.reserved != [0; 4] {
             let [t, r, b, l] = self.reserved;
             fields.push(format!("reserved_area = {{ top = {t}, right = {r}, bottom = {b}, left = {l} }}"));
@@ -353,7 +353,7 @@ mod tests {
         let mut g8 = MonitorRule::from_monitor(&all[1], &all);
         assert_eq!(
             g8.lua(),
-            r#"hl.monitor({ output = "desc:Samsung Electric Company Odyssey G81SF HNAY500052", mode = "3840x2160@240", position = "3778x2393", scale = "1.5", transform = 0, bitdepth = 8, cm = "srgb" })"#
+            r#"hl.monitor({ output = "desc:Samsung Electric Company Odyssey G81SF HNAY500052", mode = "3840x2160@240", position = "3778x2393", scale = "1.5", transform = 0, bitdepth = 8, cm = "srgb", disabled = false })"#
         );
         g8.ten_bit = true;
         g8.cm = "hdr".into();
@@ -363,7 +363,7 @@ mod tests {
         g8.mirror = Some("DP-3".into());
         assert_eq!(
             g8.lua(),
-            r#"hl.monitor({ output = "desc:Samsung Electric Company Odyssey G81SF HNAY500052", mode = "3840x2160@240", position = "3778x2393", scale = "1.5", transform = 0, bitdepth = 10, cm = "hdr", sdrbrightness = 1.2, sdrsaturation = 0.98, vrr = 2, mirror = "DP-3" })"#
+            r#"hl.monitor({ output = "desc:Samsung Electric Company Odyssey G81SF HNAY500052", mode = "3840x2160@240", position = "3778x2393", scale = "1.5", transform = 0, bitdepth = 10, cm = "hdr", sdrbrightness = 1.2, sdrsaturation = 0.98, vrr = 2, mirror = "DP-3", disabled = false })"#
         );
         assert!(g8.lua_live(Some(-1)).contains(r#"mirror = "DP-3", disabled = false"#));
         g8.mirror = None;
